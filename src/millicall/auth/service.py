@@ -1,4 +1,5 @@
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.auth.security import hash_password
@@ -20,5 +21,10 @@ async def ensure_admin_user(session: AsyncSession) -> str | None:
             origin="local",
         )
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # 同時起動によるレース: 別プロセスが先にINSERTを完了した場合は無視する
+        await session.rollback()
+        return None
     return password

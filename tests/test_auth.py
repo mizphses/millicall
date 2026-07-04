@@ -68,6 +68,11 @@ async def test_logout_clears_cookie(client, user_factory) -> None:
     assert me.status_code == 401
 
 
+async def test_login_nonexistent_user(client) -> None:
+    resp = await client.post("/api/auth/login", json={"username": "ghost", "password": "irrelevant"})
+    assert resp.status_code == 401
+
+
 async def test_healthz(client) -> None:
     resp = await client.get("/healthz")
     assert resp.status_code == 200

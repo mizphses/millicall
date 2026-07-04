@@ -20,6 +20,11 @@ async def lifespan(app: FastAPI):
     settings: Settings = app.state.settings
     settings.data_dir.mkdir(parents=True, exist_ok=True)
 
+    if not settings.cookie_secure:
+        logger.warning(
+            "cookie_secure=False — HTTPS外でセッションCookieが平文送信されます（LAN内運用前提）"
+        )
+
     # upgrade_to_head は同期関数のため asyncio.to_thread で実行してイベントループをブロックしない
     await asyncio.to_thread(upgrade_to_head, settings.database_url)
     app.state.secrets = load_or_create_secrets(settings.data_dir)
