@@ -16,13 +16,16 @@ set -eu
 
 CONF=/etc/freeswitch
 
+# sed置換値のエスケープ（& は「マッチ全体」、\ はエスケープ、| は区切り文字のため）
+esc() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
+
 # プレースホルダ置換ヘルパ（区切りに | を使い、値に / が来ても安全）
 subst() {
   sed \
-    -e "s|__HGW_IP__|${HGW_IP}|g" \
-    -e "s|__HGW_SIP_USER__|${HGW_SIP_USER}|g" \
-    -e "s|__HGW_SIP_PASSWORD__|${HGW_SIP_PASSWORD}|g" \
-    -e "s|__OUTBOUND_CALLERID__|${OUTBOUND_CALLERID}|g" \
+    -e "s|__HGW_IP__|$(esc "${HGW_IP}")|g" \
+    -e "s|__HGW_SIP_USER__|$(esc "${HGW_SIP_USER}")|g" \
+    -e "s|__HGW_SIP_PASSWORD__|$(esc "${HGW_SIP_PASSWORD}")|g" \
+    -e "s|__OUTBOUND_CALLERID__|$(esc "${OUTBOUND_CALLERID}")|g" \
     "$1"
 }
 
