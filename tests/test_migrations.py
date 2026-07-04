@@ -16,6 +16,6 @@ def test_upgrade_creates_app_settings(tmp_path) -> None:
 
 
 def test_upgrade_is_idempotent(tmp_path) -> None:
-    url = f"sqlite+aiosqlite:///{tmp_path/'m.db'}"
+    url = f"sqlite+aiosqlite:///{tmp_path / 'm.db'}"
     upgrade_to_head(url)
     upgrade_to_head(url)  # 2回目もエラーにならない

@@ -30,17 +30,17 @@ async def _start_fake_fs(password: str):
                 if cmd.startswith("api reloadxml"):
                     body = b"+OK [Success]\n"
                     writer.write(
-                        b"Content-Type: api/response\nContent-Length: %d\n\n%s"
-                        % (len(body), body)
+                        b"Content-Type: api/response\nContent-Length: %d\n\n%s" % (len(body), body)
                     )
                     await writer.drain()
                 elif cmd.startswith("event plain"):
-                    writer.write(b"Content-Type: command/reply\nReply-Text: +OK event listener enabled\n\n")
+                    writer.write(
+                        b"Content-Type: command/reply\nReply-Text: +OK event listener enabled\n\n"
+                    )
                     await writer.drain()
                     ev = b"Event-Name: CHANNEL_CREATE\nChannel-Call-UUID: uuid-123\n\n"
                     writer.write(
-                        b"Content-Type: text/event-plain\nContent-Length: %d\n\n%s"
-                        % (len(ev), ev)
+                        b"Content-Type: text/event-plain\nContent-Length: %d\n\n%s" % (len(ev), ev)
                     )
                     await writer.drain()
         finally:
@@ -136,8 +136,7 @@ async def test_on_event_exception_does_not_kill_reader() -> None:
             for name in (b"CHANNEL_CREATE", b"CHANNEL_DESTROY"):
                 ev = b"Event-Name: " + name + b"\n\n"
                 writer.write(
-                    b"Content-Type: text/event-plain\nContent-Length: %d\n\n%s"
-                    % (len(ev), ev)
+                    b"Content-Type: text/event-plain\nContent-Length: %d\n\n%s" % (len(ev), ev)
                 )
                 await writer.drain()
             # Stay open until the client disconnects

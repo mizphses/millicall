@@ -79,12 +79,8 @@ class FreeswitchConfigWriter:
         written.append(
             self._write("directory/default.xml", self._render("directory_default.xml.j2"))
         )
-        written.append(
-            self._write("sip_profiles/internal.xml", self._render("internal.xml.j2"))
-        )
-        written.append(
-            self._write("dialplan/default.xml", self._render("dialplan_default.xml.j2"))
-        )
+        written.append(self._write("sip_profiles/internal.xml", self._render("internal.xml.j2")))
+        written.append(self._write("dialplan/default.xml", self._render("dialplan_default.xml.j2")))
         written.append(
             self._write(
                 "autoload_configs/event_socket.conf.xml",

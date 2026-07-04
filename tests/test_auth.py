@@ -39,9 +39,7 @@ async def test_me_requires_auth(client) -> None:
 
 async def test_login_and_me(client, user_factory) -> None:
     username, password = await user_factory(username="alice", password="Wonderland1")
-    login = await client.post(
-        "/api/auth/login", json={"username": username, "password": password}
-    )
+    login = await client.post("/api/auth/login", json={"username": username, "password": password})
     assert login.status_code == 200
     # HttpOnly cookie が設定される
     assert "millicall_session" in login.cookies
@@ -53,9 +51,7 @@ async def test_login_and_me(client, user_factory) -> None:
 
 async def test_login_wrong_password(client, user_factory) -> None:
     await user_factory(username="bob", password="correct-horse")
-    resp = await client.post(
-        "/api/auth/login", json={"username": "bob", "password": "nope"}
-    )
+    resp = await client.post("/api/auth/login", json={"username": "bob", "password": "nope"})
     assert resp.status_code == 401
 
 
@@ -69,7 +65,9 @@ async def test_logout_clears_cookie(client, user_factory) -> None:
 
 
 async def test_login_nonexistent_user(client) -> None:
-    resp = await client.post("/api/auth/login", json={"username": "ghost", "password": "irrelevant"})
+    resp = await client.post(
+        "/api/auth/login", json={"username": "ghost", "password": "irrelevant"}
+    )
     assert resp.status_code == 401
 
 

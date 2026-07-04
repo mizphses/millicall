@@ -35,9 +35,7 @@ async def test_sip_password_not_client_settable(auth_client) -> None:
 
 
 async def test_invalid_number_rejected(auth_client) -> None:
-    resp = await auth_client.post(
-        "/api/extensions", json={"number": "12ab", "display_name": "X"}
-    )
+    resp = await auth_client.post("/api/extensions", json={"number": "12ab", "display_name": "X"})
     assert resp.status_code == 422
 
 

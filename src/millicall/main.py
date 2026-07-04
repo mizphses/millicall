@@ -37,12 +37,12 @@ async def lifespan(app: FastAPI):
 
     engine = create_db_engine(settings.database_url)
     app.state.engine = engine
-    app.state.sessionmaker = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    app.state.sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     writer = build_config_writer(settings, app.state.secrets)
     esl_factory = build_esl_factory(settings, app.state.secrets)
-    listener = TelephonyChangeListener(writer, esl_factory, esl_timeout=settings.esl_timeout_seconds)
+    listener = TelephonyChangeListener(
+        writer, esl_factory, esl_timeout=settings.esl_timeout_seconds
+    )
     app.state.change_listener = listener
 
     async with app.state.sessionmaker() as session:

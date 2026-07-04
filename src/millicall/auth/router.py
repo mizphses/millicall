@@ -27,9 +27,7 @@ async def login(
     check_hash = user.hashed_password if user is not None else _DUMMY_HASH
     password_ok = verify_password(check_hash, body.password)
     if user is None or not password_ok:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     token = issue_session(secrets.session_secret, user.id)
     response.set_cookie(
         key=settings.session_cookie_name,

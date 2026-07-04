@@ -37,8 +37,7 @@ async def _start_accepting_fake_fs() -> tuple[asyncio.AbstractServer, int, list[
                 if cmd.startswith("api reloadxml"):
                     body = b"+OK [Success]\n"
                     writer.write(
-                        b"Content-Type: api/response\nContent-Length: %d\n\n%s"
-                        % (len(body), body)
+                        b"Content-Type: api/response\nContent-Length: %d\n\n%s" % (len(body), body)
                     )
                     await writer.drain()
         finally:
@@ -209,9 +208,7 @@ async def test_esl_unreachable_does_not_fail_create(tmp_path) -> None:
         application.router.lifespan_context(application),
         _make_admin_client(application) as c,
     ):
-        resp = await c.post(
-            "/api/extensions", json={"number": "9001", "display_name": "ESL Dead"}
-        )
+        resp = await c.post("/api/extensions", json={"number": "9001", "display_name": "ESL Dead"})
         assert resp.status_code == 201
 
 
@@ -242,7 +239,5 @@ async def test_esl_timeout_does_not_fail_create(tmp_path, monkeypatch) -> None:
         application.router.lifespan_context(application),
         _make_admin_client(application) as c,
     ):
-        resp = await c.post(
-            "/api/extensions", json={"number": "9002", "display_name": "ESL Hang"}
-        )
+        resp = await c.post("/api/extensions", json={"number": "9002", "display_name": "ESL Hang"})
         assert resp.status_code == 201

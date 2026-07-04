@@ -51,9 +51,7 @@ async def list_extensions(session: AsyncSession = Depends(get_session)) -> list[
 
 
 @router.get("/{ext_id}", response_model=ExtensionRead)
-async def get_extension(
-    ext_id: int, session: AsyncSession = Depends(get_session)
-) -> Extension:
+async def get_extension(ext_id: int, session: AsyncSession = Depends(get_session)) -> Extension:
     ext = await session.get(Extension, ext_id)
     if ext is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
