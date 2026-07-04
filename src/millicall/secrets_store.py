@@ -1,6 +1,9 @@
+import json
+import os
+import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from millicall.gen import generate_password
 
@@ -14,7 +17,14 @@ class Secrets(BaseModel):
 def load_or_create_secrets(data_dir: Path) -> Secrets:
     path = data_dir / "secrets.json"
     if path.exists():
-        return Secrets.model_validate_json(path.read_text(encoding="utf-8"))
+        try:
+            return Secrets.model_validate_json(path.read_text(encoding="utf-8"))
+        except (ValidationError, json.JSONDecodeError, KeyError) as exc:
+            raise RuntimeError(
+                f"secrets ファイルが壊れています: {path} — "
+                "バックアップから復元するか、全シークレットを作り直す場合は"
+                "このファイルを削除して再起動してください"
+            ) from exc
 
     data_dir.mkdir(parents=True, exist_ok=True)
     secrets = Secrets(
@@ -22,6 +32,15 @@ def load_or_create_secrets(data_dir: Path) -> Secrets:
         master_key=generate_password(48),
         esl_password=generate_password(32),
     )
-    path.write_text(secrets.model_dump_json(indent=2), encoding="utf-8")
-    path.chmod(0o600)
+
+    fd, tmp = tempfile.mkstemp(dir=data_dir)
+    try:
+        os.chmod(tmp, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(secrets.model_dump_json(indent=2))
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
     return secrets
