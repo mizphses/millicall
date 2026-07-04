@@ -7,10 +7,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.config import Settings
-from millicall.models import Extension, Trunk
+from millicall.models import Extension, Route, Trunk
 from millicall.secrets_store import Secrets
 from millicall.telephony.esl import ESLClient, ESLError
-from millicall.telephony.fsconfig import ExtensionConfig, FreeswitchConfigWriter, TrunkConfig
+from millicall.telephony.fsconfig import (
+    ExtensionConfig,
+    FreeswitchConfigWriter,
+    RouteConfig,
+    TrunkConfig,
+)
 
 logger = logging.getLogger("millicall.telephony.service")
 
@@ -87,10 +92,24 @@ class TelephonyChangeListener:
             for t in result
         ]
 
+    async def _load_routes(self, session: AsyncSession) -> list[RouteConfig]:
+        result = await session.scalars(
+            select(Route).where(Route.enabled.is_(True)).order_by(Route.match_number)
+        )
+        return [
+            RouteConfig(
+                match_number=r.match_number,
+                target_type=r.target_type,
+                target_value=r.target_value,
+            )
+            for r in result
+        ]
+
     async def regenerate(self, session: AsyncSession) -> None:
         configs = await self._load_configs(session)
         trunks = await self._load_trunks(session)
-        self._writer.write_all(configs, trunks)
+        routes = await self._load_routes(session)
+        self._writer.write_all(configs, trunks, routes)
 
     @staticmethod
     async def _esl_connect_and_reload(client: ESLClient) -> None:

@@ -1,0 +1,28 @@
+{#
+  【着信番号について】
+  ひかり電話HGWでは、着信INVITEのdestination_numberはDID（公開番号）ではなく
+  HGWの内線設定で登録された番号（trunk.username等）が届く場合がある。
+  routesのmatch_numberは実際に観測されるdestination_numberに合わせて登録すること。
+#}
+<include>
+  <context name="public">
+{% for route in routes %}
+{% if route.target_type == 'extension' %}
+    <extension name="inbound_{{ route.match_number }}">
+      <condition field="destination_number" expression="^{{ route.match_number | re_escape }}$">
+        <action application="log" data="INFO ===== INBOUND {{ route.match_number }} -> ext {{ route.target_value }} ====="/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="bridge" data="user/{{ route.target_value }}@{{ sip_domain }}"/>
+        <action application="hangup" data="NORMAL_CLEARING"/>
+      </condition>
+    </extension>
+{% endif %}
+{% endfor %}
+    <extension name="inbound_no_route">
+      <condition field="destination_number" expression="^(.*)$">
+        <action application="log" data="WARNING ===== INBOUND NO ROUTE: ${destination_number} ====="/>
+        <action application="hangup" data="NO_ROUTE_DESTINATION"/>
+      </condition>
+    </extension>
+  </context>
+</include>

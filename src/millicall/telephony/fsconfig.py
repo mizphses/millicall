@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from jinja2 import Environment, PackageLoader
+from markupsafe import Markup
 
 # プレフィックスは 2〜8 桁の数字のみ（正規表現インジェクション防止・多層防御）
 _SAFE_PREFIX_RE = re.compile(r"^[0-9]{2,8}$")
@@ -13,6 +14,13 @@ class ExtensionConfig:
     number: str
     display_name: str
     sip_password: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class RouteConfig:
+    match_number: str
+    target_type: str
+    target_value: str
 
 
 @dataclass(frozen=True)
@@ -68,6 +76,10 @@ class FreeswitchConfigWriter:
             autoescape=True,
             keep_trailing_newline=True,
         )
+        # re_escape: match_number には [0-9*#] が許可されており、* は正規表現メタキャラクタのため
+        # テンプレート内で expression="^(...)$" に展開する前にエスケープが必要。
+        # Markup でラップすることで HTML autoescape による二重エスケープを防ぐ。
+        self._env.filters["re_escape"] = lambda s: Markup(re.escape(str(s)))
 
     def _render(self, template: str, extra: dict | None = None) -> str:
         context = dict(self._base)
@@ -92,8 +104,10 @@ class FreeswitchConfigWriter:
         self,
         extensions: list[ExtensionConfig],
         trunks: list["TrunkConfig"] | None = None,
+        routes: list["RouteConfig"] | None = None,
     ) -> list[Path]:
         trunks = trunks or []
+        routes = routes or []
         (self.output_dir / "directory" / "default").mkdir(parents=True, exist_ok=True)
         self._clear_user_files()
 
@@ -126,6 +140,9 @@ class FreeswitchConfigWriter:
                 "dialplan/default.xml",
                 self._render("dialplan_default.xml.j2", {"outbound_trunk": outbound_trunk}),
             )
+        )
+        written.append(
+            self._write("dialplan/public.xml", self._render("public.xml.j2", {"routes": routes}))
         )
         written.append(
             self._write(
