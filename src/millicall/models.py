@@ -82,3 +82,19 @@ class Trunk(Base):
             if not k.startswith("_") and k != "password"
         ]
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class Route(Base):
+    __tablename__ = "routes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
+    # RouteTargetType の値。Phase 2 は "extension" のみ。将来 ring_group/workflow/ai_agent。
+    target_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_value: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )

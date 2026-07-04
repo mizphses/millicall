@@ -11,6 +11,7 @@ from millicall.config import Settings, get_settings
 from millicall.db import create_db_engine
 from millicall.db_migrations import upgrade_to_head
 from millicall.extensions.router import router as extensions_router
+from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
 from millicall.telephony.service import (
     TelephonyChangeListener,
@@ -70,6 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(extensions_router)
     app.include_router(trunks_router)
+    app.include_router(routes_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
