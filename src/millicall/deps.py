@@ -30,6 +30,10 @@ def get_change_listener(request: Request):
     return request.app.state.change_listener
 
 
+def get_esl_factory(request: Request):
+    return request.app.state.esl_factory
+
+
 async def get_current_user(
     request: Request,
     session: AsyncSession = Depends(get_session),

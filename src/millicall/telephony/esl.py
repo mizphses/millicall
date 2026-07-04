@@ -138,8 +138,18 @@ class ESLClient:
     async def reloadxml(self) -> str:
         return await self.api("reloadxml")
 
+    async def bgapi(self, command: str) -> str:
+        headers, _ = await self._send_command(f"bgapi {command}")
+        return headers.get("Job-UUID", "")
+
     async def subscribe(self, events: list[str]) -> None:
         await self._send_command("event plain " + " ".join(events))
+
+    async def wait_closed(self) -> None:
+        """reader タスクの終了（＝相手側切断）を待つ。常駐リスナーの再接続判定に使う。"""
+        if self._reader_task is not None:
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await self._reader_task
 
     async def close(self) -> None:
         self._closed = True

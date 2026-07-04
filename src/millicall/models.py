@@ -49,3 +49,103 @@ class Extension(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+
+class Trunk(Base):
+    __tablename__ = "trunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # sofia gateway 名にも使う slug（英数と - _ のみ想定）
+    name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    host: Mapped[str] = mapped_column(String(100), nullable=False)  # HGW の LAN 側 IP
+    username: Mapped[str] = mapped_column(String(50), nullable=False)  # 認証ID = 内線番号
+    # HGW 側で決まるユーザー入力値。平文保存(暗号化は Phase 6)。API レスポンスには出さない。
+    password: Mapped[str] = mapped_column(String(128), nullable=False)
+    did_number: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="", server_default=""
+    )
+    caller_id: Mapped[str] = mapped_column(  # 表示番号（自局番号）
+        String(30), nullable=False, default="", server_default=""
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        """Custom repr that excludes the password field."""
+        attrs = [
+            f"{k}={v!r}" for k, v in self.__dict__.items()
+            if not k.startswith("_") and k != "password"
+        ]
+        return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class Route(Base):
+    __tablename__ = "routes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
+    # RouteTargetType の値。Phase 2 は "extension" のみ。将来 ring_group/workflow/ai_agent。
+    target_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # extensions への FK は意図的に張らない: 参照整合性は書き込み時検証のみ（内線削除でダングリングになり得る — dialplan生成側は存在しないターゲットを無視する前提。Phase 5でUI警告を検討）
+    target_value: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
+class Contact(Base):
+    __tablename__ = "contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    phone_number: Mapped[str] = mapped_column(String(30), nullable=False)
+    company: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    department: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", server_default=""
+    )
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
+class Cdr(Base):
+    __tablename__ = "cdr"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    call_uuid: Mapped[str] = mapped_column(String(150), unique=True, nullable=False)
+    direction: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="", server_default=""
+    )
+    src_number: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="", server_default=""
+    )
+    dst_number: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="", server_default=""
+    )
+    caller_id_name: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="", server_default=""
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    billsec_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    hangup_cause: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="", server_default=""
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
