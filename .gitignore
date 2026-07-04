@@ -1,0 +1,21 @@
+# AI作業ドキュメント（絶対にpushしない）
+docs/superpowers/
+.claude/
+CLAUDE.local.md
+*.ai-notes.md
+
+# 旧実装（参照専用、pushしない）
+millicall-old/
+millicall-pbx/
+
+# secrets / local
+.env
+*.local
+data/
+
+# build
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
