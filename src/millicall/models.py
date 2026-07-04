@@ -99,3 +99,37 @@ class Route(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+
+class Cdr(Base):
+    __tablename__ = "cdr"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    call_uuid: Mapped[str] = mapped_column(String(150), unique=True, nullable=False)
+    direction: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="", server_default=""
+    )
+    src_number: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="", server_default=""
+    )
+    dst_number: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="", server_default=""
+    )
+    caller_id_name: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="", server_default=""
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    billsec_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    hangup_cause: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="", server_default=""
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
