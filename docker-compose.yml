@@ -34,6 +34,8 @@ services:
       - ./data/freeswitch/directory/default:/etc/freeswitch/directory/default
       - ./data/freeswitch/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml
       - ./data/freeswitch/sip_profiles/internal.xml:/etc/freeswitch/sip_profiles/internal.xml
+      - ./data/freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml
+      - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
       - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
       # vanilla-init entrypoint（読み取り専用でマウント）
       - ./docker/freeswitch-entrypoint.sh:/usr/local/bin/fs-entrypoint.sh:ro
