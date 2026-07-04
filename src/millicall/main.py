@@ -10,7 +10,9 @@ from millicall.auth.service import ensure_admin_user
 from millicall.config import Settings, get_settings
 from millicall.db import create_db_engine
 from millicall.db_migrations import upgrade_to_head
+from millicall.extensions.router import router as extensions_router
 from millicall.secrets_store import load_or_create_secrets
+from millicall.telephony.hooks import NullChangeListener
 
 logger = logging.getLogger("millicall")
 
@@ -34,6 +36,7 @@ async def lifespan(app: FastAPI):
     app.state.sessionmaker = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
     )
+    app.state.change_listener = NullChangeListener()
 
     async with app.state.sessionmaker() as session:
         new_admin_password = await ensure_admin_user(session)
@@ -54,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="millicall v2 core", lifespan=lifespan)
     app.state.settings = settings or get_settings()
     app.include_router(auth_router)
+    app.include_router(extensions_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

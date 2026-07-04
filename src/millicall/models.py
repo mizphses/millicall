@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import true as sa_true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from millicall.db import Base
@@ -32,3 +33,15 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+
+class Extension(Base):
+    __tablename__ = "extensions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # 強ランダム自動生成のみ。ユーザー/API から指定不可。
+    sip_password: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sa_true())
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
