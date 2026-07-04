@@ -1,4 +1,5 @@
 import defusedxml.ElementTree as ET  # noqa: N817
+import pytest
 
 from millicall.telephony.fsconfig import ExtensionConfig, FreeswitchConfigWriter, TrunkConfig
 
@@ -39,6 +40,7 @@ def test_international_blocked_by_default(tmp_path):
     dp = (tmp_path / "dialplan" / "default.xml").read_text()
     assert 'name="outbound_intl_block"' in dp
     assert "010\\d+" in dp
+    assert "00[1-9]" in dp  # 00X 国際プレフィックスも block 拡張でカバー
     assert 'data="CALL_REJECTED"' in dp
     # allowlist が空なので allow 拡張は無い
     assert "outbound_intl_allow_" not in dp
@@ -58,3 +60,33 @@ def test_no_outbound_extension_without_trunk(tmp_path):
     dp = (tmp_path / "dialplan" / "default.xml").read_text()
     assert "sofia/gateway/" not in dp
     assert 'name="outbound_intl_block"' not in dp
+
+
+def test_dialplan_extension_order(tmp_path):
+    """拡張の出現順: internal → intl_allow → intl_block → outbound_external"""
+    w = _writer(tmp_path, allow=["010"])
+    w.write_all([], trunks=[_trunk()])
+    dp = (tmp_path / "dialplan" / "default.xml").read_text()
+    assert dp.index("internal_extensions") < dp.index("outbound_intl_allow_")
+    assert dp.index("outbound_intl_allow_") < dp.index("outbound_intl_block")
+    assert dp.index("outbound_intl_block") < dp.index("outbound_external")
+
+
+def test_intl_block_still_present_with_allowlist(tmp_path):
+    """allowlist があっても outbound_intl_block は残り、allowlist 外の国際番号をブロックする"""
+    w = _writer(tmp_path, allow=["010"])
+    w.write_all([], trunks=[_trunk()])
+    dp = (tmp_path / "dialplan" / "default.xml").read_text()
+    assert 'name="outbound_intl_block"' in dp
+    assert 'data="CALL_REJECTED"' in dp
+
+
+def test_malicious_prefix_raises_valueerror(tmp_path):
+    """'010|' などの不正プレフィックスは ValueError を送出しなければならない"""
+    with pytest.raises(ValueError, match=r"010\|"):
+        FreeswitchConfigWriter(
+            output_dir=tmp_path,
+            sip_domain="test",
+            esl_password="pw",
+            international_allow_prefixes=["010|"],
+        )

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 
 from sqlalchemy import select
@@ -13,8 +14,18 @@ from millicall.telephony.fsconfig import ExtensionConfig, FreeswitchConfigWriter
 
 logger = logging.getLogger("millicall.telephony.service")
 
+# プレフィックスは 2〜8 桁の数字のみ許可（正規表現インジェクション対策）
+_PREFIX_RE = re.compile(r"^[0-9]{2,8}$")
+
 
 def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfigWriter:
+    raw_prefixes = [p.strip() for p in settings.outbound_international_allow.split(",") if p.strip()]
+    for p in raw_prefixes:
+        if not _PREFIX_RE.match(p):
+            raise ValueError(
+                f"MILLICALL_OUTBOUND_INTERNATIONAL_ALLOW に無効なプレフィックスが含まれています: "
+                f"'{p}' （2〜8桁の数字のみ許可）"
+            )
     return FreeswitchConfigWriter(
         output_dir=settings.fs_config_dir,
         sip_domain=settings.sip_domain,
@@ -26,9 +37,7 @@ def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfi
         event_socket_ip=settings.event_socket_ip,
         event_socket_port=settings.esl_port,
         external_sip_port=settings.external_sip_port,
-        international_allow_prefixes=[
-            p.strip() for p in settings.outbound_international_allow.split(",") if p.strip()
-        ],
+        international_allow_prefixes=raw_prefixes,
     )
 
 

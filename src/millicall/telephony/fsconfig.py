@@ -1,7 +1,11 @@
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from jinja2 import Environment, PackageLoader
+
+# プレフィックスは 2〜8 桁の数字のみ（正規表現インジェクション防止・多層防御）
+_SAFE_PREFIX_RE = re.compile(r"^[0-9]{2,8}$")
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,15 @@ class FreeswitchConfigWriter:
         international_allow_prefixes: list[str] | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
+        safe_prefixes: list[str] = international_allow_prefixes or []
+        # 多層防御: __init__ 時点でプレフィックスを検証し、不正値を即座に拒否する
+        # （service.py でも検証済みだが、このクラスは公開 API のため直接呼び出し時も保護する）
+        for p in safe_prefixes:
+            if not _SAFE_PREFIX_RE.match(p):
+                raise ValueError(
+                    f"国際発信allowlistに無効なプレフィックスが含まれています: "
+                    f"'{p}' （2〜8桁の数字のみ）"
+                )
         self._base = {
             "sip_domain": sip_domain,
             "sip_port": sip_port,
@@ -48,7 +61,7 @@ class FreeswitchConfigWriter:
             "event_socket_port": event_socket_port,
             "esl_password": esl_password,
             "external_sip_port": external_sip_port,
-            "international_allow_prefixes": international_allow_prefixes or [],
+            "international_allow_prefixes": safe_prefixes,
         }
         self._env = Environment(
             loader=PackageLoader("millicall.telephony", "templates"),
@@ -105,7 +118,9 @@ class FreeswitchConfigWriter:
                 "sip_profiles/external.xml", self._render("external.xml.j2", {"trunks": trunks})
             )
         )
-        outbound_trunk = trunks[0] if trunks else None
+        # _load_trunks は Trunk.name で ORDER BY 済みだが、直接呼び出し時の順序も保証するため
+        # ここでも name でソートして先頭を選ぶ（决定論的なトランク選択）
+        outbound_trunk = sorted(trunks, key=lambda t: t.name)[0] if trunks else None
         written.append(
             self._write(
                 "dialplan/default.xml",
