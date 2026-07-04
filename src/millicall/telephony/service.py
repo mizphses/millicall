@@ -26,6 +26,9 @@ def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfi
         event_socket_ip=settings.event_socket_ip,
         event_socket_port=settings.esl_port,
         external_sip_port=settings.external_sip_port,
+        international_allow_prefixes=[
+            p.strip() for p in settings.outbound_international_allow.split(",") if p.strip()
+        ],
     )
 
 

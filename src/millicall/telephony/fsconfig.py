@@ -35,6 +35,7 @@ class FreeswitchConfigWriter:
         event_socket_port: int = 8021,
         sip_bind_ip: str | None = None,
         external_sip_port: int = 5080,
+        international_allow_prefixes: list[str] | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self._base = {
@@ -47,6 +48,7 @@ class FreeswitchConfigWriter:
             "event_socket_port": event_socket_port,
             "esl_password": esl_password,
             "external_sip_port": external_sip_port,
+            "international_allow_prefixes": international_allow_prefixes or [],
         }
         self._env = Environment(
             loader=PackageLoader("millicall.telephony", "templates"),
@@ -103,7 +105,13 @@ class FreeswitchConfigWriter:
                 "sip_profiles/external.xml", self._render("external.xml.j2", {"trunks": trunks})
             )
         )
-        written.append(self._write("dialplan/default.xml", self._render("dialplan_default.xml.j2")))
+        outbound_trunk = trunks[0] if trunks else None
+        written.append(
+            self._write(
+                "dialplan/default.xml",
+                self._render("dialplan_default.xml.j2", {"outbound_trunk": outbound_trunk}),
+            )
+        )
         written.append(
             self._write(
                 "autoload_configs/event_socket.conf.xml",
