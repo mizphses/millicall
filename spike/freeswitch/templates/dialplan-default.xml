@@ -1,0 +1,23 @@
+<!--
+  ============================================================
+  発信テスト用 dialplan（default コンテキスト）
+  "0"始まりの番号を HGWゲートウェイへ bridge する。
+  発信者番号(自局番号)は .env の OUTBOUND_CALLERID を設定（表示/ログ用）。
+  ※ 本スパイクでは内線端末を登録しないため、通常は RUNBOOK の originate から
+    このコンテキストを origination_context として利用する。
+  ============================================================
+-->
+<include>
+  <context name="default">
+    <extension name="hgw_outbound_test">
+      <condition field="destination_number" expression="^(0\d+)$">
+        <action application="log" data="INFO ===== HGW OUTBOUND: dialing ${destination_number} ====="/>
+        <action application="set" data="effective_caller_id_number=__OUTBOUND_CALLERID__"/>
+        <action application="set" data="effective_caller_id_name=__OUTBOUND_CALLERID__"/>
+        <!-- G.711優先で発信。direct/bypass mediaは使わずFS経由(音声検証のため) -->
+        <action application="bridge" data="sofia/gateway/hgw/${destination_number}"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+  </context>
+</include>
