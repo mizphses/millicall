@@ -1,0 +1,12 @@
+<include>
+  <context name="default">
+    <extension name="internal_extensions">
+      <condition field="destination_number" expression="^(\d{2,6})$">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="bridge" data="user/${destination_number}@{{ sip_domain }}"/>
+        <action application="hangup" data="NO_ROUTE_DESTINATION"/>
+      </condition>
+    </extension>
+  </context>
+</include>

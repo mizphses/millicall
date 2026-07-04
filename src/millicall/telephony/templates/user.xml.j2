@@ -1,0 +1,14 @@
+<include>
+  <user id="{{ number }}">
+    <params>
+      <param name="password" value="{{ sip_password }}"/>
+      <param name="vm-password" value="{{ number }}"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="local"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="{{ display_name }}"/>
+      <variable name="effective_caller_id_number" value="{{ number }}"/>
+    </variables>
+  </user>
+</include>
