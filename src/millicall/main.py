@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     )
     writer = build_config_writer(settings, app.state.secrets)
     esl_factory = build_esl_factory(settings, app.state.secrets)
-    listener = TelephonyChangeListener(writer, esl_factory)
+    listener = TelephonyChangeListener(writer, esl_factory, esl_timeout=settings.esl_timeout_seconds)
     app.state.change_listener = listener
 
     async with app.state.sessionmaker() as session:

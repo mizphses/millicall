@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     esl_host: str = "127.0.0.1"
     esl_port: int = 8021
+    esl_timeout_seconds: float = 5.0
     event_socket_ip: str = "127.0.0.1"
 
     session_cookie_name: str = "millicall_session"

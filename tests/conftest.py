@@ -14,6 +14,7 @@ async def app(tmp_path):
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
         fs_config_dir=tmp_path / "fs",
         cookie_secure=False,
+        esl_timeout_seconds=1.0,  # small timeout; ESL is unreachable in CI
     )
     application = create_app(settings)
     async with application.router.lifespan_context(application):

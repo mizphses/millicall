@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Callable
 
@@ -38,9 +39,11 @@ class TelephonyChangeListener:
         self,
         writer: FreeswitchConfigWriter,
         esl_factory: Callable[[], ESLClient],
+        esl_timeout: float = 5.0,
     ) -> None:
         self._writer = writer
         self._esl_factory = esl_factory
+        self._esl_timeout = esl_timeout
 
     async def _load_configs(self, session: AsyncSession) -> list[ExtensionConfig]:
         result = await session.scalars(
@@ -57,12 +60,23 @@ class TelephonyChangeListener:
         configs = await self._load_configs(session)
         self._writer.write_all(configs)
 
+    @staticmethod
+    async def _esl_connect_and_reload(client: ESLClient) -> None:
+        await client.connect()
+        await client.reloadxml()
+
     async def notify(self, session: AsyncSession) -> None:
         await self.regenerate(session)
         client = self._esl_factory()
         try:
-            await client.connect()
-            await client.reloadxml()
+            await asyncio.wait_for(
+                self._esl_connect_and_reload(client),
+                timeout=self._esl_timeout,
+            )
+        except TimeoutError:
+            logger.warning(
+                "reloadxml skipped (ESL connect timed out after %.1fs)", self._esl_timeout
+            )
         except (OSError, ESLError) as exc:
             logger.warning("reloadxml skipped (FreeSWITCH ESL unreachable): %s", exc)
         finally:
