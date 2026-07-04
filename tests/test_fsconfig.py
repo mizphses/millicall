@@ -1,3 +1,5 @@
+import defusedxml.ElementTree as ET  # noqa: N817
+
 from millicall.telephony.fsconfig import ExtensionConfig, FreeswitchConfigWriter
 
 
@@ -29,6 +31,8 @@ def test_write_all_creates_static_configs(tmp_path) -> None:
     assert 'name="internal"' in internal
     assert 'value="5060"' in internal
     assert 'name="192.168.1.10"' in internal
+    assert '<param name="sip-ip" value="auto"/>' in internal
+    assert '<param name="rtp-ip" value="auto"/>' in internal
     dialplan = (tmp_path / "dialplan" / "default.xml").read_text()
     assert "user/${destination_number}@192.168.1.10" in dialplan
 
@@ -87,3 +91,18 @@ def test_sip_bind_ip_falls_back_to_auto_when_none(tmp_path) -> None:
     internal = (tmp_path / "sip_profiles" / "internal.xml").read_text()
     # Both sip-ip and rtp-ip should be "auto"
     assert internal.count('value="auto"') == 2
+
+
+def test_autoescape_escapes_special_chars_in_user_xml(tmp_path) -> None:
+    """XML special characters in display_name must be entity-escaped, not injected raw."""
+    writer = _writer(tmp_path)
+    writer.write_all([ExtensionConfig("1001", 'A & B <X>"', "pw-1001")])
+    content = (tmp_path / "directory" / "default" / "1001.xml").read_text()
+    assert "A &amp; B &lt;X&gt;" in content
+    ET.fromstring(content)  # raises if XML is not well-formed
+
+
+def test_sip_password_not_in_repr() -> None:
+    """sip_password must not leak through dataclass repr."""
+    cfg = ExtensionConfig("1001", "Alice", "hunter2")
+    assert "hunter2" not in repr(cfg)

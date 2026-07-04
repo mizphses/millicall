@@ -1,14 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from jinja2 import Environment, PackageLoader, select_autoescape
+from jinja2 import Environment, PackageLoader
 
 
 @dataclass(frozen=True)
 class ExtensionConfig:
     number: str
     display_name: str
-    sip_password: str
+    sip_password: str = field(repr=False)
 
 
 class FreeswitchConfigWriter:
@@ -37,7 +37,7 @@ class FreeswitchConfigWriter:
         }
         self._env = Environment(
             loader=PackageLoader("millicall.telephony", "templates"),
-            autoescape=select_autoescape(enabled_extensions=("xml",), default=False),
+            autoescape=True,
             keep_trailing_newline=True,
         )
 
