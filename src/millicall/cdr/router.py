@@ -13,8 +13,12 @@ router = APIRouter(prefix="/api/cdr", tags=["cdr"], dependencies=[Depends(requir
 async def list_cdr(
     session: AsyncSession = Depends(get_session),
     limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    direction: str | None = Query(default=None),
 ) -> list[Cdr]:
-    result = await session.scalars(
-        select(Cdr).order_by(Cdr.started_at.desc(), Cdr.id.desc()).limit(limit)
-    )
+    stmt = select(Cdr).order_by(Cdr.started_at.desc(), Cdr.id.desc())
+    if direction is not None:
+        stmt = stmt.where(Cdr.direction == direction)
+    stmt = stmt.offset(offset).limit(limit)
+    result = await session.scalars(stmt)
     return list(result)
