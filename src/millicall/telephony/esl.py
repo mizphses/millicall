@@ -6,6 +6,10 @@ from urllib.parse import unquote_plus
 
 logger = logging.getLogger("millicall.telephony.esl")
 
+# Sentinel placed into _replies when the connection closes unexpectedly.
+# Any pending _send_command waiter detects it and raises ESLConnectionClosed.
+_CLOSED_SENTINEL = object()
+
 
 class ESLError(Exception):
     pass
@@ -37,8 +41,10 @@ class ESLClient:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._reader_task: asyncio.Task | None = None
-        self._replies: asyncio.Queue[tuple[dict[str, str], str]] = asyncio.Queue()
+        # Queue holds (headers, body) tuples OR _CLOSED_SENTINEL on disconnect.
+        self._replies: asyncio.Queue = asyncio.Queue()
         self._closed = False
+        self._dead = False  # set True when connection dies unexpectedly
 
     async def _read_frame(self, reader: asyncio.StreamReader) -> tuple[dict[str, str], str]:
         headers: dict[str, str] = {}
@@ -55,7 +61,11 @@ class ESLClient:
         body = ""
         length = headers.get("Content-Length")
         if length:
-            body = (await reader.readexactly(int(length))).decode()
+            try:
+                n = int(length)
+            except ValueError as exc:
+                raise ESLError("malformed Content-Length header") from exc
+            body = (await reader.readexactly(n)).decode()
         return headers, body
 
     @staticmethod
@@ -93,21 +103,33 @@ class ESLClient:
                         event.get("Channel-Call-UUID"),
                     )
                     if self.on_event is not None:
-                        await self.on_event(event)
+                        try:
+                            await self.on_event(event)
+                        except Exception:
+                            logger.exception("on_event callback raised; continuing")
                 elif ctype in ("api/response", "command/reply"):
                     await self._replies.put((headers, body))
         except (ESLConnectionClosed, asyncio.IncompleteReadError):
             if not self._closed:
                 logger.warning("ESL connection closed unexpectedly")
+                self._dead = True
+                await self._replies.put(_CLOSED_SENTINEL)
         except asyncio.CancelledError:
             raise
 
     async def _send_command(self, command: str) -> tuple[dict[str, str], str]:
         if self._writer is None:
             raise ESLError("not connected")
+        if self._dead:
+            raise ESLConnectionClosed("connection is closed")
         self._writer.write(f"{command}\n\n".encode())
         await self._writer.drain()
-        return await self._replies.get()
+        reply = await self._replies.get()
+        if reply is _CLOSED_SENTINEL:
+            # Re-enqueue so any other concurrent waiters are also unblocked.
+            await self._replies.put(_CLOSED_SENTINEL)
+            raise ESLConnectionClosed("connection closed while waiting for reply")
+        return reply  # type: ignore[return-value]
 
     async def api(self, command: str) -> str:
         _, body = await self._send_command(f"api {command}")
@@ -123,9 +145,10 @@ class ESLClient:
         self._closed = True
         if self._reader_task is not None:
             self._reader_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await self._reader_task
         if self._writer is not None:
             self._writer.close()
             with contextlib.suppress(ConnectionError, OSError):
                 await self._writer.wait_closed()
+            self._writer = None
