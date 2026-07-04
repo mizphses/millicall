@@ -1,0 +1,41 @@
+services:
+  core:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').getcode()==200 else 1)"
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  freeswitch:
+    # safarov/freeswitch にはバージョン別タグが存在しないため digest で固定する。
+    # タグ latest は浮動的で再現性がないため使用禁止。
+    # FreeSWITCH 1.10.12 / 2024-08-02 の immutable digest:
+    image: safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6
+    network_mode: host
+    depends_on:
+      core:
+        condition: service_healthy
+    volumes:
+      # core が startup 時に生成する設定ファイルを bind mount で FreeSWITCH に供給する
+      - ./data/freeswitch/directory/default.xml:/etc/freeswitch/directory/default.xml
+      - ./data/freeswitch/directory/default:/etc/freeswitch/directory/default
+      - ./data/freeswitch/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml
+      - ./data/freeswitch/sip_profiles/internal.xml:/etc/freeswitch/sip_profiles/internal.xml
+      - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
+      # vanilla-init entrypoint（読み取り専用でマウント）
+      - ./docker/freeswitch-entrypoint.sh:/usr/local/bin/fs-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/fs-entrypoint.sh"]
+    restart: unless-stopped
