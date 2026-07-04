@@ -14,6 +14,8 @@ from millicall.db_migrations import upgrade_to_head
 from millicall.extensions.router import router as extensions_router
 from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
+from millicall.telephony.esl import ESLClient
+from millicall.telephony.events import CdrRecorder, EslEventListener
 from millicall.telephony.service import (
     TelephonyChangeListener,
     build_config_writer,
@@ -43,6 +45,7 @@ async def lifespan(app: FastAPI):
     app.state.sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     writer = build_config_writer(settings, app.state.secrets)
     esl_factory = build_esl_factory(settings, app.state.secrets)
+    app.state.esl_factory = esl_factory
     listener = TelephonyChangeListener(
         writer, esl_factory, esl_timeout=settings.esl_timeout_seconds
     )
@@ -60,9 +63,25 @@ async def lifespan(app: FastAPI):
     async with app.state.sessionmaker() as session:
         await listener.regenerate(session)
 
+    recorder = CdrRecorder(app.state.sessionmaker)
+
+    def _make_event_client(handler):
+        return ESLClient(
+            settings.esl_host, settings.esl_port, app.state.secrets.esl_password, on_event=handler
+        )
+
+    event_listener = EslEventListener(
+        _make_event_client,
+        ["CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_HANGUP_COMPLETE"],
+        recorder.handle,
+    )
+    await event_listener.start()
+    app.state.event_listener = event_listener
+
     try:
         yield
     finally:
+        await event_listener.stop()
         await engine.dispose()
 
 
