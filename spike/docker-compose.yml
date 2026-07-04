@@ -1,0 +1,41 @@
+# ============================================================
+# millicall v2 / Phase 0 HGWスパイク
+# 目的: FreeSWITCH sofia で ひかり電話HGW へ REGISTER / 外線発着信 を検証する。
+#
+# イメージ選定:
+#   safarov/freeswitch を採用（FreeSWITCH 1.10.12 / 2024-08-02）。
+#   SignalWire公式イメージは 1.10.7 以降トークン認証が必要で「pullして即起動」が
+#   できず自己完結性を損なうため。safarov版は認証不要で /etc/freeswitch に
+#   vanilla設定一式と fs_cli を同梱している。
+#
+#   タグではなく digest で固定する理由:
+#   safarov/freeswitch リポジトリにはバージョン別タグが存在せず latest のみ。
+#   タグ固定は「latest が上書きされると再現しなくなる」リスクがあるため
+#   immutable な digest を直接指定して完全再現性を確保する。
+#
+# ネットワーク:
+#   network_mode: host — SIP(5060/UDP) と RTP をホストのLAN IFに直接載せ、HGWと
+#   同一L2で素直に疎通させる（コンテナNAT越えの余計な変数を排除）。
+#   注意: これにより 5060/RTP/8021 がホストに露出する。本キットは使い捨て検証用で
+#   あり恒久運用しない。検証後は `docker compose down` すること。
+# ============================================================
+name: millicall-hgw-spike
+
+services:
+  freeswitch:
+    image: safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6
+    container_name: millicall-hgw-spike
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./freeswitch/templates:/templates:ro
+      - ./freeswitch/entrypoint.sh:/usr/local/bin/spike-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/spike-entrypoint.sh"]
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "fs_cli", "-x", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
