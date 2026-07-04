@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from millicall.auth.router import router as auth_router
 from millicall.auth.service import ensure_admin_user
+from millicall.calls.router import router as calls_router
 from millicall.cdr.router import router as cdr_router
 from millicall.config import Settings, get_settings
 from millicall.contacts.router import router as contacts_router
@@ -95,6 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(trunks_router)
     app.include_router(routes_router)
     app.include_router(cdr_router)
+    app.include_router(calls_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
