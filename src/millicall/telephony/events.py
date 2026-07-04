@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -25,7 +25,7 @@ def _epoch_us_to_dt(value: str | None) -> datetime | None:
         return None
     if micros <= 0:
         return None
-    return datetime.utcfromtimestamp(micros / 1_000_000)  # noqa: DTZ004
+    return datetime.fromtimestamp(micros / 1_000_000, tz=timezone.utc).replace(tzinfo=None)  # noqa: UP017
 
 
 def _int(value: str | None) -> int:
@@ -125,6 +125,9 @@ class EslEventListener:
                 self._client = None
             if self._stop.is_set():
                 break
-            with contextlib.suppress(TimeoutError):
+            try:
                 await asyncio.wait_for(self._stop.wait(), timeout=backoff)
-            backoff = min(backoff * 2, self._max_backoff)
+            except TimeoutError:
+                # 本当のタイムアウト時のみバックオフ倍にする
+                backoff = min(backoff * 2, self._max_backoff)
+            # stop が発火した場合はループの先頭で break するので、ここには来ない

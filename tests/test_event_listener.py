@@ -107,3 +107,23 @@ async def test_listener_records_cdr_from_live_event(app):
             await asyncio.sleep(0.05)
         await listener.stop()
     assert rows and rows[0].dst_number == "0312345678"
+
+
+async def test_clean_stop():
+    """Listener should stop cleanly when started against unreachable ESL."""
+    def make_client(handler):
+        # Unreachable port (127.0.0.1:1) should cause immediate connection failure
+        return ESLClient("127.0.0.1", 1, "s3cret", on_event=handler)
+
+    async def dummy_handler(event):
+        pass
+
+    listener = EslEventListener(
+        make_client, ["CHANNEL_HANGUP_COMPLETE"], dummy_handler, min_backoff=0.05
+    )
+    await listener.start()
+    # Save task reference before stop() clears it
+    task = listener._task
+    # stop() should return promptly even though the listener is stuck trying to reconnect
+    await asyncio.wait_for(listener.stop(), timeout=2.0)
+    assert task is not None and task.done()
