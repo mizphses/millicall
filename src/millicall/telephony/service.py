@@ -22,6 +22,7 @@ def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfi
         sip_port=settings.sip_port,
         sip_ip=settings.sip_ip,
         rtp_ip=settings.rtp_ip,
+        sip_bind_ip=settings.sip_bind_ip,
         event_socket_ip=settings.event_socket_ip,
         event_socket_port=settings.esl_port,
     )

@@ -25,6 +25,18 @@ docker compose logs core | grep "初期管理者を作成しました"
 # 例: username=admin password=XXXXXXXXXXXXXXXXXXXXXXXX
 ```
 
+## 1-b. ヘルスチェック（スモークテスト）
+
+core が完全に起動しマイグレーション・設定生成が完了したことを確認してから次のステップに進む:
+
+```bash
+curl -f http://127.0.0.1:8000/healthz
+# 期待レスポンス: {"status":"ok"}
+```
+
+このレスポンスが返れば、DB マイグレーションと FreeSwitch 設定生成が正常終了していることが確認できる。
+返らない（接続エラー・非 2xx）場合は `docker compose logs core` でエラーを確認すること。
+
 ## 2. ログインして内線を2件作成（API 経由）
 
 ```bash
@@ -97,6 +109,14 @@ docker compose exec freeswitch fs_cli -x "list_users"
   sip_password のコピペ誤りを確認。`docker compose exec freeswitch fs_cli -x "sofia loglevel all 9"` でログ確認。
 - **片方向音声/無音:** `MILLICALL_SIP_DOMAIN` がホスト LAN IP になっているか、
   両サービスが host network で起動しているか（`docker compose ps`）を確認。
+  マルチ NIC 環境（docker0 / tailscale0 等が混在する場合）は FreeSwitch が意図しない
+  インターフェースに bind することがある。`.env` に `MILLICALL_SIP_BIND_IP=<LAN側IP>`
+  （例: `MILLICALL_SIP_BIND_IP=192.168.1.10`）を設定してコンテナを再起動し、
+  生成された `data/freeswitch/sip_profiles/internal.xml` の sip-ip / rtp-ip に
+  その IP が反映されているかを確認すること:
+  ```bash
+  grep -E 'sip-ip|rtp-ip' data/freeswitch/sip_profiles/internal.xml
+  ```
 - **設定が反映されない:** `./data/freeswitch/` に XML が生成されているか確認し、
   無ければ core を再起動（`docker compose restart core`）。event_socket.conf.xml は
   FreeSWITCH 起動時のみ読むため、変更後は `docker compose restart freeswitch`。

@@ -106,3 +106,36 @@ def test_sip_password_not_in_repr() -> None:
     """sip_password must not leak through dataclass repr."""
     cfg = ExtensionConfig("1001", "Alice", "hunter2")
     assert "hunter2" not in repr(cfg)
+
+
+# --- Regression: sip_bind_ip must flow from Settings through build_config_writer ---
+
+
+def test_build_config_writer_wires_sip_bind_ip(tmp_path) -> None:
+    """build_config_writer (production path) must pass sip_bind_ip to the Writer.
+
+    This test exercises the real production factory rather than constructing
+    FreeswitchConfigWriter directly, ensuring the wiring in service.py stays intact.
+    """
+    from millicall.config import Settings
+    from millicall.secrets_store import Secrets
+    from millicall.telephony.service import build_config_writer
+
+    settings = Settings(
+        fs_config_dir=tmp_path,
+        sip_domain="millicall.local",
+        sip_bind_ip="10.0.0.5",
+    )
+    secrets = Secrets(
+        session_secret="session-secret-test",
+        master_key="master-key-test",
+        esl_password="esl-secret-test",
+    )
+
+    writer = build_config_writer(settings, secrets)
+    writer.write_all([])
+
+    internal = (tmp_path / "sip_profiles" / "internal.xml").read_text()
+    assert 'value="10.0.0.5"' in internal, (
+        "sip-ip / rtp-ip must reflect sip_bind_ip='10.0.0.5' when wired through build_config_writer"
+    )
