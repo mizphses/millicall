@@ -45,3 +45,10 @@ async def user_factory(app):
         return username, password
 
     return _create
+
+
+@pytest_asyncio.fixture
+async def auth_client_with_telephony(client, user_factory):
+    username, password = await user_factory(username="fsadmin", password="Fs4dminPass")
+    await client.post("/api/auth/login", json={"username": username, "password": password})
+    return client

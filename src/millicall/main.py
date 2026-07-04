@@ -12,7 +12,11 @@ from millicall.db import create_db_engine
 from millicall.db_migrations import upgrade_to_head
 from millicall.extensions.router import router as extensions_router
 from millicall.secrets_store import load_or_create_secrets
-from millicall.telephony.hooks import NullChangeListener
+from millicall.telephony.service import (
+    TelephonyChangeListener,
+    build_config_writer,
+    build_esl_factory,
+)
 
 logger = logging.getLogger("millicall")
 
@@ -36,7 +40,10 @@ async def lifespan(app: FastAPI):
     app.state.sessionmaker = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
     )
-    app.state.change_listener = NullChangeListener()
+    writer = build_config_writer(settings, app.state.secrets)
+    esl_factory = build_esl_factory(settings, app.state.secrets)
+    listener = TelephonyChangeListener(writer, esl_factory)
+    app.state.change_listener = listener
 
     async with app.state.sessionmaker() as session:
         new_admin_password = await ensure_admin_user(session)
@@ -46,6 +53,9 @@ async def lifespan(app: FastAPI):
             f"username=admin password={new_admin_password}  "
             "(この表示は一度きりです。安全に保管してください)"
         )
+
+    async with app.state.sessionmaker() as session:
+        await listener.regenerate(session)
 
     try:
         yield
