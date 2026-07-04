@@ -49,3 +49,28 @@ class Extension(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+
+class Trunk(Base):
+    __tablename__ = "trunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # sofia gateway 名にも使う slug（英数と - _ のみ想定）
+    name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    host: Mapped[str] = mapped_column(String(100), nullable=False)  # HGW の LAN 側 IP
+    username: Mapped[str] = mapped_column(String(50), nullable=False)  # 認証ID = 内線番号
+    # HGW 側で決まるユーザー入力値。平文保存(暗号化は Phase 6)。API レスポンスには出さない。
+    password: Mapped[str] = mapped_column(String(128), nullable=False)
+    did_number: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="", server_default=""
+    )
+    caller_id: Mapped[str] = mapped_column(  # 表示番号（自局番号）
+        String(30), nullable=False, default="", server_default=""
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )

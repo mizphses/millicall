@@ -17,6 +17,7 @@ from millicall.telephony.service import (
     build_config_writer,
     build_esl_factory,
 )
+from millicall.trunks.router import router as trunks_router
 
 logger = logging.getLogger("millicall")
 
@@ -68,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings or get_settings()
     app.include_router(auth_router)
     app.include_router(extensions_router)
+    app.include_router(trunks_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
