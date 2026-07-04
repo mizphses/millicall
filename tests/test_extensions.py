@@ -41,6 +41,26 @@ async def test_invalid_number_rejected(auth_client) -> None:
     assert resp.status_code == 422
 
 
+async def test_number_too_short_rejected(auth_client) -> None:
+    resp = await auth_client.post("/api/extensions", json={"number": "1", "display_name": "X"})
+    assert resp.status_code == 422
+
+
+async def test_number_too_long_rejected(auth_client) -> None:
+    resp = await auth_client.post(
+        "/api/extensions", json={"number": "1234567", "display_name": "X"}
+    )
+    assert resp.status_code == 422
+
+
+async def test_fullwidth_digits_rejected(auth_client) -> None:
+    # Unicode fullwidth digits must not be accepted (pattern is [0-9], not \d)
+    resp = await auth_client.post(
+        "/api/extensions", json={"number": "１２３４", "display_name": "X"}
+    )
+    assert resp.status_code == 422
+
+
 async def test_duplicate_number_rejected(auth_client) -> None:
     await auth_client.post("/api/extensions", json={"number": "1003", "display_name": "A"})
     dup = await auth_client.post("/api/extensions", json={"number": "1003", "display_name": "B"})

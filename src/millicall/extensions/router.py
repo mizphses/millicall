@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.deps import get_change_listener, get_session, require_admin
@@ -31,7 +32,13 @@ async def create_extension(
         enabled=True,
     )
     session.add(ext)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Extension number already exists"
+        ) from None
     await session.refresh(ext)
     await listener.notify(session)
     return ext

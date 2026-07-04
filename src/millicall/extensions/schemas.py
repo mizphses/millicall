@@ -5,11 +5,13 @@ class ExtensionCreate(BaseModel):
     # sip_password は受け付けない（extra フィールドは無視）。
     model_config = ConfigDict(extra="ignore")
 
-    number: str = Field(..., pattern=r"^\d{2,6}$")
+    number: str = Field(..., pattern=r"^[0-9]{2,6}$")
     display_name: str = Field(..., min_length=1, max_length=100)
 
 
 class ExtensionUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
     enabled: bool | None = None
 
