@@ -43,8 +43,11 @@ async def create_call(
 
     client = esl_factory()
     try:
-        await asyncio.wait_for(client.connect(), timeout=settings.esl_timeout_seconds)
-        await client.bgapi(command)
+        async def _connect_and_originate():
+            await client.connect()
+            await client.bgapi(command)
+
+        await asyncio.wait_for(_connect_and_originate(), timeout=settings.esl_timeout_seconds)
     except (OSError, ESLError, TimeoutError) as exc:
         logger.warning("originate failed: %s", exc)
         raise HTTPException(
