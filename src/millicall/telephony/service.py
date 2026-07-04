@@ -93,6 +93,7 @@ class TelephonyChangeListener:
         ]
 
     async def _load_routes(self, session: AsyncSession) -> list[RouteConfig]:
+        # FreeSWITCHは文書順で評価（first match wins）。決定性のためmatch_number昇順
         result = await session.scalars(
             select(Route).where(Route.enabled.is_(True)).order_by(Route.match_number)
         )

@@ -8,6 +8,19 @@ from markupsafe import Markup
 # プレフィックスは 2〜8 桁の数字のみ（正規表現インジェクション防止・多層防御）
 _SAFE_PREFIX_RE = re.compile(r"^[0-9]{2,8}$")
 
+# match_number は [0-9*#] に検証済み。* は正規表現メタキャラクタのためエスケープが必要。
+# re_escape フィルタで二重防御。
+_MATCH_NUMBER_SAFE_RE = re.compile(r"^[0-9*#]{1,30}$")
+
+
+def _re_escape_safe(s: object) -> Markup:
+    # Markup は autoescape をバイパスする。[0-9*#] に検証済みの入力のみ安全。
+    # 未検証フィールドへの誤用を大声で失敗させるためフィルタ内でも検証する。
+    text = str(s)
+    if not _MATCH_NUMBER_SAFE_RE.fullmatch(text):
+        raise ValueError(f"re_escape filter: unsafe input {text!r}")
+    return Markup(re.escape(text))
+
 
 @dataclass(frozen=True)
 class ExtensionConfig:
@@ -79,7 +92,7 @@ class FreeswitchConfigWriter:
         # re_escape: match_number には [0-9*#] が許可されており、* は正規表現メタキャラクタのため
         # テンプレート内で expression="^(...)$" に展開する前にエスケープが必要。
         # Markup でラップすることで HTML autoescape による二重エスケープを防ぐ。
-        self._env.filters["re_escape"] = lambda s: Markup(re.escape(str(s)))
+        self._env.filters["re_escape"] = _re_escape_safe
 
     def _render(self, template: str, extra: dict | None = None) -> str:
         context = dict(self._base)

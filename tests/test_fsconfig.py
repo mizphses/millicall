@@ -139,3 +139,66 @@ def test_build_config_writer_wires_sip_bind_ip(tmp_path) -> None:
     assert 'value="10.0.0.5"' in internal, (
         "sip-ip / rtp-ip must reflect sip_bind_ip='10.0.0.5' when wired through build_config_writer"
     )
+
+
+# --- re_escape filter guard: input validation ---
+
+
+def test_re_escape_rejects_unsafe_input(tmp_path) -> None:
+    """re_escape filter must reject unsafe input (non-[0-9*#])."""
+    writer = _writer(tmp_path)
+    # Call filter directly via writer._env.filters["re_escape"]
+    filter_func = writer._env.filters["re_escape"]
+
+    # Safe inputs should not raise
+    assert filter_func("123") is not None
+    assert filter_func("*100#") is not None
+
+    # Unsafe inputs should raise ValueError
+    import pytest
+    with pytest.raises(ValueError, match="re_escape filter: unsafe input"):
+        filter_func("<evil>")
+
+    with pytest.raises(ValueError, match="re_escape filter: unsafe input"):
+        filter_func("123; DROP TABLE")
+
+
+def test_match_number_with_star_and_hash(tmp_path) -> None:
+    """match_number with * and # must be properly escaped in regex expression."""
+    from millicall.telephony.fsconfig import RouteConfig
+
+    writer = _writer(tmp_path)
+    writer.write_all(
+        [],
+        routes=[RouteConfig(match_number="*100#", target_type="extension", target_value="1001")],
+    )
+    pub = (tmp_path / "dialplan" / "public.xml").read_text()
+    # Verify the regex is escaped: * and # become \* and \#
+    assert 'expression="^\\*100\\#$"' in pub
+    # Verify the XML parses correctly
+    ET.fromstring(pub)
+
+
+def test_disabled_route_excluded_from_public_xml(tmp_path) -> None:
+    """Disabled route must not appear in the generated public.xml."""
+    from millicall.telephony.fsconfig import RouteConfig
+
+    writer = _writer(tmp_path)
+    # Create a route with match_number 0312345678 (enabled)
+    # This tests the unit-level variant via write_all
+    enabled_route = RouteConfig(
+        match_number="0312345678", target_type="extension", target_value="1001"
+    )
+    writer.write_all([], routes=[enabled_route])
+    pub = (tmp_path / "dialplan" / "public.xml").read_text()
+
+    # Enabled route should be in the XML
+    assert 'name="inbound_0312345678"' in pub
+
+    # Now write with empty routes (simulating disabled route)
+    writer.write_all([], routes=[])
+    pub = (tmp_path / "dialplan" / "public.xml").read_text()
+
+    # Disabled route should NOT be in the XML
+    assert 'name="inbound_0312345678"' not in pub
+    assert 'expression="^0312345678$"' not in pub
