@@ -91,6 +91,7 @@ class Route(Base):
     match_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
     # RouteTargetType の値。Phase 2 は "extension" のみ。将来 ring_group/workflow/ai_agent。
     target_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # extensions への FK は意図的に張らない: 参照整合性は書き込み時検証のみ（内線削除でダングリングになり得る — dialplan生成側は存在しないターゲットを無視する前提。Phase 5でUI警告を検討）
     target_value: Mapped[str] = mapped_column(String(64), nullable=False)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()

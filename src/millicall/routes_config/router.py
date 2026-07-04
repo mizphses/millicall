@@ -17,7 +17,7 @@ async def _validate_target(session: AsyncSession, target_type: RouteTargetType, 
         ext = await session.scalar(select(Extension).where(Extension.number == value))
         if ext is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"extension {value} does not exist",
             )
 
@@ -75,7 +75,13 @@ async def update_route(
     route = await session.get(Route, route_id)
     if route is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    new_type = body.target_type or RouteTargetType(route.target_type)
+    try:
+        new_type = body.target_type or RouteTargetType(route.target_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"invalid stored target_type: {route.target_type}",
+        ) from None
     new_value = body.target_value if body.target_value is not None else route.target_value
     if body.target_type is not None or body.target_value is not None:
         await _validate_target(session, new_type, new_value)

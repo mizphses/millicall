@@ -61,3 +61,28 @@ async def test_list_and_delete_route(auth_client_with_telephony):
 @pytest.mark.asyncio
 async def test_routes_require_auth(client):
     assert (await client.get("/api/routes")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_patch_route_target_value_nonexistent_extension(auth_client_with_telephony):
+    c = auth_client_with_telephony
+    await _make_ext(c, "1001")
+    created = await c.post(
+        "/api/routes",
+        json={"match_number": "0312345678", "target_type": "extension", "target_value": "1001"},
+    )
+    rid = created.json()["id"]
+    # PATCH to nonexistent extension → 422
+    resp = await c.patch(f"/api/routes/{rid}", json={"target_value": "9999"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_get_delete_missing_route_id(auth_client_with_telephony):
+    c = auth_client_with_telephony
+    # GET missing route id → 404
+    resp = await c.get("/api/routes/99999")
+    assert resp.status_code == 404
+    # DELETE missing route id → 404
+    resp = await c.delete("/api/routes/99999")
+    assert resp.status_code == 404
