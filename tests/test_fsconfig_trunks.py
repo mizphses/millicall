@@ -52,3 +52,29 @@ def test_trunk_password_not_in_repr():
         name="hgw", display_name="HGW", host="h", username="u", password="topsecret"
     )
     assert "topsecret" not in repr(cfg)
+
+
+def test_trunk_fields_escaped_in_external_xml(tmp_path):
+    """XML special characters in trunk host, username, password must be entity-escaped."""
+    w = _writer(tmp_path)
+    w.write_all(
+        [ExtensionConfig("1001", "Alice", "pw")],
+        trunks=[
+            TrunkConfig(
+                name="evil",
+                display_name="Evil Gateway",
+                host='hgw & <evil>"',
+                username="u&1",
+                password="p<w>",
+                did_number="0312345678",
+                caller_id="0312345678",
+            )
+        ],
+    )
+    ext = (tmp_path / "sip_profiles" / "external.xml").read_text()
+    assert "hgw &amp; &lt;evil&gt;" in ext
+    assert "u&amp;1" in ext
+    assert "p&lt;w&gt;" in ext
+    assert "<evil>" not in ext
+    assert "u&1" not in ext or "u&amp;1" in ext
+    ET.fromstring(ext)  # raises if XML is not well-formed
