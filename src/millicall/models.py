@@ -74,3 +74,11 @@ class Trunk(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+    def __repr__(self) -> str:
+        """Custom repr that excludes the password field."""
+        attrs = [
+            f"{k}={v!r}" for k, v in self.__dict__.items()
+            if not k.startswith("_") and k != "password"
+        ]
+        return f"<{self.__class__.__name__}({', '.join(attrs)})>"
