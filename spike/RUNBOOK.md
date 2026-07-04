@@ -20,12 +20,15 @@ cp .env.example .env && chmod 600 .env
 docker compose up -d
 ```
 
-初回 pull 後、再現性のため使用イメージの digest を控える:
+docker-compose.yml はイメージを digest で固定済みのため、初回 pull でも
+完全に同一のレイヤーが取得される。使用 digest は以下のとおり:
 
-```bash
-docker image inspect --format '{{index .RepoDigests 0}}' safarov/freeswitch:1.10.11
-# 例: safarov/freeswitch@sha256:xxxx... をこのRUNBOOKに追記しておく
 ```
+safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6
+```
+
+(FreeSWITCH 1.10.12 / 2024-08-02。safarov リポジトリにはバージョン別タグが
+存在しないため latest タグではなく digest を直接指定している。)
 
 起動ログで生成された external.xml（パスワード伏字）と FreeSWITCH の起動を確認:
 

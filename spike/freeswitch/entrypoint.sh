@@ -10,6 +10,14 @@ set -eu
 
 # 必須変数チェック（未設定なら明示エラーで停止）
 : "${HGW_IP:?HGW_IP is required (.env)}"
+
+# vanilla 設定初期化（safarov イメージは /etc/freeswitch が空のため
+# 本来の docker-entrypoint.sh が行う cp を先に実行する）
+if [ ! -f "/etc/freeswitch/freeswitch.xml" ]; then
+  echo "=== initializing vanilla freeswitch config ==="
+  mkdir -p /etc/freeswitch
+  cp -arf /usr/share/freeswitch/conf/vanilla/* /etc/freeswitch/
+fi
 : "${HGW_SIP_USER:?HGW_SIP_USER is required (.env)}"
 : "${HGW_SIP_PASSWORD:?HGW_SIP_PASSWORD is required (.env)}"
 : "${OUTBOUND_CALLERID:?OUTBOUND_CALLERID is required (.env)}"
@@ -49,4 +57,6 @@ sed -E 's|(name="password"[[:space:]]+value=")[^"]*|\1********|' \
 echo "================================================"
 
 # -nf: フォアグラウンド（フォークしない） / -nonat: 自動NAT検出を無効化（同一LAN）
-exec freeswitch -u freeswitch -g freeswitch -nf -nonat
+# safarov イメージには freeswitch ユーザーが存在しない（busybox/root 環境）ため
+# -u/-g フラグを省略して root で起動する。使い捨て検証用なので問題なし。
+exec freeswitch -nf -nonat
