@@ -101,6 +101,22 @@ class Route(Base):
     )
 
 
+class Contact(Base):
+    __tablename__ = "contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    phone_number: Mapped[str] = mapped_column(String(30), nullable=False)
+    company: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    department: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", server_default=""
+    )
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
 class Cdr(Base):
     __tablename__ = "cdr"
 

@@ -9,6 +9,7 @@ from millicall.auth.router import router as auth_router
 from millicall.auth.service import ensure_admin_user
 from millicall.cdr.router import router as cdr_router
 from millicall.config import Settings, get_settings
+from millicall.contacts.router import router as contacts_router
 from millicall.db import create_db_engine
 from millicall.db_migrations import upgrade_to_head
 from millicall.extensions.router import router as extensions_router
@@ -89,6 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="millicall v2 core", lifespan=lifespan)
     app.state.settings = settings or get_settings()
     app.include_router(auth_router)
+    app.include_router(contacts_router)
     app.include_router(extensions_router)
     app.include_router(trunks_router)
     app.include_router(routes_router)
