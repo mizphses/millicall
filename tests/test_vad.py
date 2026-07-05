@@ -41,6 +41,25 @@ def test_short_blip_below_min_speech_is_ignored():
     assert not any(e.kind == "speech_end" for e in events)
 
 
+def test_speech_end_emitted_for_short_speech_after_start():
+    """speech_start 発行済みの発話が min_speech 未満のまま無音ヒステリシス確定した場合、
+    空 audio の speech_end が発行されイベントの対称性を保証する。
+
+    有声 3 フレーム（start 発火）→ 無音 20 フレーム（ヒステリシス確定）のシナリオ。
+    _min_speech_frames=6 なので 3 フレームでは min_speech 未満。
+    """
+    pattern = [True] * 3 + [False] * 20
+    seg = VadSegmenter(classifier=_ScriptedClassifier(pattern))
+    events = []
+    for _ in range(len(pattern)):
+        events.extend(seg.push(_FRAME))
+    kinds = [e.kind for e in events]
+    assert "speech_start" in kinds, "speech_start が発行されるべき"
+    assert "speech_end" in kinds, "speech_start と対になる speech_end が発行されるべき"
+    end = next(e for e in events if e.kind == "speech_end")
+    assert end.audio == b"", "min_speech 未満の場合 speech_end.audio は空であるべき"
+
+
 def test_push_buffers_partial_frames():
     # 480バイト境界に満たない入力を分割で与えても正しくフレーム化される
     seg = VadSegmenter(classifier=_ScriptedClassifier([True] * 100))

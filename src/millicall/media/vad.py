@@ -21,6 +21,13 @@ class VadSegmenter:
     """連続 PCM を投入し、発話開始/終端イベントを返すヒステリシス付き VAD。
 
     入力は L16 モノ・sample_rate（既定 8000）。frame_ms 単位でフレーム化する。
+
+    イベントの対称性保証:
+        speech_end は speech_start と必ず対になる。
+        無音ヒステリシス確定時に発話長が min_speech_ms 未満の場合は
+        audio=b"" の speech_end を発行する（下流は audio が空の場合 STT をスキップできる）。
+        speech_start が未発行の短ブリップ（連続有声 < speech_start_frames）は
+        speech_end も発行しない。
     """
 
     def __init__(
@@ -83,6 +90,10 @@ class VadSegmenter:
                     if self._speech_frame_count >= self._min_speech_frames:
                         audio = b"".join(self._speech_frames)
                         events.append(VadEvent("speech_end", audio))
+                    else:
+                        # speech_start は発行済みのため、対になる speech_end を発行して
+                        # イベントの対称性を保証する。audio=b"" = 下流は STT をスキップ可。
+                        events.append(VadEvent("speech_end", b""))
                     self._reset_after_utterance()
         return events
 
