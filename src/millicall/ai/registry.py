@@ -19,6 +19,22 @@ def build_llm(kind: str, config: dict, api_key: str | None):
             temperature=config.get("temperature", 0.7),
             max_tokens=config.get("max_tokens", 500),
         )
+    if kind == "anthropic":
+        from millicall.ai.llm.anthropic import AnthropicLLM
+
+        return AnthropicLLM(
+            api_key=api_key,
+            model=config.get("model", "claude-sonnet-4-20250514"),
+            max_tokens=config.get("max_tokens", 500),
+        )
+    if kind == "gemini":
+        from millicall.ai.llm.gemini import GeminiLLM
+
+        return GeminiLLM(
+            api_key=api_key,
+            model=config.get("model", "gemini-2.5-flash"),
+            temperature=config.get("temperature", 0.7),
+        )
     raise UnknownProviderKind(kind)
 
 
