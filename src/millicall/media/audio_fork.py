@@ -8,6 +8,7 @@ L16/8k モノのバイナリフレームを送出する（`uuid_audio_stream <uu
 """
 
 import asyncio
+import contextlib
 import logging
 
 from fastapi import FastAPI, WebSocket
@@ -40,9 +41,10 @@ class AudioForkHandler:
                     if ev.kind == "speech_start":
                         if self._session.speaking:
                             self._spawn(self._session.on_barge_in())
-                    elif ev.kind == "speech_end":
-                        if self._current is None or self._current.done():
-                            self._current = self._spawn(self._session.on_utterance(ev.audio))
+                    elif ev.kind == "speech_end" and (
+                        self._current is None or self._current.done()
+                    ):
+                        self._current = self._spawn(self._session.on_utterance(ev.audio))
         except WebSocketDisconnect:
             return
         finally:
@@ -54,10 +56,8 @@ class AudioForkHandler:
             for task in list(self._bg):
                 task.cancel()
             for task in list(self._bg):
-                try:
+                with contextlib.suppress(BaseException):
                     await task
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                    pass
 
 
 class MediaEventRouter:
