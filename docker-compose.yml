@@ -46,3 +46,10 @@ services:
       - ./data/freeswitch/tts:/app/data/freeswitch/tts
     # entrypoint はイメージに内蔵 (ENTRYPOINT) されているため compose では上書きしない
     restart: unless-stopped
+
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-latest
+    profiles: ["voicevox"]
+    ports:
+      - "127.0.0.1:50021:50021"
+    restart: unless-stopped
