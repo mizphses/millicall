@@ -84,6 +84,24 @@ async def lifespan(app: FastAPI):
         logger.warning("ESL command client connect failed; AI playback disabled until reconnect")
     app.state.esl_command = esl_command
 
+    # 共有 ESL コマンド接続の書き込みを直列化するロック（I6: 複数通話の bgapi 混線防止）。
+    app.state.esl_command_lock = asyncio.Lock()
+
+    async def _esl_reconnect() -> object:
+        """接続断時に新規 ESLClient を生成・接続して app.state.esl_command を差し替える。
+        再接続後の新接続を返すことで、既存の EslCallControl も self._esl を更新できる。
+        """
+        new_esl = esl_factory()
+        try:
+            await asyncio.wait_for(new_esl.connect(), timeout=settings.esl_timeout_seconds)
+        except Exception:  # noqa: BLE001
+            logger.warning("ESL command reconnect failed; AI playback remains disabled")
+            raise
+        app.state.esl_command = new_esl
+        return new_esl
+
+    app.state.esl_reconnect = _esl_reconnect
+
     async def _compose_handler(event: dict) -> None:
         await recorder.handle(event)
         await media_router.handle(event)

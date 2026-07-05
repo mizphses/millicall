@@ -4,7 +4,9 @@
 WS ハンドラ・イベントルータ（PLAYBACK_STOP / CHANNEL_HANGUP_COMPLETE）が参照する。
 """
 
+import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -49,6 +51,9 @@ async def build_conversation_session(
     call_uuid: str,
     agent_id: int,
     tts_dir: Path,
+    *,
+    lock: asyncio.Lock | None = None,
+    reconnect: Callable[[], Awaitable[object]] | None = None,
 ):
     box = SecretBox(secrets.master_key)
     async with sessionmaker() as db:
@@ -62,7 +67,12 @@ async def build_conversation_session(
     llm = ai_registry.build_llm(llm_kind, llm_cfg, llm_key)
     tts = ai_registry.build_tts(tts_kind, tts_cfg, tts_key)
     stt = ai_registry.build_stt(stt_kind, stt_cfg, stt_key)
-    call_control = EslCallControl(esl, call_uuid)
+    # lock/reconnect を注入することで、共有 ESL 接続の書き込み直列化（I6）と
+    # 接続断時の自動張り直しを実現する。省略時は per-call 専用接続・再接続なし。
+    # reconnect が返す新接続は app.state.esl_command にも反映されるため、
+    # 既存セッションが古い接続を掴んだままになる問題は発生しない
+    # （EslCallControl.reconnect 成功時に self._esl が更新される — call_control.py 参照）。
+    call_control = EslCallControl(esl, call_uuid, lock=lock, reconnect=reconnect)
 
     async def _persist(turn: tuple[str, str, int]) -> None:
         role, text, latency_ms = turn

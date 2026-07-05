@@ -94,6 +94,8 @@ def register_media_ws(app: FastAPI) -> None:
                 call_uuid=call_uuid,
                 agent_id=agent_id,
                 tts_dir=state.settings.tts_cache_dir,
+                lock=getattr(state, "esl_command_lock", None),
+                reconnect=getattr(state, "esl_reconnect", None),
             )
         except Exception:
             logger.exception("failed to build AI session for uuid=%s", call_uuid)
