@@ -1,0 +1,36 @@
+services:
+  core:
+    image: ghcr.io/mizphses/millicall-core:${MILLICALL_VERSION:-latest}
+    pull_policy: always
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').getcode()==200 else 1)"
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  freeswitch:
+    image: ghcr.io/mizphses/millicall-freeswitch:${MILLICALL_VERSION:-latest}
+    pull_policy: always
+    network_mode: host
+    depends_on:
+      core:
+        condition: service_healthy
+    volumes:
+      - ./data/freeswitch/directory/default.xml:/etc/freeswitch/directory/default.xml
+      - ./data/freeswitch/directory/default:/etc/freeswitch/directory/default
+      - ./data/freeswitch/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml
+      - ./data/freeswitch/sip_profiles/internal.xml:/etc/freeswitch/sip_profiles/internal.xml
+      - ./data/freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml
+      - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
+      - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
+    restart: unless-stopped
