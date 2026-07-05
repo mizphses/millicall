@@ -12,6 +12,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Pin Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies (dev extra, locked)
+        run: uv sync --extra dev --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Pytest
+        run: uv run pytest -q
+
   prepare:
     runs-on: ubuntu-24.04
     outputs:
@@ -21,7 +44,7 @@ jobs:
         run: echo "sha_tag=main-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: prepare
+    needs: [prepare, test]
     permissions:
       contents: read
       packages: write
