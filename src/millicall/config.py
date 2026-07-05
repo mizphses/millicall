@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     fs_config_dir: Path = Path("data/freeswitch")
     # TTS 音声を書き出す共有ディレクトリ（FreeSWITCH コンテナにも同一パスで bind mount）
     tts_cache_dir: Path = Path("data/freeswitch/tts")
+    # FreeSWITCH の mod_audio_stream が core の音声受け WS へ接続するベース URL。
+    # host ネットワーキング前提のため既定は 127.0.0.1:8000（パス /media/audio-fork/<uuid> が付与される）。
+    media_ws_base_url: str = "ws://127.0.0.1:8000"
 
     sip_domain: str = "millicall.local"
     sip_port: int = 5060

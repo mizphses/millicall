@@ -4,7 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.deps import get_change_listener, get_session, require_admin
-from millicall.models import Extension, Route
+from millicall.models import AiAgent, Extension, Route
 from millicall.routes_config.enums import RouteTargetType
 from millicall.routes_config.schemas import RouteCreate, RouteRead, RouteUpdate
 from millicall.telephony.hooks import ExtensionChangeListener
@@ -19,6 +19,20 @@ async def _validate_target(session: AsyncSession, target_type: RouteTargetType, 
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"extension {value} does not exist",
+            )
+    elif target_type == RouteTargetType.AI_AGENT:
+        try:
+            agent_id = int(value)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"ai_agent target must be an integer id, got {value!r}",
+            ) from None
+        agent = await session.get(AiAgent, agent_id)
+        if agent is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"ai_agent {value} does not exist",
             )
 
 

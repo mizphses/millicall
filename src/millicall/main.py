@@ -73,7 +73,6 @@ async def lifespan(app: FastAPI):
 
     settings.tts_cache_dir.mkdir(parents=True, exist_ok=True)
     app.state.session_registry = SessionRegistry()
-    media_router = MediaEventRouter(app.state.session_registry)
 
     # AI 再生制御用の共有 ESL コマンドクライアント（発着信制御と別接続）。
     # ESL 未到達（接続拒否・ハング）でも起動を止めない — timeout 付きで試行し warning のみ。
@@ -101,6 +100,16 @@ async def lifespan(app: FastAPI):
         return new_esl
 
     app.state.esl_reconnect = _esl_reconnect
+
+    # 着信 AI 応対では CHANNEL_ANSWER を受けた core が uuid_audio_stream を発行するため、
+    # 共有 ESL コマンド接続・lock・reconnect と core への WS ベース URL を注入する。
+    media_router = MediaEventRouter(
+        app.state.session_registry,
+        esl=esl_command,
+        ws_base_url=settings.media_ws_base_url,
+        lock=app.state.esl_command_lock,
+        reconnect=_esl_reconnect,
+    )
 
     async def _compose_handler(event: dict) -> None:
         await recorder.handle(event)

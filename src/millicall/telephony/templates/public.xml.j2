@@ -16,6 +16,22 @@
         <action application="hangup" data="NORMAL_CLEARING"/>
       </condition>
     </extension>
+{% elif route.target_type == 'ai_agent' %}
+    {#
+      AI 応対: dialplan は answer→park までに留め、mod_audio_stream の起動は
+      core が ESL API `uuid_audio_stream <uuid> start ws://.../media/audio-fork/<uuid>?agent=<id> mono 8k`
+      で行う（mod_audio_stream は dialplan app ではなく ESL API のため）。
+      対象エージェント id はチャネル変数 millicall_ai_agent に載せ、
+      core が CHANNEL_ANSWER イベントの variable_millicall_ai_agent から読み取る。
+    #}
+    <extension name="inbound_ai_{{ route.match_number }}">
+      <condition field="destination_number" expression="^{{ route.match_number | re_escape }}$">
+        <action application="log" data="INFO ===== INBOUND {{ route.match_number }} -> ai_agent {{ route.target_value }} ====="/>
+        <action application="set" data="millicall_ai_agent={{ route.target_value }}"/>
+        <action application="answer"/>
+        <action application="park"/>
+      </condition>
+    </extension>
 {% endif %}
 {% endfor %}
     <extension name="inbound_no_route">

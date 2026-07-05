@@ -16,6 +16,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from millicall.media.service import SessionRegistry, build_conversation_session
 from millicall.media.vad import VadSegmenter
+from millicall.telephony.esl import ESLConnectionClosed
 
 logger = logging.getLogger("millicall.media.audio_fork")
 
@@ -61,10 +62,35 @@ class AudioForkHandler:
 
 
 class MediaEventRouter:
-    """FreeSWITCH イベントを media セッションへ振り分ける。"""
+    """FreeSWITCH イベントを media セッションへ振り分ける。
 
-    def __init__(self, registry: SessionRegistry) -> None:
+    着信 AI 応対では dialplan が answer→park までに留めるため、CHANNEL_ANSWER を
+    受けた本ルータが ESL API `uuid_audio_stream <uuid> start <ws-url> mono 8k` を
+    bgapi で発行して mod_audio_stream を起動する（mod_audio_stream は dialplan app
+    ではなく ESL API のため）。対象エージェント id は dialplan が設定した
+    チャネル変数 millicall_ai_agent（イベント上は variable_millicall_ai_agent）から読む。
+
+    `esl`/`ws_base_url` 未指定時は起動発行を行わず、従来どおり PLAYBACK_STOP /
+    CHANNEL_HANGUP_COMPLETE の振り分けのみを担う（後方互換）。
+    """
+
+    def __init__(
+        self,
+        registry: SessionRegistry,
+        *,
+        esl=None,
+        ws_base_url: str | None = None,
+        lock: asyncio.Lock | None = None,
+        reconnect=None,
+    ) -> None:
         self._registry = registry
+        self._esl = esl
+        # 末尾スラッシュを除去して URL 組み立てを决定論的にする
+        self._ws_base_url = ws_base_url.rstrip("/") if ws_base_url else None
+        self._lock = lock if lock is not None else asyncio.Lock()
+        self._reconnect = reconnect
+        # CHANNEL_ANSWER の重複や再発火で二重起動しないよう、起動済み uuid を記録する
+        self._started: set[str] = set()
 
     async def handle(self, event: dict) -> None:
         name = event.get("Event-Name")
@@ -74,9 +100,42 @@ class MediaEventRouter:
             if entry is not None:
                 _, call_control = entry
                 call_control._notify_playback_done()
+        elif name == "CHANNEL_ANSWER":
+            await self._maybe_start_audio_stream(event)
         elif name == "CHANNEL_HANGUP_COMPLETE":
             uuid = event.get("Channel-Call-UUID") or event.get("Unique-ID") or ""
             self._registry.pop(uuid)
+            self._started.discard(uuid)
+
+    async def _maybe_start_audio_stream(self, event: dict) -> None:
+        if self._esl is None or self._ws_base_url is None:
+            return
+        agent = event.get("variable_millicall_ai_agent")
+        if not agent:
+            return
+        uuid = event.get("Unique-ID") or event.get("Channel-Call-UUID") or ""
+        if not uuid or uuid in self._started:
+            return
+        self._started.add(uuid)
+        ws_url = f"{self._ws_base_url}/media/audio-fork/{uuid}?agent={agent}"
+        command = f"uuid_audio_stream {uuid} start {ws_url} mono 8k"
+        try:
+            await self._bgapi(command)
+        except Exception:
+            # 起動に失敗したら再試行できるよう起動済みマークを取り消す
+            self._started.discard(uuid)
+            logger.exception("failed to start audio stream for uuid=%s", uuid)
+
+    async def _bgapi(self, command: str) -> None:
+        """共有 ESL 接続をロックで直列化し、接続断時は reconnect で張り直して再送する。"""
+        async with self._lock:
+            try:
+                await self._esl.bgapi(command)
+            except ESLConnectionClosed:
+                if self._reconnect is None:
+                    raise
+                self._esl = await self._reconnect()
+                await self._esl.bgapi(command)
 
 
 def register_media_ws(app: FastAPI) -> None:
