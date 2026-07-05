@@ -144,23 +144,38 @@ class ConversationSession:
 
         async def _pump() -> None:
             buffer = ""
-            async for token in self._llm.stream_chat(messages):
-                buffer += token
-                while (idx := self._first_boundary(buffer)) != -1:
-                    sentence = buffer[: idx + 1]
-                    buffer = buffer[idx + 1 :]
-                    await self._enqueue_sentence(sentence, sentence_q, state)
-            await self._enqueue_sentence(buffer, sentence_q, state)
-            await sentence_q.put(None)
+            try:
+                async for token in self._llm.stream_chat(messages):
+                    buffer += token
+                    while (idx := self._first_boundary(buffer)) != -1:
+                        sentence = buffer[: idx + 1]
+                        buffer = buffer[idx + 1 :]
+                        await self._enqueue_sentence(sentence, sentence_q, state)
+                await self._enqueue_sentence(buffer, sentence_q, state)
+                await sentence_q.put(None)
+            except asyncio.CancelledError:
+                # I1: cancel 時は下流も破棄されるため sentinel 不要（full queue 座礁も回避）。
+                raise
+            except BaseException:
+                # プロバイダ例外時も終端 sentinel を必ず下流へ（_synth 永久ブロック防止）。
+                await sentence_q.put(None)
+                raise
 
         async def _synth() -> None:
-            while True:
-                sentence = await sentence_q.get()
-                if sentence is None:
-                    await pcm_q.put(None)
-                    return
-                pcm = await self._tts.synthesize(sentence)
-                await pcm_q.put((sentence, pcm))
+            try:
+                while True:
+                    sentence = await sentence_q.get()
+                    if sentence is None:
+                        await pcm_q.put(None)
+                        return
+                    pcm = await self._tts.synthesize(sentence)
+                    await pcm_q.put((sentence, pcm))
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                # プロバイダ例外時も終端 sentinel を必ず下流へ（消費ループ座礁防止）。
+                await pcm_q.put(None)
+                raise
 
         pump = asyncio.create_task(_pump())
         synth = asyncio.create_task(_synth())
@@ -198,6 +213,15 @@ class ConversationSession:
             for t in (pump, synth):
                 with contextlib.suppress(BaseException):
                     await t
+            # プロバイダ例外はターンを graceful に終了させたうえでログ（通話は継続）。
+            for name, t in (("pump(LLM)", pump), ("synth(TTS)", synth)):
+                if not t.cancelled() and t.exception() is not None:
+                    logger.error(
+                        "conversation %s task failed (uuid=%s)",
+                        name,
+                        self._call_uuid,
+                        exc_info=t.exception(),
+                    )
             if not interrupt_wait.done():
                 interrupt_wait.cancel()
             with contextlib.suppress(BaseException):

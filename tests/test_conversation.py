@@ -68,6 +68,24 @@ class _FakeCall:
         self.hung += 1
 
 
+class _MidStreamErrorLLM:
+    """1文目を出したあと、2文目の途中で raise するフェイク LLM。"""
+
+    async def stream_chat(self, messages):
+        yield "はい。"
+        yield "つづ"
+        raise RuntimeError("llm boom")
+
+
+class _ErrorTTS:
+    def __init__(self):
+        self.calls = []
+
+    async def synthesize(self, text):
+        self.calls.append(text)
+        raise RuntimeError("tts boom")
+
+
 def _new_session(tmp_path, llm_tokens, stt_text="こんにちは", turns=None, grace_ms=0):
     return ConversationSession(
         agent=_Agent(),
@@ -164,3 +182,32 @@ async def test_barge_in_ignored_during_grace(tmp_path):
     await asyncio.wait_for(task, timeout=1.0)
     assert s._call_control.stopped == 0
     assert len(s._call_control.played) == 2
+
+
+@pytest.mark.asyncio
+async def test_llm_error_mid_stream_does_not_hang(tmp_path):
+    # LLM がストリーム途中で raise してもターンは終了し、通話は座礁しない。
+    s = _new_session(tmp_path, [])
+    s._llm = _MidStreamErrorLLM()
+    await asyncio.wait_for(s.on_utterance(b"\x00\x00" * 800), timeout=2.0)
+    # 再生済み（1文目）だけが history に記録される。
+    assistant = [m for m in s._history if m.role == "assistant"]
+    assert assistant and assistant[0].content == "はい。"
+    assert len(s._call_control.played) == 1
+    # セッションは次の発話を処理できる（セッション死ではない）。
+    s._llm = _FakeLLM(["どうぞ。"])
+    await asyncio.wait_for(s.on_utterance(b"\x00\x00" * 800), timeout=2.0)
+    assert len(s._call_control.played) == 2
+
+
+@pytest.mark.asyncio
+async def test_tts_error_does_not_hang(tmp_path):
+    # TTS が raise してもターンは終了し、通話は座礁しない。
+    s = _new_session(tmp_path, ["はい。"])
+    s._tts = _ErrorTTS()
+    await asyncio.wait_for(s.on_utterance(b"\x00\x00" * 800), timeout=2.0)
+    assert s._call_control.played == []
+    # セッションは次の発話を処理できる。
+    s._tts = _FakeTTS()
+    await asyncio.wait_for(s.on_utterance(b"\x00\x00" * 800), timeout=2.0)
+    assert len(s._call_control.played) == 1
