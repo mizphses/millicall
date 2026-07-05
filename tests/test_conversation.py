@@ -1,0 +1,166 @@
+import asyncio
+from pathlib import Path
+
+import pytest
+
+from millicall.media.conversation import ConversationSession
+
+
+class _Agent:
+    id = 1
+    system_prompt = "あなたは受付です"
+    greeting = "お電話ありがとうございます。"
+    max_history = 10
+
+
+class _FakeSTT:
+    def __init__(self, text):
+        self._text = text
+        self.finished = 0
+
+    def open_session(self):
+        return self
+
+    async def feed(self, pcm):
+        pass
+
+    async def finish(self):
+        self.finished += 1
+        return self._text
+
+
+class _FakeLLM:
+    def __init__(self, tokens):
+        self._tokens = tokens
+        self.seen = []
+
+    async def stream_chat(self, messages):
+        self.seen = messages
+        for t in self._tokens:
+            yield t
+
+
+class _FakeTTS:
+    def __init__(self):
+        self.calls = []
+
+    async def synthesize(self, text):
+        self.calls.append(text)
+        return b"\x00\x00" * 80  # 20ms 相当のダミー PCM
+
+
+class _FakeCall:
+    def __init__(self):
+        self.played = []
+        self.stopped = 0
+        self.hung = 0
+        self.block = None
+
+    async def play_file(self, path):
+        self.played.append(path)
+        if self.block is not None:
+            await self.block.wait()
+
+    async def stop_playback(self):
+        self.stopped += 1
+
+    async def hangup(self):
+        self.hung += 1
+
+
+def _new_session(tmp_path, llm_tokens, stt_text="こんにちは", turns=None, grace_ms=0):
+    return ConversationSession(
+        agent=_Agent(),
+        stt=_FakeSTT(stt_text),
+        llm=_FakeLLM(llm_tokens),
+        tts=_FakeTTS(),
+        call_control=_FakeCall(),
+        tts_dir=Path(tmp_path),
+        call_uuid="u1",
+        on_turn=turns.append if turns is not None else None,
+        barge_in_grace_ms=grace_ms,
+    )
+
+
+@pytest.mark.asyncio
+async def test_greet_plays_greeting(tmp_path):
+    s = _new_session(tmp_path, [])
+    await s.greet()
+    assert len(s._call_control.played) == 1
+    assert s._tts.calls == ["お電話ありがとうございます。"]
+
+
+@pytest.mark.asyncio
+async def test_turn_splits_sentences_and_plays_in_order(tmp_path):
+    turns = []
+    s = _new_session(tmp_path, ["はい", "、", "承知", "しました。", "少々", "お待ちを。"], turns=turns)
+    await s.on_utterance(b"\x00\x00" * 800)
+    # 2文 → 2ファイル再生
+    assert len(s._call_control.played) == 2
+    # user + assistant の2ターンが記録され、assistant に latency_ms が入る
+    roles = [t[0] for t in turns]
+    assert roles == ["user", "assistant"]
+    assistant = next(t for t in turns if t[0] == "assistant")
+    assert assistant[2] >= 0  # latency_ms
+
+
+@pytest.mark.asyncio
+async def test_empty_pcm_skips_stt(tmp_path):
+    s = _new_session(tmp_path, ["はい。"])
+    await s.on_utterance(b"")
+    assert s._stt.finished == 0
+    assert s._call_control.played == []
+
+
+@pytest.mark.asyncio
+async def test_stt_session_finished_on_error(tmp_path):
+    s = _new_session(tmp_path, ["はい。"])
+
+    async def _boom(pcm):
+        raise RuntimeError("feed failed")
+
+    s._stt.feed = _boom
+    with pytest.raises(RuntimeError):
+        await s.on_utterance(b"\x00\x00" * 800)
+    # finally で必ず finish() を通す（リーク防止）
+    assert s._stt.finished == 1
+
+
+@pytest.mark.asyncio
+async def test_end_call_marker_triggers_hangup(tmp_path):
+    s = _new_session(tmp_path, ["さようなら。", "[END_CALL]"])
+    await s.on_utterance(b"\x00\x00" * 800)
+    assert s._call_control.hung == 1
+    # マーカーは合成テキストに含めない
+    assert all("[END_CALL]" not in c for c in s._tts.calls)
+
+
+@pytest.mark.asyncio
+async def test_barge_in_stops_playback(tmp_path):
+    s = _new_session(tmp_path, ["ながい", "文章", "です。", "つづき", "ます。"])
+    s._call_control.block = asyncio.Event()  # 1文目再生でブロック
+    task = asyncio.create_task(s.on_utterance(b"\x00\x00" * 800))
+    await asyncio.sleep(0.02)
+    await s.on_barge_in()  # 再生中に割り込み
+    s._call_control.block.set()
+    await asyncio.wait_for(task, timeout=1.0)
+    assert s._call_control.stopped >= 1
+    # 割り込み後は2文目を再生しない
+    assert len(s._call_control.played) == 1
+    # history には再生済みの文のみ記録（未再生分で文脈を汚さない）
+    assistant = [m for m in s._history if m.role == "assistant"]
+    assert assistant and "つづき" not in assistant[0].content
+
+
+@pytest.mark.asyncio
+async def test_barge_in_ignored_during_grace(tmp_path):
+    # I2: 再生開始直後 N ms はバージイン無効
+    s = _new_session(tmp_path, ["ながい", "文章", "です。", "つづき", "ます。"], grace_ms=10_000)
+    s._call_control.block = asyncio.Event()
+    task = asyncio.create_task(s.on_utterance(b"\x00\x00" * 800))
+    await asyncio.sleep(0.02)
+    await s.on_barge_in()  # グレース期間内なので無視される
+    s._call_control.block.set()
+    await asyncio.wait_for(task, timeout=1.0)
+    assert s._call_control.stopped == 0
+    assert len(s._call_control.played) == 2

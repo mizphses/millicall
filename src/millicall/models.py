@@ -202,3 +202,17 @@ class AiAgent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+
+class CallMessage(Base):
+    __tablename__ = "call_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    call_uuid: Mapped[str] = mapped_column(String(150), nullable=False, index=True)
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)  # "user" | "assistant"
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
