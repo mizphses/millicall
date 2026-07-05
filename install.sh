@@ -51,7 +51,7 @@ else
 fi
 
 # --- millicallctl を配置 ---
-if [ -w /usr/local/bin ] 2>/dev/null; then
+if [ -w /usr/local/bin ]; then
   ctl_dir="/usr/local/bin"
 elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
   ctl_dir="/usr/local/bin"
@@ -62,6 +62,7 @@ else
 fi
 log "millicallctl を ${ctl_dir} に配置します。"
 tmp_ctl="$(mktemp)"
+trap 'rm -f "${tmp_ctl}"' EXIT
 curl -fsSL "${REPO_RAW}/millicallctl" -o "${tmp_ctl}"
 if [ "${use_sudo:-0}" = "1" ]; then
   sudo install -m 0755 "${tmp_ctl}" "${ctl_dir}/millicallctl"
