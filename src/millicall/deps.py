@@ -26,6 +26,12 @@ def get_secrets_dep(request: Request) -> "Secrets":
     return request.app.state.secrets
 
 
+def get_secret_box(request: Request):
+    from millicall.crypto import SecretBox
+
+    return SecretBox(request.app.state.secrets.master_key)
+
+
 def get_change_listener(request: Request):
     return request.app.state.change_listener
 

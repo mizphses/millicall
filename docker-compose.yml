@@ -6,6 +6,10 @@ services:
     network_mode: host
     env_file:
       - .env
+    environment:
+      # TTS 音声を core と FreeSWITCH で同一絶対パスにする。
+      # ConversationSession が書く WAV パスと uuid_broadcast の再生パスを一致させる。
+      - MILLICALL_TTS_CACHE_DIR=/app/data/freeswitch/tts
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -38,5 +42,14 @@ services:
       - ./data/freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml
       - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
       - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
+      # TTS 音声ファイルを core と同一絶対パスで共有（uuid_broadcast がこのパスを再生）
+      - ./data/freeswitch/tts:/app/data/freeswitch/tts
     # entrypoint はイメージに内蔵 (ENTRYPOINT) されているため compose では上書きしない
+    restart: unless-stopped
+
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-latest
+    profiles: ["voicevox"]
+    ports:
+      - "127.0.0.1:50021:50021"
     restart: unless-stopped
