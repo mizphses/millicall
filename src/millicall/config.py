@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     database_url: str = "sqlite+aiosqlite:///data/millicall.db"
     fs_config_dir: Path = Path("data/freeswitch")
+    # TTS 音声を書き出す共有ディレクトリ（FreeSWITCH コンテナにも同一パスで bind mount）
+    tts_cache_dir: Path = Path("data/freeswitch/tts")
 
     sip_domain: str = "millicall.local"
     sip_port: int = 5060
