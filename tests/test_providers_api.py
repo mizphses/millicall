@@ -1,5 +1,66 @@
 import pytest
 
+from millicall.providers.router import _redact  # noqa: PLC2701
+
+# --------------------------------------------------------------------------- #
+# _redact ユニットテスト（修正2）
+# --------------------------------------------------------------------------- #
+
+
+def test_redact_replaces_api_key_in_detail():
+    """api_key が detail 文字列に含まれる場合は置換される。"""
+    key = "sk-supersecret"
+    detail = f"Connection error: api_key={key} is invalid"
+    result = _redact(detail, key)
+    assert key not in result
+    assert "****" in result
+
+
+def test_redact_no_key_returns_original():
+    """api_key が None のとき detail はそのまま返る。"""
+    detail = "some error message"
+    assert _redact(detail, None) == detail
+
+
+def test_redact_key_not_in_detail_returns_original():
+    """api_key が detail に含まれないとき detail はそのまま返る。"""
+    key = "sk-mykey"
+    detail = "some unrelated error"
+    assert _redact(detail, key) == detail
+
+
+def test_redact_empty_key_returns_original():
+    """api_key が空文字のとき detail はそのまま返る。"""
+    detail = "some error message"
+    assert _redact(detail, "") == detail
+
+
+# --------------------------------------------------------------------------- #
+# PATCH name 重複 → 409（修正1）
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_update_provider_name_conflict_returns_409(auth_client_with_telephony):
+    """Provider A と B を作成後、B を PATCH で name=A に変更すると 409 が返る。"""
+    c = auth_client_with_telephony
+    # A を作成
+    r_a = await c.post(
+        "/api/providers",
+        json={"name": "provider-a", "type": "llm", "kind": "openai_compatible", "config": {}},
+    )
+    assert r_a.status_code == 201, r_a.text
+    # B を作成
+    r_b = await c.post(
+        "/api/providers",
+        json={"name": "provider-b", "type": "llm", "kind": "openai_compatible", "config": {}},
+    )
+    assert r_b.status_code == 201, r_b.text
+    id_b = r_b.json()["id"]
+    # B を A の name に変更 → 409
+    r_patch = await c.patch(f"/api/providers/{id_b}", json={"name": "provider-a"})
+    assert r_patch.status_code == 409, r_patch.text
+
 
 @pytest.mark.asyncio
 async def test_create_provider_masks_api_key(auth_client_with_telephony):

@@ -45,6 +45,17 @@ def _to_read(p: Provider, box: SecretBox) -> ProviderRead:
     )
 
 
+def _redact(detail: str, api_key: str | None) -> str:
+    """例外 detail 文字列から api_key 平文を除去して返す。
+
+    api_key が truthy かつ detail に含まれる場合のみ置換し、
+    それ以外は detail をそのまま返す。
+    """
+    if api_key and api_key in detail:
+        return detail.replace(api_key, "****")
+    return detail
+
+
 def _validate_kind(ptype: ProviderType, kind: ProviderKind) -> None:
     if kind not in KIND_BY_TYPE[ptype]:
         raise HTTPException(
@@ -107,7 +118,13 @@ async def update_provider(
         p.api_key_encrypted = box.encrypt(body.api_key) if body.api_key else None
     if body.enabled is not None:
         p.enabled = body.enabled
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="name exists"
+        ) from None
     await session.refresh(p)
     return _to_read(p, box)
 
@@ -164,6 +181,7 @@ async def test_provider(
         ) from None
     except Exception as exc:  # noqa: BLE001
         elapsed = int((time.perf_counter() - started) * 1000)
-        return ProviderTestResult(ok=False, detail=str(exc)[:200], latency_ms=elapsed)
+        safe_detail = _redact(str(exc), api_key)[:200]
+        return ProviderTestResult(ok=False, detail=safe_detail, latency_ms=elapsed)
     elapsed = int((time.perf_counter() - started) * 1000)
     return ProviderTestResult(ok=True, detail=detail, latency_ms=elapsed)
