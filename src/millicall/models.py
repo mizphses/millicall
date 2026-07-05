@@ -178,3 +178,27 @@ class Provider(Base):
             if not k.startswith("_") and k != "api_key_encrypted"
         ]
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class AiAgent(Base):
+    __tablename__ = "ai_agents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    greeting: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    llm_provider_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    tts_provider_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    stt_provider_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_history: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default="10"
+    )
+    silence_end_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=600, server_default="600"
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )

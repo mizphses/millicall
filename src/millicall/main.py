@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from millicall.ai_agents.router import router as ai_agents_router
 from millicall.auth.router import router as auth_router
 from millicall.auth.service import ensure_admin_user
 from millicall.calls.router import router as calls_router
@@ -99,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(cdr_router)
     app.include_router(calls_router)
     app.include_router(providers_router)
+    app.include_router(ai_agents_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
