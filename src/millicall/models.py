@@ -149,3 +149,32 @@ class Cdr(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+
+class Provider(Base):
+    __tablename__ = "providers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    # 'llm' | 'tts' | 'stt'
+    type: Mapped[str] = mapped_column(String(10), nullable=False)
+    # 'openai_compatible'|'anthropic'|'gemini'|'voicevox'|'openjtalk'|'whisper'|'google_stt'
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    # 非機密設定（base_url/model/voice/engine_url 等）の JSON 文字列
+    config_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    # Fernet トークン。APIキー不要な kind では NULL。
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        attrs = [
+            f"{k}={v!r}"
+            for k, v in self.__dict__.items()
+            if not k.startswith("_") and k != "api_key_encrypted"
+        ]
+        return f"<{self.__class__.__name__}({', '.join(attrs)})>"
