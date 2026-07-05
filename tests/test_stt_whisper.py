@@ -9,6 +9,11 @@ def test_hallucination_filter():
     assert is_hallucination("ご視聴ありがとうございました。")  # 句点付きも正規化
     assert is_hallucination("Thanks for watching")
     assert not is_hallucination("味噌ラーメンを一つください")
+    # 修正3: 電話文脈では正当な発話として頻出するためフィルタ対象から除外
+    assert not is_hallucination("ありがとうございました")
+    assert not is_hallucination("ありがとうございます")
+    # YouTube 系定型句はフィルタ対象として残す
+    assert is_hallucination("ご視聴ありがとうございます")
 
 
 @pytest.mark.asyncio

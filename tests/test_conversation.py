@@ -123,6 +123,30 @@ async def test_turn_splits_sentences_and_plays_in_order(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cleanup_removes_turn_wavs_but_keeps_prompts(tmp_path):
+    # 修正1: ターン毎に書き出した TTS WAV は cleanup で削除されるが、
+    # prompts/（定型文キャッシュ, 内容アドレス型で永続）は絶対に消さない。
+    prompts = Path(tmp_path) / "prompts"
+    prompts.mkdir()
+    cached = prompts / "deadbeef.wav"
+    cached.write_bytes(b"keep-me")
+
+    s = _new_session(tmp_path, ["はい。"])
+    await s.on_utterance(b"\x00\x00" * 800)
+
+    written = sorted(Path(tmp_path).glob("u1_*.wav"))
+    assert written  # ターンで wav を書き出した
+    assert all(p.exists() for p in written)
+
+    s.cleanup()
+    assert not list(Path(tmp_path).glob("u1_*.wav"))  # ターン wav は削除
+    assert cached.exists()  # prompts/ は残る
+
+    # 冪等（二重呼び出し / 既に消えたファイルでも例外を出さない）
+    s.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_empty_pcm_skips_stt(tmp_path):
     s = _new_session(tmp_path, ["はい。"])
     await s.on_utterance(b"")

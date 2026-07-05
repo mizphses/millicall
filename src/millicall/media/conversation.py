@@ -67,10 +67,25 @@ class ConversationSession:
         self._speaking = False
         self._playback_start: float | None = None
         self._seq = 0
+        # ターン毎に書き出した TTS WAV のパスを追跡し、通話終了時にまとめて削除する。
+        # （prompts/ 配下の定型文キャッシュは _play_pcm が書かないため決して含まれない。）
+        self._written_wavs: set[Path] = set()
 
     @property
     def speaking(self) -> bool:
         return self._speaking
+
+    def cleanup(self) -> None:
+        """このセッションが書き出したターン毎 TTS WAV を削除する（通話終了時のみ）。
+
+        再生中のファイルを消すレースを避けるため、WS 切断/セッション終了時にのみ呼ぶ。
+        prompts/ 配下（内容アドレス型の永続キャッシュ）は追跡対象外なので消えない。
+        unlink は missing_ok=True で冪等。
+        """
+        for path in self._written_wavs:
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+        self._written_wavs.clear()
 
     async def greet(self) -> None:
         if not self._agent.greeting:
@@ -266,6 +281,7 @@ class ConversationSession:
         self._seq += 1
         path = self._tts_dir / f"{self._call_uuid}_{self._seq}.wav"
         path.write_bytes(pcm8k_to_wav(pcm))
+        self._written_wavs.add(path)
         await self._call_control.play_file(str(path))
 
     async def _emit_turn(self, role: str, text: str, latency_ms: int) -> None:

@@ -12,7 +12,6 @@ _HALLUCINATION_PHRASES = {
     "ご視聴ありがとうございます",
     "チャンネル登録よろしくお願いします",
     "おやすみなさい",
-    "ありがとうございました",
     "thank you for watching",
     "thanks for watching",
     "subscribe",

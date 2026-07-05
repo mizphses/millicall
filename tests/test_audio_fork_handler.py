@@ -1,9 +1,12 @@
 import asyncio
 
 import pytest
+from fastapi import FastAPI
 from starlette.websockets import WebSocketDisconnect
 
-from millicall.media.audio_fork import AudioForkHandler
+import millicall.media.audio_fork as audio_fork
+from millicall.media.audio_fork import AudioForkHandler, register_media_ws
+from millicall.media.service import SessionRegistry
 from millicall.media.vad import VadEvent
 
 
@@ -115,3 +118,112 @@ async def test_disconnect_cancels_and_awaits_inflight_conversation_task():
     assert sess.cancelled is True
     assert handler._current is not None
     assert handler._current.done()
+
+
+class _RouteSession:
+    """register_media_ws 用の最小フェイクセッション。"""
+
+    def __init__(self, greet_exc=None):
+        self._agent = type("_A", (), {"silence_end_ms": 600})()
+        self._greet_exc = greet_exc
+        self.greeted = False
+        self.cleaned = 0
+        self.speaking = False
+
+    async def greet(self):
+        self.greeted = True
+        if self._greet_exc is not None:
+            raise self._greet_exc
+
+    def cleanup(self):
+        self.cleaned += 1
+
+    async def on_utterance(self, pcm):  # pragma: no cover
+        pass
+
+    async def on_barge_in(self):  # pragma: no cover
+        pass
+
+
+class _RouteWS:
+    def __init__(self, app, frames=None):
+        self.app = app
+        self.query_params = {"agent": "1"}
+        self._frames = list(frames or [])
+        self.accepted = False
+        self.closed = False
+
+    async def accept(self):
+        self.accepted = True
+
+    async def close(self):
+        self.closed = True
+
+    async def receive_bytes(self):
+        if self._frames:
+            return self._frames.pop(0)
+        raise WebSocketDisconnect(code=1000)
+
+
+def _make_app(registry):
+    app = FastAPI()
+
+    class _Settings:
+        tts_cache_dir = None
+
+    app.state.session_registry = registry
+    app.state.sessionmaker = None
+    app.state.secrets = None
+    app.state.esl_command = None
+    app.state.settings = _Settings()
+    return app
+
+
+def _ws_endpoint(app):
+    register_media_ws(app)
+    route = next(
+        r for r in app.routes if getattr(r, "path", "") == "/media/audio-fork/{call_uuid}"
+    )
+    return route.endpoint
+
+
+@pytest.mark.asyncio
+async def test_ws_route_cleans_up_session_on_disconnect(monkeypatch):
+    # 修正1/2: 正常切断時に cleanup が呼ばれ registry からも除去される。
+    registry = SessionRegistry()
+    sess = _RouteSession()
+
+    async def _fake_build(**kwargs):
+        registry.register("call-1", sess, object())
+        return sess, object()
+
+    monkeypatch.setattr(audio_fork, "build_conversation_session", _fake_build)
+    app = _make_app(registry)
+    endpoint = _ws_endpoint(app)
+
+    await endpoint(_RouteWS(app), "call-1")
+
+    assert sess.greeted is True
+    assert sess.cleaned == 1
+    assert registry.get("call-1") is None
+
+
+@pytest.mark.asyncio
+async def test_ws_route_greet_failure_does_not_leak_registry(monkeypatch):
+    # 修正2: greet が raise しても finally で cleanup + registry pop が走る（リーク防止）。
+    registry = SessionRegistry()
+    sess = _RouteSession(greet_exc=RuntimeError("greet boom"))
+
+    async def _fake_build(**kwargs):
+        registry.register("call-2", sess, object())
+        return sess, object()
+
+    monkeypatch.setattr(audio_fork, "build_conversation_session", _fake_build)
+    app = _make_app(registry)
+    endpoint = _ws_endpoint(app)
+
+    with pytest.raises(RuntimeError, match="greet boom"):
+        await endpoint(_RouteWS(app), "call-2")
+
+    assert sess.cleaned == 1
+    assert registry.get("call-2") is None

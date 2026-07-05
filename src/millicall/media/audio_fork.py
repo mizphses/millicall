@@ -162,8 +162,11 @@ def register_media_ws(app: FastAPI) -> None:
             return
         segmenter = VadSegmenter(silence_end_ms=session._agent.silence_end_ms)
         handler = AudioForkHandler(session, segmenter)
-        await session.greet()
         try:
+            # greet も try 内に置き、raise しても registry/WAV がリークしないようにする。
+            await session.greet()
             await handler.run(ws)
         finally:
+            # 通話終了時にセッションが書き出したターン毎 TTS WAV を削除（ディスク枯渇防止）。
+            session.cleanup()
             state.session_registry.pop(call_uuid)
