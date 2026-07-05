@@ -1,0 +1,52 @@
+name: release-dev
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dev
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha_tag: ${{ steps.v.outputs.sha_tag }}
+    steps:
+      - id: v
+        run: echo "sha_tag=main-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/_build-images.yml
+    with:
+      sha_tag: ${{ needs.prepare.outputs.sha_tag }}
+      moving_tag: dev
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Create/update dev prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev
+          name: dev (main プレビュー)
+          prerelease: true
+          make_latest: "false"
+          body: |
+            main ブランチのプレリリースイメージ (自動更新)。
+
+            - `ghcr.io/mizphses/millicall-core:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64)
+            - `ghcr.io/mizphses/millicall-freeswitch:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64)
+
+            利用: `MILLICALL_VERSION=dev millicallctl update`

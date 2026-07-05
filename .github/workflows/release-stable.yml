@@ -1,0 +1,31 @@
+name: release-stable
+
+on:
+  release:
+    types: [released]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha_tag: ${{ steps.v.outputs.sha_tag }}
+    steps:
+      # release.tag_name は untrusted 扱いし env 経由でのみ参照する
+      # (workflow injection 防止; shell への直接展開をしない)
+      - id: v
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: echo "sha_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/_build-images.yml
+    with:
+      sha_tag: ${{ needs.prepare.outputs.sha_tag }}
+      moving_tag: latest
