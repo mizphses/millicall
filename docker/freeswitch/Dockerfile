@@ -7,7 +7,7 @@
 #   FreeSWITCH モジュールは dlopen 時にコアがシンボルを解決するため、
 #   1.10 系内のマイナー差 (1.10.1 ヘッダ vs 1.10.12 ランタイム) は互換。
 # ============================================================
-FROM ubuntu:20.04 AS builder
+FROM ubuntu:26.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
