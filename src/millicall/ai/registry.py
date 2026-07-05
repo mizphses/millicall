@@ -9,6 +9,16 @@ class UnknownProviderKind(Exception):  # noqa: N818  # 後続タスクが依存�
 
 
 def build_llm(kind: str, config: dict, api_key: str | None):
+    if kind == "openai_compatible":
+        from millicall.ai.llm.openai_compat import OpenAICompatibleLLM
+
+        return OpenAICompatibleLLM(
+            base_url=config.get("base_url", "https://api.openai.com/v1"),
+            api_key=api_key,
+            model=config.get("model", "gpt-4o-mini"),
+            temperature=config.get("temperature", 0.7),
+            max_tokens=config.get("max_tokens", 500),
+        )
     raise UnknownProviderKind(kind)
 
 
