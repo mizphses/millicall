@@ -43,8 +43,20 @@
     <param name="inbound-codec-prefs"        value="PCMU,PCMA"/>
     <param name="outbound-codec-prefs"       value="PCMU,PCMA"/>
     <param name="inbound-codec-negotiation"  value="generous"/>
-    <param name="dtmf-type"                  value="rfc2833"/>
-    <param name="enable-timer"               value="false"/>
+    <!--
+      DTMF: RFC2833 を完全無効化（実機検証 2026-07-05 で確定）。
+      HGW は SDP answer がオファーの部分集合であることを厳格に要求し
+      (RFC 3264)、オファーに無い telephone-event(101) を answer に含めると
+      ACK 直後(約90ms)に BYE で切断される。dtmf-type=none 単独では
+      SDP 広告が消えないため rfc2833-pt=0 が必須。
+    -->
+    <param name="dtmf-type"                  value="none"/>
+    <param name="rfc2833-pt"                 value="0"/>
+    <!--
+      Session-Timers 有効（実機検証 2026-07-05 で確認）。
+      HGW は INVITE で Session-Expires: 300 を要求する。
+    -->
+    <param name="enable-timer"               value="true"/>
     <param name="auth-calls"                 value="false"/>
     <param name="apply-inbound-acl"          value="none"/>
     <param name="inbound-late-negotiation"   value="true"/>
