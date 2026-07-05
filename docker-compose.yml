@@ -20,10 +20,11 @@ services:
     restart: unless-stopped
 
   freeswitch:
-    # safarov/freeswitch にはバージョン別タグが存在しないため digest で固定する。
-    # タグ latest は浮動的で再現性がないため使用禁止。
-    # FreeSWITCH 1.10.12 / 2024-08-02 の immutable digest:
-    image: safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6
+    # ローカル開発では mod_audio_stream 入りイメージを自前ビルドする。
+    # runtime base は safarov/freeswitch 固定 digest (amd64)。
+    build:
+      context: .
+      dockerfile: docker/freeswitch/Dockerfile
     network_mode: host
     depends_on:
       core:
@@ -37,7 +38,5 @@ services:
       - ./data/freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml
       - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
       - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
-      # vanilla-init entrypoint（読み取り専用でマウント）
-      - ./docker/freeswitch-entrypoint.sh:/usr/local/bin/fs-entrypoint.sh:ro
-    entrypoint: ["/bin/sh", "/usr/local/bin/fs-entrypoint.sh"]
+    # entrypoint はイメージに内蔵 (ENTRYPOINT) されているため compose では上書きしない
     restart: unless-stopped
