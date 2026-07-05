@@ -69,4 +69,13 @@ def build_stt(kind: str, config: dict, api_key: str | None):
             model=config.get("model", "whisper-1"),
             language=config.get("language", "ja"),
         )
+    if kind == "google_stt":
+        from millicall.ai.stt.google import GoogleStreamingSTT
+
+        return GoogleStreamingSTT(
+            project=config.get("project", ""),
+            location=config.get("location", "global"),
+            language=config.get("language", "ja-JP"),
+            model=config.get("model", "chirp_2"),
+        )
     raise UnknownProviderKind(kind)
