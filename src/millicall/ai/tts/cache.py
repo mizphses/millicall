@@ -1,4 +1,5 @@
 import hashlib
+import os
 from pathlib import Path
 
 from millicall.ai.audio import pcm8k_to_wav
@@ -18,5 +19,8 @@ class PromptCache:
         if path.exists():
             return path
         pcm = await tts.synthesize(text)
-        path.write_bytes(pcm8k_to_wav(pcm))
+        # 一時ファイルに書いてから os.replace でアトミックにリネーム（書き込み途中のプロセス終了で壊れた WAV が永続キャッシュに残るのを防ぐ）
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(pcm8k_to_wav(pcm))
+        os.replace(tmp, path)
         return path
