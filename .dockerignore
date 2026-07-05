@@ -1,8 +1,15 @@
 .git
 .venv
 data
-docs/superpowers
+docs
 .claude
+.superpowers
+spike
+tests
+.github
+.pytest_cache
+.ruff_cache
 __pycache__
 *.pyc
-tests
+*.local
+.env

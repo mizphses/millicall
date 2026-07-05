@@ -1,8 +1,7 @@
 services:
   core:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
+    image: ghcr.io/mizphses/millicall-core:${MILLICALL_VERSION:-latest}
+    pull_policy: always
     network_mode: host
     env_file:
       - .env
@@ -20,17 +19,13 @@ services:
     restart: unless-stopped
 
   freeswitch:
-    # ローカル開発では mod_audio_stream 入りイメージを自前ビルドする。
-    # runtime base は safarov/freeswitch 固定 digest (amd64)。
-    build:
-      context: .
-      dockerfile: docker/freeswitch/Dockerfile
+    image: ghcr.io/mizphses/millicall-freeswitch:${MILLICALL_VERSION:-latest}
+    pull_policy: always
     network_mode: host
     depends_on:
       core:
         condition: service_healthy
     volumes:
-      # core が startup 時に生成する設定ファイルを bind mount で FreeSWITCH に供給する
       - ./data/freeswitch/directory/default.xml:/etc/freeswitch/directory/default.xml
       - ./data/freeswitch/directory/default:/etc/freeswitch/directory/default
       - ./data/freeswitch/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml
@@ -38,5 +33,4 @@ services:
       - ./data/freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml
       - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
       - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
-    # entrypoint はイメージに内蔵 (ENTRYPOINT) されているため compose では上書きしない
     restart: unless-stopped

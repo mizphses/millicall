@@ -1,0 +1,75 @@
+name: release-dev
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dev
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Pin Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies (dev extra, locked)
+        run: uv sync --extra dev --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Pytest
+        run: uv run pytest -q
+
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha_tag: ${{ steps.v.outputs.sha_tag }}
+    steps:
+      - id: v
+        run: echo "sha_tag=main-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [prepare, test]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/_build-images.yml
+    with:
+      sha_tag: ${{ needs.prepare.outputs.sha_tag }}
+      moving_tag: dev
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Create/update dev prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev
+          name: dev (main プレビュー)
+          prerelease: true
+          make_latest: "false"
+          body: |
+            main ブランチのプレリリースイメージ (自動更新)。
+
+            - `ghcr.io/mizphses/millicall-core:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64)
+            - `ghcr.io/mizphses/millicall-freeswitch:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64)
+
+            利用: `MILLICALL_VERSION=dev millicallctl update`

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MILLICALL_HOME="${MILLICALL_HOME:-$HOME/millicall}"
+
+die() { printf '\033[1;31m[millicallctl] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ -f "${MILLICALL_HOME}/docker-compose.yml" ] \
+  || die "compose が見つかりません: ${MILLICALL_HOME}/docker-compose.yml (MILLICALL_HOME を確認)"
+cd "${MILLICALL_HOME}"
+
+dc() { docker compose "$@"; }
+
+usage() {
+  cat <<'EOF'
+millicallctl <command>
+
+  up               起動 (up -d)
+  down             停止・削除
+  restart          再起動
+  update           イメージ更新 (pull + up -d)
+  pull             イメージ取得のみ
+  logs [service]   ログ追尾 (既定: 全サービス)
+  ps               コンテナ状態
+  backup           data/ と .env を backups/ に tar.gz
+  version          MILLICALL_VERSION と稼働イメージ digest
+  help             このヘルプ
+EOF
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "${cmd}" in
+  up)       dc up -d ;;
+  down)     dc down ;;
+  restart)  dc restart ;;
+  update)   dc pull && dc up -d ;;
+  pull)     dc pull ;;
+  logs)     dc logs -f "$@" ;;
+  ps)       dc ps ;;
+  backup)
+    mkdir -p backups
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    out="backups/millicall-${ts}.tar.gz"
+    tar czf "${out}" data .env
+    printf '[millicallctl] backup 作成: %s/%s\n' "${MILLICALL_HOME}" "${out}"
+    ;;
+  version)
+    if [ -f .env ]; then grep '^MILLICALL_VERSION=' .env || echo "MILLICALL_VERSION=(未設定 -> latest)"; fi
+    dc images
+    ;;
+  help|--help|-h) usage ;;
+  *) usage; die "unknown command: ${cmd}" ;;
+esac
