@@ -61,4 +61,12 @@ def build_tts(kind: str, config: dict, api_key: str | None):
 
 
 def build_stt(kind: str, config: dict, api_key: str | None):
+    if kind == "whisper":
+        from millicall.ai.stt.whisper import WhisperSTT
+
+        return WhisperSTT(
+            api_key=api_key,
+            model=config.get("model", "whisper-1"),
+            language=config.get("language", "ja"),
+        )
     raise UnknownProviderKind(kind)
