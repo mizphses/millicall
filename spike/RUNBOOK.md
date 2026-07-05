@@ -138,7 +138,9 @@ docker compose logs freeswitch | grep "HGW OUTBOUND"
 | **タイムアウト / State=UNREGED / FAIL_WAIT** | siptraceに応答が全く来ない | HGWに届いていない（IP誤り/別セグメント/ファイアウォール/UDP遮断） | `HGW_IP` を確認。`docker compose exec freeswitch ping -c1 <HGW_IP>`。同一セグメントか、ホストのufw/nftablesが5060/UDPを塞いでいないか。 |
 | **gateway DOWN だが発着信は通る** | `Status DOWN` なのに通話成功 | HGWが OPTIONS(ping)に無応答 | external.xml の gateway `ping` を `0` にして再判定（DOWN表示は無視してよい）。 |
 | **着信/発信で片方向のみ音声（自分の声が返らない/相手が聞こえない）** | 通話は確立、echoが返らない | RTP不達。sip-ip/rtp-ipが誤NIC、またはRTPポートがファイアウォールで遮断 | `sofia status profile external` の `sip-ip`/`rtp-ip` が HGWと同一セグメントのLAN IPか確認。誤りなら external.xml の `$${local_ip_v4}` を実LAN IPに固定。ホストで RTP(既定16384-32768/udp) を許可。`-nonat` 起動とext-sip-ip未設定を確認。 |
-| **着信するが即切断/無音のまま切れる** | INVITE後すぐ BYE | コーデック不一致 or Session-Timers | `PCMU,PCMA` になっているか。`enable-timer=false` を確認（HGWのセッションタイマー起因の切断を除外）。 |
+| **応答直後(ACK後~90ms)に HGW から BYE、発信側に「通話できませんでした」** | 200 OK 送信→ACK受信→即 BYE。answer SDP の m= 行に `0 101` | **HGW は RFC 3264 を厳格適用**: オファー(PCMUのみ)に無い telephone-event(101) を answer に含めると拒否 | `rfc2833-pt=0` + `dtmf-type=none` で answer から 101 を除去（**実機確認済みの必須設定**。dtmf-type=none 単独では SDP 広告が消えない点に注意） |
+| **INVITE が全く来ない（着信時に何も受信しない）** | siptrace 無反応、`HGW INBOUND` 0件 | HGW が着信を内線に振っていない（内線の着信/鳴動設定） | HGW 管理画面の電話設定で対象電話番号の着信内線に当該内線を割当・有効化 |
+| **着信するが即切断/無音のまま切れる** | INVITE後すぐ BYE | コーデック不一致 or Session-Timers | `PCMU,PCMA` になっているか。（注: enable-timer は true で実機動作確認済み。HGW は Session-Expires: 300 を要求する） |
 | **fs_cli が繋がらない** | `Error connecting` | コンテナ未起動/起動途中 | `docker compose ps`、`docker compose logs freeswitch` で起動確認。`start_period` 経過を待つ。 |
 
 補助コマンド:
@@ -167,6 +169,16 @@ docker compose restart freeswitch                                          # 設
 - 通話は確立するが、本RUNBOOK 5章の対処を尽くしても **音声片方向が解消しない**。
 
 判定結果（GO/NO-GO と根拠、使用イメージ digest、確認した gateway status とSIPトレースの要点）をこのRUNBOOK末尾または `docs/superpowers/` の記録に残し、指揮者（Fable）レビューへ回すこと。
+
+### 判定結果（2026-07-05 実機検証）
+
+**GO** — 全項目クリア。詳細は `docs/superpowers/reports/2026-07-05-phase0-hgw-gonogo.md`（gitignore領域）。
+
+- REGISTER: 内線番号=認証ユーザID、realm=HGW LAN IP で `REGED/UP`。5分間フラップなし（Wi-Fi 接続でも安定）。
+- 着信: 双方向音声OK。ただし answer SDP から telephone-event を除去する設定（上表）が必須だった。
+- 発信: `sofia/gateway/hgw/<番号>` で双方向音声OK。**この回線は非通知がデフォルト**で、`186`+番号 プレフィクスで番号通知を確認（`origination_caller_id_number` は表示に影響せず、通知制御は HGW/網側）。
+- HGW は INVITE で `Session-Expires: 300` を要求 → `enable-timer=true` で正常応答。
+- HGW の OPTIONS ping には `405 Method Not Allowed` が返るが sofia は疎通成功とみなし `UP` 維持（ping=30 のままで問題なし）。
 
 ## 7. 後片付け（検証終了後は必ず実施）
 

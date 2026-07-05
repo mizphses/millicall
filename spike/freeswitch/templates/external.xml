@@ -79,15 +79,25 @@
     <param name="outbound-codec-prefs"       value="PCMU,PCMA"/>
     <param name="inbound-codec-negotiation"  value="generous"/>
 
-    <!-- DTMF: RFC2833(telephone-event)。HGW標準 -->
-    <param name="dtmf-type"                  value="rfc2833"/>
+    <!--
+      DTMF: RFC2833 を完全無効化（実機検証 2026-07-05 で確定）。
+      HGW は SDP answer がオファーの部分集合であることを厳格に要求し
+      (RFC 3264)、オファーに無い telephone-event(101) を answer に含めると
+      ACK 直後(約90ms)に BYE で切断される（発信側には「通話できません
+      でした」ガイダンス）。dtmf-type=none だけでは SDP 広告が消えないため
+      rfc2833-pt=0 が必須。HGW 側オファーに telephone-event は無いので、
+      PSTN からの DTMF はインバンド音声で届く（検出は spandsp 等の責務）。
+    -->
+    <param name="dtmf-type"                  value="none"/>
+    <param name="rfc2833-pt"                value="0"/>
 
     <!--
-      Session-Timers 無効化。ひかり電話HGWはUPDATEベースの
-      セッションタイマーで通話が途中切断・不安定になる報告があるため
-      スパイクは無効で開始する（必要なら true に戻して再検証）。
+      Session-Timers 有効（実機検証 2026-07-05 で確認）。
+      HGW は INVITE で Session-Expires: 300 / Min-SE: 300 を要求し、
+      200 OK の Require: timer + Session-Expires を正常に受理した。
+      旧 Asterisk (PJSIP) もタイマー有効がデフォルトで実績あり。
     -->
-    <param name="enable-timer"               value="false"/>
+    <param name="enable-timer"               value="true"/>
 
     <!-- 着信INVITEは無認証で受理(旧 type=identify 相当)。使い捨て検証用 -->
     <param name="auth-calls"                 value="false"/>
