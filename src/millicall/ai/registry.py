@@ -39,6 +39,14 @@ def build_llm(kind: str, config: dict, api_key: str | None):
 
 
 def build_tts(kind: str, config: dict, api_key: str | None):
+    # TODO(phase4): google_tts / coefont をプロバイダ抽象に追加
+    if kind == "voicevox":
+        from millicall.ai.tts.voicevox import VoicevoxTTS
+
+        return VoicevoxTTS(
+            engine_url=config.get("engine_url", "http://127.0.0.1:50021"),
+            speaker=config.get("speaker", 1),
+        )
     raise UnknownProviderKind(kind)
 
 
