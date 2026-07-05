@@ -14,6 +14,7 @@ from millicall.contacts.router import router as contacts_router
 from millicall.db import create_db_engine
 from millicall.db_migrations import upgrade_to_head
 from millicall.extensions.router import router as extensions_router
+from millicall.providers.router import router as providers_router
 from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
 from millicall.telephony.esl import ESLClient
@@ -97,6 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes_router)
     app.include_router(cdr_router)
     app.include_router(calls_router)
+    app.include_router(providers_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
