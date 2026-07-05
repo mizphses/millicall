@@ -13,6 +13,17 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    ignore:
+      # core は CI がテストする Python 版 (3.12) とランタイムを一致させる。
+      # メジャー/マイナー更新は CI のバージョン更新とセットで手動実施する。
+      - dependency-name: python
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      # freeswitch builder はランタイム (safarov = bookworm, glibc 2.36) と
+      # ABI を揃える意図的な固定。自動更新しない。
+      - dependency-name: debian
+      - dependency-name: ubuntu
 
   - package-ecosystem: uv
     directory: /
