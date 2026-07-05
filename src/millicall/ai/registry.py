@@ -47,6 +47,16 @@ def build_tts(kind: str, config: dict, api_key: str | None):
             engine_url=config.get("engine_url", "http://127.0.0.1:50021"),
             speaker=config.get("speaker", 1),
         )
+    if kind == "openjtalk":
+        from millicall.ai.tts.openjtalk import OpenJTalkTTS
+
+        return OpenJTalkTTS(
+            dict_dir=config.get("dict_dir", "/var/lib/mecab/dic/open-jtalk/naist-jdic"),
+            voice_path=config.get(
+                "voice_path",
+                "/usr/share/hts-voice/nitech-jp-atr503-m001/nitech_jp_atr503_m001.htsvoice",
+            ),
+        )
     raise UnknownProviderKind(kind)
 
 
