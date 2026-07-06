@@ -31,6 +31,12 @@ export interface KindDef {
   description: string;
   /** api_key を使う kind か（registry が api_key を渡す kind のみ true）。 */
   usesApiKey: boolean;
+  /**
+   * api_key の実体をサービスアカウント JSON として扱う kind か。
+   * true の場合、UI は API キー入力欄の代わりに JSON アップロード欄を出し、
+   * 読み取った JSON 文字列を payload の api_key として送る（vertex_ai / google_stt）。
+   */
+  usesSaJson?: boolean;
   fields: ConfigFieldDef[];
 }
 
@@ -46,10 +52,11 @@ export const TYPE_LABEL: Record<ProviderType, string> = {
  * - openai_compatible: base_url / model / temperature / max_tokens（api_key あり）
  * - anthropic: model / max_tokens（api_key あり）
  * - gemini: model / temperature（api_key あり）
+ * - vertex_ai: project / location / model / temperature（SA JSON 認証）
  * - voicevox: engine_url / speaker（api_key なし）
  * - openjtalk: dict_dir / voice_path（api_key なし・サーバ側パス）
  * - whisper: model / language（api_key あり）
- * - google_stt: project / location / language / model（api_key なし・ADC 認証）
+ * - google_stt: project / location / language / model（SA JSON 認証 or ADC）
  */
 export const KIND_CATALOG: Record<ProviderKind, KindDef> = {
   openai_compatible: {
@@ -84,6 +91,20 @@ export const KIND_CATALOG: Record<ProviderKind, KindDef> = {
     usesApiKey: true,
     fields: [
       { key: "model", label: "モデル", valueType: "string", placeholder: "gemini-2.5-flash" },
+      { key: "temperature", label: "温度", valueType: "number", placeholder: "0.7" },
+    ],
+  },
+  vertex_ai: {
+    kind: "vertex_ai",
+    type: "llm",
+    label: "Vertex AI",
+    description: "Vertex AI 経由の Gemini（サービスアカウント認証）",
+    usesApiKey: false,
+    usesSaJson: true,
+    fields: [
+      { key: "project", label: "プロジェクト", valueType: "string", placeholder: "my-gcp-project" },
+      { key: "location", label: "ロケーション", valueType: "string", placeholder: "us-central1" },
+      { key: "model", label: "モデル", valueType: "string", placeholder: "gemini-2.0-flash" },
       { key: "temperature", label: "温度", valueType: "number", placeholder: "0.7" },
     ],
   },
@@ -134,8 +155,9 @@ export const KIND_CATALOG: Record<ProviderKind, KindDef> = {
     kind: "google_stt",
     type: "stt",
     label: "Google STT",
-    description: "Google Cloud Speech-to-Text（ADC 認証）",
+    description: "Google Cloud Speech-to-Text（サービスアカウント認証）",
     usesApiKey: false,
+    usesSaJson: true,
     fields: [
       { key: "project", label: "プロジェクト", valueType: "string", placeholder: "my-gcp-project" },
       { key: "location", label: "ロケーション", valueType: "string", placeholder: "global" },
@@ -150,6 +172,7 @@ export const KIND_ORDER: ProviderKind[] = [
   "openai_compatible",
   "anthropic",
   "gemini",
+  "vertex_ai",
   "voicevox",
   "openjtalk",
   "whisper",
@@ -331,4 +354,39 @@ export function validateForm(
 /** validateForm の結果にエラーがあるか。 */
 export function hasErrors(errors: ProviderFormErrors): boolean {
   return errors.name !== undefined || Object.keys(errors.config).length > 0;
+}
+
+/** SA JSON 検証の結果。ok なら整形前の元テキストをそのまま api_key に使う。 */
+export type SaJsonValidation =
+  | { ok: true }
+  | { ok: false; error: string };
+
+/**
+ * アップロードされたサービスアカウント JSON を検証する。
+ * - JSON.parse で構文チェック
+ * - `"type": "service_account"` を持つことを確認
+ * 有効なら ok:true、無効なら日本語エラーメッセージを返す。
+ */
+export function validateSaJson(text: string): SaJsonValidation {
+  const trimmed = text.trim();
+  if (trimmed === "") {
+    return { ok: false, error: "JSON が空です" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return { ok: false, error: "有効な JSON ではありません" };
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as Record<string, unknown>).type !== "service_account"
+  ) {
+    return {
+      ok: false,
+      error: "サービスアカウント JSON（type: service_account）を選択してください",
+    };
+  }
+  return { ok: true };
 }
