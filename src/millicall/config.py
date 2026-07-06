@@ -14,6 +14,10 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("data")
     database_url: str = "sqlite+aiosqlite:///data/millicall.db"
+    # SPA（管理 GUI）の配信元。存在するときのみ StaticFiles + SPA fallback を有効化する。
+    # core イメージでは Dockerfile が /app/static にビルド済み dist を配置する。
+    # 開発時は既定パスが存在しないため無効化され、Vite dev server + proxy を使う。
+    static_dir: Path = Path("static")
     fs_config_dir: Path = Path("data/freeswitch")
     # TTS 音声を書き出す共有ディレクトリ（FreeSWITCH コンテナにも同一パスで bind mount）
     tts_cache_dir: Path = Path("data/freeswitch/tts")

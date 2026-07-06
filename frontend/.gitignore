@@ -1,0 +1,6 @@
+node_modules/
+dist/
+styled-system/
+src/api/openapi.json
+*.local
+.vite/

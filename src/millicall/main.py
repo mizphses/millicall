@@ -1,13 +1,17 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from millicall.ai_agents.router import router as ai_agents_router
 from millicall.auth.router import router as auth_router
 from millicall.auth.service import ensure_admin_user
+from millicall.call_messages.router import router as call_messages_router
 from millicall.calls.router import router as calls_router
 from millicall.cdr.router import router as cdr_router
 from millicall.config import Settings, get_settings
@@ -137,6 +141,33 @@ async def lifespan(app: FastAPI):
         await engine.dispose()
 
 
+# SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。
+# これらに該当する未定義 GET は 404 を返し、API のセマンティクスを保つ。
+_SPA_EXCLUDED_PREFIXES = frozenset(
+    {"api", "media", "healthz", "openapi.json", "docs", "redoc"}
+)
+
+
+def _mount_spa(app: FastAPI, static_dir: Path) -> None:
+    """ビルド済み SPA を配信する。/assets はハッシュ付きアセット、それ以外の GET は
+    index.html にフォールバックする（クライアントサイドルーティング）。
+
+    catch-all は既存の API/WS ルート登録より後に呼ぶこと。ルートは登録順に評価されるため、
+    先に登録済みの /api・/media（WS 含む）・/healthz 等が優先され、catch-all に食われない。
+    """
+    index_file = static_dir / "index.html"
+    assets_dir = static_dir / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str) -> FileResponse:
+        first_segment = full_path.split("/", 1)[0]
+        if first_segment in _SPA_EXCLUDED_PREFIXES:
+            raise HTTPException(status_code=404)
+        return FileResponse(index_file)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="millicall v2 core", lifespan=lifespan)
     app.state.settings = settings or get_settings()
@@ -146,6 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(trunks_router)
     app.include_router(routes_router)
     app.include_router(cdr_router)
+    app.include_router(call_messages_router)
     app.include_router(calls_router)
     app.include_router(providers_router)
     app.include_router(ai_agents_router)
@@ -156,6 +188,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     register_media_ws(app)
+
+    # SPA は最後にマウントする（catch-all を既存ルートの後段に置くため）。
+    # static_dir が存在しない開発時は無効（Vite dev server + proxy を使う）。
+    static_dir = app.state.settings.static_dir
+    if (static_dir / "index.html").is_file():
+        _mount_spa(app, static_dir)
+
     return app
 
 
