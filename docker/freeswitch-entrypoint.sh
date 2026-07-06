@@ -4,21 +4,38 @@
 # safarov/freeswitch イメージは /etc/freeswitch が空で起動するため
 # vanilla 設定を先にコピーしてから FreeSWITCH を起動する。
 #
-# -n (no-clobber) を使う理由:
+# no-clobber を find + 個別コピーで自前実装する理由:
 #   core が depends_on: service_healthy で先行起動し、
 #   bind mount 済みファイル（directory/default.xml, sip_profiles/internal.xml,
 #   dialplan/default.xml, autoload_configs/event_socket.conf.xml,
-#   directory/default/）を既に生成している。
-#   vanilla の cp が上書きするとホスト側の core 生成ファイルが壊れるため
-#   -n で既存ファイルを保護する。
+#   directory/default/）を既に生成している。vanilla の cp が上書きすると
+#   ホスト側の core 生成ファイルが壊れるため、既存ファイルは保護する。
+#   なお safarov イメージの cp は BusyBox 実装で、`cp -rn src/. dest/` は
+#   dest（bind mount で必ず存在）を見て**エラーも出さず全体をスキップ**する
+#   （GNU cp と非互換。実機で freeswitch.xml 不在の再起動ループとして発現）。
 # ============================================================
 set -eu
 
 if [ ! -f /etc/freeswitch/freeswitch.xml ]; then
   echo "=== initializing vanilla freeswitch config ==="
   mkdir -p /etc/freeswitch
-  # -rn: recursive かつ no-clobber — bind mount 済みの core 生成ファイルを保護
-  cp -rn /usr/share/freeswitch/conf/vanilla/. /etc/freeswitch/
+  cd /usr/share/freeswitch/conf/vanilla
+  # ディレクトリ骨格を先に作り、ファイルは存在しないものだけコピー
+  find . -type d -exec mkdir -p /etc/freeswitch/{} \;
+  find . -type f | while IFS= read -r f; do
+    [ -e "/etc/freeswitch/$f" ] || cp "$f" "/etc/freeswitch/$f"
+  done
+  cd /
+  # vanilla 由来の余剰 SIP プロファイルを除去する。
+  # internal.xml / external.xml は core 生成物が bind mount 済みで、
+  # gateway はインライン生成（サブディレクトリ include 無し）。
+  # 残すと ipv6 プロファイルの二重 bind と example.com サンプル
+  # gateway (NOREG) がロードされてしまう。
+  rm -f /etc/freeswitch/sip_profiles/internal-ipv6.xml \
+        /etc/freeswitch/sip_profiles/external-ipv6.xml
+  rm -rf /etc/freeswitch/sip_profiles/internal \
+         /etc/freeswitch/sip_profiles/external \
+         /etc/freeswitch/sip_profiles/external-ipv6
 fi
 
 # -nf: フォアグラウンド（フォークしない）
