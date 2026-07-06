@@ -227,6 +227,7 @@ export default defineConfig({
           loginCard: { value: "360px" },
           providerCard: { value: "280px" },
           kindCard: { value: "150px" },
+          textareaMin: { value: "120px" },
         },
       },
       semanticTokens: {

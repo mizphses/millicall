@@ -14,6 +14,8 @@ import { ExtensionsPage } from "../pages/ExtensionsPage";
 import { TrunksPage } from "../pages/TrunksPage";
 import { RoutesPage } from "../pages/RoutesPage";
 import { ProvidersPage } from "../pages/ProvidersPage";
+import { AiAgentsPage } from "../pages/AiAgentsPage";
+import { ContactsPage } from "../pages/ContactsPage";
 import { Placeholder } from "../pages/Placeholder";
 
 const rootRoute = createRootRoute({
@@ -82,13 +84,13 @@ const providersRoute = createRoute({
 const aiAgentsRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/ai-agents",
-  component: () => <Placeholder title="AI エージェント" description="AI 応対エージェントの設定" />,
+  component: AiAgentsPage,
 });
 
 const contactsRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/contacts",
-  component: () => <Placeholder title="電話帳" description="連絡先の管理と発信" />,
+  component: ContactsPage,
 });
 
 const cdrRoute = createRoute({
