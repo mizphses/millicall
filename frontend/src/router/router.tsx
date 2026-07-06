@@ -11,6 +11,8 @@ import type { CurrentUser } from "../auth/auth";
 import { AppShell } from "../shell/AppShell";
 import { LoginPage } from "../pages/LoginPage";
 import { ExtensionsPage } from "../pages/ExtensionsPage";
+import { TrunksPage } from "../pages/TrunksPage";
+import { RoutesPage } from "../pages/RoutesPage";
 import { Placeholder } from "../pages/Placeholder";
 
 const rootRoute = createRootRoute({
@@ -61,13 +63,13 @@ const extensionsRoute = createRoute({
 const trunksRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/trunks",
-  component: () => <Placeholder title="外線トランク" description="SIP トランクの管理" />,
+  component: TrunksPage,
 });
 
 const routesRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/routes",
-  component: () => <Placeholder title="ルーティング" description="着信ルールと転送先（内線 / AI エージェント）" />,
+  component: RoutesPage,
 });
 
 const providersRoute = createRoute({
