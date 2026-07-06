@@ -27,6 +27,13 @@
     <extension name="inbound_ai_{{ route.match_number }}">
       <condition field="destination_number" expression="^{{ route.match_number | re_escape }}$">
         <action application="log" data="INFO ===== INBOUND {{ route.match_number }} -> ai_agent {{ route.target_value }} ====="/>
+        {#-
+          verbose_events は必須: FreeSWITCH はデフォルトで CHANNEL_ANSWER 等の
+          イベントに任意のチャネル変数 (variable_*) を含めない。これが無いと
+          core は variable_millicall_ai_agent を読めず AI 応対が起動しない
+          (実機で無音着信として発現)。
+        -#}
+        <action application="set" data="verbose_events=true"/>
         <action application="set" data="millicall_ai_agent={{ route.target_value }}"/>
         <action application="answer"/>
         <action application="park"/>
