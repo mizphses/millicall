@@ -19,9 +19,10 @@ from millicall.contacts.router import router as contacts_router
 from millicall.db import create_db_engine
 from millicall.db_migrations import upgrade_to_head
 from millicall.extensions.router import router as extensions_router
+from millicall.mcp_server.ephemeral import EphemeralAgentStore
 from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
-from millicall.media.service import AnswerRegistry, SessionRegistry
+from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
 from millicall.providers.router import router as providers_router
 from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
@@ -90,6 +91,11 @@ async def lifespan(app: FastAPI):
     # 発信オーケストレーション（MCP dial/converse）の応答待ちレジストリ。
     # MediaEventRouter が CHANNEL_ANSWER で解決する。
     app.state.answer_registry = AnswerRegistry()
+    # converse（Task 4）用: 通話終了完了待ちレジストリと一時エージェントストア。
+    # MediaEventRouter が CHANNEL_HANGUP_COMPLETE で hangup を解決し、audio_fork_ws が
+    # ?agent=ephemeral のとき ephemeral_store を call_uuid で引いてセッションを組む。
+    app.state.hangup_registry = HangupRegistry()
+    app.state.ephemeral_store = EphemeralAgentStore()
 
     # AI 再生制御用の共有 ESL コマンドクライアント（発着信制御と別接続）。
     # ESL 未到達（接続拒否・ハング）でも起動を止めない — timeout 付きで試行し warning のみ。
@@ -127,6 +133,7 @@ async def lifespan(app: FastAPI):
         lock=app.state.esl_command_lock,
         reconnect=_esl_reconnect,
         answer_registry=app.state.answer_registry,
+        hangup_registry=app.state.hangup_registry,
     )
 
     async def _compose_handler(event: dict) -> None:

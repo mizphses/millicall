@@ -16,8 +16,10 @@ from starlette.websockets import WebSocketDisconnect
 
 from millicall.media.service import (
     AnswerRegistry,
+    HangupRegistry,
     SessionRegistry,
     build_conversation_session,
+    build_conversation_session_from_spec,
 )
 from millicall.media.vad import VadSegmenter
 from millicall.telephony.esl import ESLConnectionClosed
@@ -87,9 +89,11 @@ class MediaEventRouter:
         lock: asyncio.Lock | None = None,
         reconnect=None,
         answer_registry: AnswerRegistry | None = None,
+        hangup_registry: HangupRegistry | None = None,
     ) -> None:
         self._registry = registry
         self._answer_registry = answer_registry
+        self._hangup_registry = hangup_registry
         self._esl = esl
         # 末尾スラッシュを除去して URL 組み立てを决定論的にする
         self._ws_base_url = ws_base_url.rstrip("/") if ws_base_url else None
@@ -114,6 +118,8 @@ class MediaEventRouter:
             await self._maybe_start_audio_stream(event)
         elif name == "CHANNEL_HANGUP_COMPLETE":
             uuid = event.get("Channel-Call-UUID") or event.get("Unique-ID") or ""
+            if self._hangup_registry is not None and uuid:
+                self._hangup_registry.resolve(uuid)
             self._registry.pop(uuid)
             self._started.discard(uuid)
 
@@ -148,24 +154,62 @@ class MediaEventRouter:
                 await self._esl.bgapi(command)
 
 
+async def _build_ephemeral_session(state, call_uuid: str):
+    """EphemeralAgentStore から spec + provider を引いて一時セッションを組む（converse 用）。"""
+    store = state.ephemeral_store
+    entry = store.get_entry(call_uuid)
+    if entry is None:
+        raise RuntimeError(f"ephemeral agent spec not found for uuid={call_uuid}")
+    return await build_conversation_session_from_spec(
+        sessionmaker=state.sessionmaker,
+        esl=state.esl_command,
+        registry=state.session_registry,
+        call_uuid=call_uuid,
+        spec=entry.spec,
+        llm=entry.llm,
+        tts=entry.tts,
+        stt=entry.stt,
+        tts_dir=state.settings.tts_cache_dir,
+        transcript=entry.transcript,
+        lock=getattr(state, "esl_command_lock", None),
+        reconnect=getattr(state, "esl_reconnect", None),
+    )
+
+
+def resolve_ws_agent(agent_param: str) -> tuple[int, bool]:
+    """?agent= の値を (agent_id, is_ephemeral) に解決する。
+
+    数値なら DB エージェント（着信と同じ経路、is_ephemeral=False）。
+    非数値マーカー（例 "ephemeral"）なら converse の一時エージェント経路
+    （is_ephemeral=True、EphemeralAgentStore を call_uuid で引く）。
+    """
+    try:
+        return int(agent_param), False
+    except ValueError:
+        return 0, True
+
+
 def register_media_ws(app: FastAPI) -> None:
     @app.websocket("/media/audio-fork/{call_uuid}")
     async def audio_fork_ws(ws: WebSocket, call_uuid: str) -> None:
         await ws.accept()
-        agent_id = int(ws.query_params.get("agent", "0"))
+        agent_id, is_ephemeral = resolve_ws_agent(ws.query_params.get("agent", "0"))
         state = ws.app.state
         try:
-            session, _ = await build_conversation_session(
-                sessionmaker=state.sessionmaker,
-                secrets=state.secrets,
-                esl=state.esl_command,
-                registry=state.session_registry,
-                call_uuid=call_uuid,
-                agent_id=agent_id,
-                tts_dir=state.settings.tts_cache_dir,
-                lock=getattr(state, "esl_command_lock", None),
-                reconnect=getattr(state, "esl_reconnect", None),
-            )
+            if is_ephemeral:
+                session, _ = await _build_ephemeral_session(state, call_uuid)
+            else:
+                session, _ = await build_conversation_session(
+                    sessionmaker=state.sessionmaker,
+                    secrets=state.secrets,
+                    esl=state.esl_command,
+                    registry=state.session_registry,
+                    call_uuid=call_uuid,
+                    agent_id=agent_id,
+                    tts_dir=state.settings.tts_cache_dir,
+                    lock=getattr(state, "esl_command_lock", None),
+                    reconnect=getattr(state, "esl_reconnect", None),
+                )
         except Exception:
             logger.exception("failed to build AI session for uuid=%s", call_uuid)
             await ws.close()

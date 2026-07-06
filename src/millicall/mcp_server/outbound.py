@@ -18,22 +18,83 @@
 `millicall_ai_agent` を付けない。
 """
 
+import asyncio
+import contextlib
 import json
 import uuid as _uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from millicall.ai import registry as ai_registry
+from millicall.ai.llm.base import ChatMessage
 from millicall.crypto import SecretBox
-from millicall.media.service import AnswerRegistry
+from millicall.mcp_server.ephemeral import EphemeralAgentSpec, EphemeralAgentStore
+from millicall.media.service import AnswerRegistry, HangupRegistry
 from millicall.models import AiAgent, Provider
 
 # 外線とみなす番号プレフィクス（0 = 一般外線、184/186 = 発信者番号通知制御）。
 _EXTERNAL_PREFIXES = ("0", "184", "186")
+
+# converse システムプロンプト（[END_CALL] 版、旧 verbatim を [DONE]→[END_CALL] に置換）。
+_CONVERSE_PROMPT_TEMPLATE = """あなたは電話で会話をしているAIアシスタントです。
+相手は電話の向こうにいる人間です。自然な日本語の電話会話を行ってください。
+
+## 会話の目的
+{purpose}
+
+{name_part}{points_part}
+
+## 重要なルール
+- 1回の発話は1〜2文に留めてください。電話では短く区切って話すのが自然です。
+- 敬語を使ってください。
+- 相手の発話に適切に反応してください（相槌、確認、質問への回答など）。
+- 目的が達成できたら「ありがとうございました。失礼いたします。」のように締めの挨拶をして、\
+[END_CALL] を発話の末尾に付けてください。
+- 目的が達成できない場合（相手が断った等）も、丁寧に終了して [END_CALL] を付けてください。
+- [END_CALL] は相手には読み上げられません。会話終了の合図としてだけ使います。
+- 相手の発話が空だった場合は「もしもし、聞こえていますか？」と確認してください。
+- わからないことを聞かれたら「確認して折り返します」と伝えてください。"""
+
+
+def build_converse_system_prompt(
+    purpose: str, key_points: str = "", your_name: str = ""
+) -> str:
+    """purpose/key_points/your_name を旧 verbatim（[END_CALL] 版）に差し込んで合成する。"""
+    name_part = ""
+    if your_name:
+        name_part = f"あなたの名前は「{your_name}」です。最初に名乗ってください。"
+    points_part = ""
+    if key_points:
+        points_part = f"\n\n## 伝えるべき要点\n{key_points}"
+    return _CONVERSE_PROMPT_TEMPLATE.format(
+        purpose=purpose, name_part=name_part, points_part=points_part
+    )
+
+
+_SUMMARY_SYSTEM = "あなたは電話会話の要約者です。以下のやり取りを1〜2文の日本語で要約してください。"
+
+
+def build_summarizer(llm) -> "Callable[[str], Awaitable[str]]":
+    """LLM で transcript を 1〜2 文に要約するコルーチンを返す（Task 6 が converse に渡す）。
+
+    LLM は stream_chat のみ持つため、ストリームを連結して要約文にする。
+    """
+
+    async def _summarize(transcript_text: str) -> str:
+        messages = [
+            ChatMessage("system", _SUMMARY_SYSTEM),
+            ChatMessage("user", transcript_text),
+        ]
+        parts: list[str] = []
+        async for token in llm.stream_chat(messages):
+            parts.append(token)
+        return "".join(parts).strip()
+
+    return _summarize
 
 
 class _EslLike(Protocol):
@@ -48,6 +109,27 @@ class _EslLike(Protocol):
 class DialResult:
     call_uuid: str
     state: str  # 応答済みは "Up"
+
+
+# 内部 role → 旧 speaker 語彙（§6 互換）。
+_SPEAKER_MAP = {"assistant": "ai", "user": "human", "system": "system"}
+
+
+@dataclass
+class ConverseResult:
+    """converse の結果（§6 JSON へ整形する素）。
+
+    status="completed" のとき turns/summary/transcript が意味を持つ。
+    status="error" のとき error を持ち transcript は []（§6 エラー形）。
+    """
+
+    status: str
+    phone_number: str = ""
+    purpose: str = ""
+    turns: int = 0
+    summary: str = ""
+    transcript: list[dict] = field(default_factory=list)
+    error: str = ""
 
 
 @dataclass
@@ -131,12 +213,22 @@ class OutboundCallService:
         sip_domain: str,
         fetch_enabled_trunks: Callable[[], Awaitable[list]],
         uuid_factory: Callable[[], str] | None = None,
+        hangup_registry: HangupRegistry | None = None,
+        ephemeral_store: EphemeralAgentStore | None = None,
+        run_conversation: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self._esl = esl
         self._answer_registry = answer_registry
         self._sip_domain = sip_domain
         self._fetch_enabled_trunks = fetch_enabled_trunks
         self._uuid_factory = uuid_factory or (lambda: _uuid.uuid4().hex)
+        # converse 用（dial のみ使うときは省略可）。
+        self._hangup_registry = hangup_registry
+        self._ephemeral_store = ephemeral_store
+        # run_conversation は「セッションを WS ハンドラが駆動して transcript を積み、
+        # 終話（[END_CALL]/相手切断）で hangup_registry が解決される」実運用経路の
+        # テスト差し替え点。実運用では None（converse は hangup_registry を待つだけ）。
+        self._run_conversation = run_conversation
 
     async def _resolve_target(
         self, phone_number: str, caller_id: str, trunk: str
@@ -197,3 +289,142 @@ class OutboundCallService:
         if not answered:
             raise DialTimeout(call_uuid)
         return DialResult(call_uuid=call_uuid, state="Up")
+
+    async def converse(
+        self,
+        phone_number: str,
+        purpose: str,
+        key_points: str = "",
+        your_name: str = "",
+        max_turns: int = 10,
+        caller_id: str = "",
+        trunk: str = "",
+        *,
+        providers: ResolvedProviders | None = None,
+        summarizer: Callable[[str], Awaitable[str]] | None = None,
+        answer_timeout: float = 30.0,
+        max_conversation_seconds: float | None = None,
+    ) -> ConverseResult:
+        """発信 → 自律会話 → 終話 → transcript/summary 返却（§6）。
+
+        - 既定 MCP エージェント（providers）の provider 構成を流用し、purpose/key_points/
+          your_name から system_prompt を合成した一時エージェントを EphemeralAgentStore に登録。
+        - `originate {millicall_ai_agent=ephemeral,...}<dest> &park` で発信（着信 AI と同じ
+          audio_stream 自動起動経路に合流）。
+        - CHANNEL_ANSWER を answer_timeout 秒待つ。応答なければ §6 エラー。
+        - 会話は WS ハンドラ（ConversationSession）が駆動し transcript を積む。[END_CALL] または
+          相手切断で HangupRegistry が解決される。max_conversation_seconds 超過時は
+          uuid_kill でフォールバック終話する。
+        - transcript を ai/human/system 語彙へマップし、summarizer で 1〜2 文要約して返す。
+        """
+        if self._ephemeral_store is None or self._hangup_registry is None:
+            raise RuntimeError("converse には ephemeral_store と hangup_registry が必要です")
+
+        # 番号解決（dial と同経路）。
+        try:
+            dest, resolved_cid = await self._resolve_target(phone_number, caller_id, trunk)
+        except ValueError as exc:
+            return ConverseResult(
+                status="error", phone_number=phone_number, purpose=purpose, error=str(exc)
+            )
+
+        call_uuid = self._uuid_factory()
+        transcript_raw: list = []
+
+        # 一時エージェント spec を合成して store に登録（WS ハンドラが call_uuid で引く）。
+        system_prompt = build_converse_system_prompt(purpose, key_points, your_name)
+        greeting = ""
+        if providers is not None:
+            greeting = getattr(providers.agent, "greeting", "") or ""
+            spec = EphemeralAgentSpec(
+                system_prompt=system_prompt,
+                greeting=greeting,
+                llm_provider_id=providers.agent.llm_provider_id,
+                tts_provider_id=providers.agent.tts_provider_id,
+                stt_provider_id=providers.agent.stt_provider_id,
+                max_history=getattr(providers.agent, "max_history", 10),
+                silence_end_ms=getattr(providers.agent, "silence_end_ms", 600),
+            )
+            entry = self._ephemeral_store.register(
+                call_uuid, spec, llm=providers.llm, tts=providers.tts, stt=providers.stt
+            )
+        else:
+            # テスト経路: provider 未解決。spec のみ登録する。
+            spec = EphemeralAgentSpec(
+                system_prompt=system_prompt,
+                greeting=greeting,
+                llm_provider_id=0,
+                tts_provider_id=0,
+                stt_provider_id=0,
+            )
+            entry = self._ephemeral_store.register(call_uuid, spec)
+        # 実運用では WS ハンドラが entry.transcript を積む。テストは run_conversation に渡す。
+        transcript_raw = entry.transcript
+
+        # 発信（ephemeral マーカー付き → audio_stream 自動起動に合流）。
+        variables = [
+            f"origination_uuid={call_uuid}",
+            "millicall_ai_agent=ephemeral",
+            "verbose_events=true",
+        ]
+        if resolved_cid:
+            variables.append(f"origination_caller_id_number={resolved_cid}")
+        var_str = ",".join(variables)
+        self._answer_registry.register(call_uuid)
+        self._hangup_registry.register(call_uuid)
+        try:
+            await self._esl.bgapi(f"originate {{{var_str}}}{dest} &park")
+
+            answered = await self._answer_registry.wait(call_uuid, timeout=answer_timeout)
+            if not answered:
+                return ConverseResult(
+                    status="error",
+                    phone_number=phone_number,
+                    purpose=purpose,
+                    error="30秒以内に応答がありませんでした",
+                )
+
+            # 会話駆動。テストは run_conversation を差し替え、実運用では WS ハンドラが担う。
+            conv_task = None
+            if self._run_conversation is not None:
+                conv_task = asyncio.ensure_future(
+                    self._run_conversation(call_uuid=call_uuid, transcript=transcript_raw)
+                )
+
+            # 上限時間: max_turns から概算（1 ターン ~30s）か明示指定。
+            timeout = (
+                max_conversation_seconds
+                if max_conversation_seconds is not None
+                else float(max_turns) * 30.0
+            )
+            hung_up = await self._hangup_registry.wait(call_uuid, timeout=timeout)
+            if not hung_up:
+                # フォールバック終話（future 取り逃し/END_CALL 無し）。
+                await self._esl.bgapi(f"uuid_kill {call_uuid}")
+            if conv_task is not None and not conv_task.done():
+                conv_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await conv_task
+        finally:
+            self._answer_registry.pop(call_uuid)
+            self._hangup_registry.pop(call_uuid)
+            self._ephemeral_store.pop(call_uuid)
+
+        # transcript を §6 形へ整形（speaker マップ + turn 連番）。
+        transcript = [
+            {"turn": i, "speaker": _SPEAKER_MAP.get(role, role), "text": text}
+            for i, (role, text, _latency) in enumerate(transcript_raw)
+        ]
+        turns = sum(1 for t in transcript if t["speaker"] == "human")
+        summary = ""
+        if summarizer is not None and transcript:
+            joined = "\n".join(f"{t['speaker']}: {t['text']}" for t in transcript)
+            summary = await summarizer(joined)
+        return ConverseResult(
+            status="completed",
+            phone_number=phone_number,
+            purpose=purpose,
+            turns=turns,
+            summary=summary,
+            transcript=transcript,
+        )
