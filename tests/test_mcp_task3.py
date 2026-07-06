@@ -185,6 +185,32 @@ async def test_resolve_target_no_trunk_raises():
         await svc._resolve_target("0901234567", "", "")
 
 
+# --- ESL コマンドインジェクション対策（HIGH 指摘の回帰） --------------------
+@pytest.mark.asyncio
+async def test_resolve_target_rejects_injection_in_phone_number():
+    esl = _FakeEsl()
+    svc, _ = _make_service(esl, [_FakeTrunk("main", caller_id="0312345678")])
+    for bad in ["09012 &originate", "090\n1234", "090,x=1", "090}&park", "09012'"]:
+        with pytest.raises(ValueError, match="phone_number"):
+            await svc._resolve_target(bad, "", "")
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_rejects_injection_in_caller_id():
+    esl = _FakeEsl()
+    svc, _ = _make_service(esl, [_FakeTrunk("main")])
+    with pytest.raises(ValueError, match="caller_id"):
+        await svc._resolve_target("0901234567", "03 &sleep", "main")
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_rejects_unknown_trunk():
+    esl = _FakeEsl()
+    svc, _ = _make_service(esl, [_FakeTrunk("main")])
+    with pytest.raises(ValueError, match="unknown trunk"):
+        await svc._resolve_target("0901234567", "", "evil}&park")
+
+
 @pytest.mark.asyncio
 async def test_dial_issues_originate_park_and_returns_call_uuid_on_answer():
     esl = _FakeEsl()

@@ -21,6 +21,7 @@
 import asyncio
 import contextlib
 import json
+import re
 import uuid as _uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -38,6 +39,10 @@ from millicall.models import AiAgent, Provider
 
 # 外線とみなす番号プレフィクス（0 = 一般外線、184/186 = 発信者番号通知制御）。
 _EXTERNAL_PREFIXES = ("0", "184", "186")
+
+# 電話番号 / 発信者番号の許可文字: 数字・* # +（186/184 前置や内線番号を含む）。
+# originate コマンドへの補間前に検証し、空白・改行・区切り文字による注入を防ぐ。
+_VALID_NUMBER_RE = re.compile(r"^[0-9*#+]{1,32}$")
 
 # converse システムプロンプト（[END_CALL] 版、旧 verbatim を [DONE]→[END_CALL] に置換）。
 _CONVERSE_PROMPT_TEMPLATE = """あなたは電話で会話をしているAIアシスタントです。
@@ -236,14 +241,23 @@ class OutboundCallService:
         """(dest, caller_id) を解決する（旧 _resolve_endpoint 相当）。
 
         トランクが必要な外線で enabled トランクが無い場合は ValueError。
+
+        セキュリティ: phone_number / caller_id / trunk は originate コマンド文字列に
+        補間されるため、ここで一括して allowlist 検証する（ESL コマンドインジェクション
+        対策）。空白・改行・`,{}'"` 等の区切り文字を含む値は fail-closed で拒否する。
         """
+        if not phone_number or not _VALID_NUMBER_RE.match(phone_number):
+            raise ValueError(f"invalid phone_number: {phone_number!r}")
+        if caller_id and not _VALID_NUMBER_RE.match(caller_id):
+            raise ValueError(f"invalid caller_id: {caller_id!r}")
+
         if trunk:
-            resolved_cid = caller_id
-            if not resolved_cid:
-                trunks = await self._fetch_enabled_trunks()
-                match = next((t for t in trunks if t.name == trunk), None)
-                if match is not None and getattr(match, "caller_id", ""):
-                    resolved_cid = match.caller_id
+            # 指定トランクは enabled 一覧に実在するものだけ許可（未知値の補間を防ぐ）。
+            trunks = await self._fetch_enabled_trunks()
+            match = next((t for t in trunks if t.name == trunk), None)
+            if match is None:
+                raise ValueError(f"unknown trunk: {trunk!r}")
+            resolved_cid = caller_id or getattr(match, "caller_id", "") or ""
             return f"sofia/gateway/{trunk}/{phone_number}", resolved_cid
 
         if phone_number.startswith(_EXTERNAL_PREFIXES):
