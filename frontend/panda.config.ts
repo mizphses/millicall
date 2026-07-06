@@ -51,8 +51,10 @@ const buttonRecipe = defineRecipe({
       },
     },
     size: {
-      sm: { h: "8", px: "3", fontSize: "sm" },
-      md: { h: "9", px: "4", fontSize: "md" },
+      // 注意: Panda の h ショートハンドは sizes トークンを参照する（spacing ではない）
+      // ため数値指定は未解決になり高さが効かない。ボタン高さは px 直書きが正。
+      sm: { height: "32px", paddingInline: "12px", fontSize: "sm" },
+      md: { height: "36px", paddingInline: "16px", fontSize: "md" },
     },
   },
   defaultVariants: { variant: "primary", size: "md" },

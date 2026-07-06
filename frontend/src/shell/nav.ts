@@ -17,7 +17,7 @@ export interface NavItem {
   icon: React.ReactNode;
 }
 
-const ICON_SIZE = 16;
+const ICON_SIZE = 20;
 
 export const NAV_ITEMS: NavItem[] = [
   { path: "/",           label: "ダッシュボード",   icon: React.createElement(LayoutDashboard, { size: ICON_SIZE }) },
