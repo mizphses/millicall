@@ -28,10 +28,7 @@ _ALLOWED_ROLES = frozenset({"admin", "user"})
 _DUMMY_HASH = hash_password("millicall-mcp-dummy-timing-guard")
 
 
-def _login_page(
-    *, client_id: str, redirect_uri: str, code_challenge: str, state: str, scopes: str,
-    resource: str, explicit: str,
-) -> str:
+def _login_page(*, ticket: str) -> str:
     e = html.escape
     return f"""<!DOCTYPE html>
 <html lang="ja">
@@ -65,13 +62,7 @@ def _login_page(
   <div class="card">
     <div class="mcp-badge">MCP接続</div>
     <form method="post" action="/mcp-login/callback">
-      <input type="hidden" name="client_id" value="{e(client_id)}">
-      <input type="hidden" name="redirect_uri" value="{e(redirect_uri)}">
-      <input type="hidden" name="code_challenge" value="{e(code_challenge)}">
-      <input type="hidden" name="state" value="{e(state)}">
-      <input type="hidden" name="scopes" value="{e(scopes)}">
-      <input type="hidden" name="resource" value="{e(resource)}">
-      <input type="hidden" name="explicit" value="{e(explicit)}">
+      <input type="hidden" name="ticket" value="{e(ticket)}">
       <div class="form-group">
         <label for="username">ユーザー名</label>
         <input type="text" id="username" name="username" required autofocus>
@@ -89,43 +80,43 @@ def _login_page(
 
 
 @router.get("/mcp-login", response_class=HTMLResponse, include_in_schema=False)
-async def mcp_login_page(
-    client_id: str = Query(...),
-    redirect_uri: str = Query(...),
-    code_challenge: str = Query(...),
-    state: str = Query(""),
-    scopes: str = Query(""),
-    resource: str = Query(""),
-    explicit: str = Query("1"),
-) -> HTMLResponse:
-    """MCP OAuth 認可のためのログインフォームを表示する。"""
-    return HTMLResponse(
-        _login_page(
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            code_challenge=code_challenge,
-            state=state,
-            scopes=scopes,
-            resource=resource,
-            explicit=explicit,
-        )
-    )
+async def mcp_login_page(ticket: str = Query(...)) -> HTMLResponse:
+    """MCP OAuth 認可のためのログインフォームを表示する。
+
+    認可パラメータは authorize() が署名した `ticket` にのみ封入され、
+    フォームはそれをそのまま持ち回す（client 制御可能なフィールドは受け取らない）。
+    """
+    return HTMLResponse(_login_page(ticket=ticket))
 
 
 @router.post("/mcp-login/callback", include_in_schema=False)
 async def mcp_login_callback(
     request: Request,
-    client_id: str = Form(...),
-    redirect_uri: str = Form(...),
-    code_challenge: str = Form(...),
-    state: str = Form(""),
-    scopes: str = Form(""),
-    resource: str = Form(""),
-    explicit: str = Form("1"),
+    ticket: str = Form(...),
     username: str = Form(...),
     password: str = Form(...),
 ):
-    """ユーザーを認証し、認可コード付きで MCP クライアントへリダイレクトする。"""
+    """ユーザーを認証し、認可コード付きで MCP クライアントへリダイレクトする。
+
+    認可パラメータは署名済み `ticket` からのみ取得する。改ざん・期限切れは 400。
+    """
+    provider = request.app.state.mcp_oauth_provider
+    try:
+        claims = provider.verify_login_ticket(ticket)
+    except Exception:  # noqa: BLE001 — InvalidToken 含む全ての検証失敗
+        return HTMLResponse(
+            "<html><body>不正または期限切れのログイン要求です。</body></html>",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    client_id = claims["client_id"]
+    redirect_uri = claims["redirect_uri"]
+    code_challenge = claims["code_challenge"]
+    state = claims.get("state", "")
+    scope_list = claims.get("scopes", [])
+    resource = claims.get("resource", "")
+    explicit = bool(claims.get("explicit", True))
+
     sessionmaker = request.app.state.sessionmaker
     async with sessionmaker() as session:
         user = await session.scalar(select(User).where(User.username == username))
@@ -148,17 +139,22 @@ async def mcp_login_callback(
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
-    provider = request.app.state.mcp_oauth_provider
-    scope_list = [s for s in scopes.split(",") if s]
-    code = provider.create_auth_code(
-        client_id=client_id,
-        username=username,
-        code_challenge=code_challenge,
-        redirect_uri=redirect_uri,
-        scopes=scope_list,
-        resource=resource or None,
-        redirect_uri_provided_explicitly=(explicit != "0"),
-    )
+    try:
+        code = provider.create_auth_code(
+            client_id=client_id,
+            username=username,
+            code_challenge=code_challenge,
+            redirect_uri=redirect_uri,
+            scopes=scope_list,
+            resource=resource or None,
+            redirect_uri_provided_explicitly=explicit,
+        )
+    except ValueError:
+        # client 未登録 / redirect_uri 未登録 / scope 不許可 は fail-closed。
+        return HTMLResponse(
+            "<html><body>認可要求が無効です。</body></html>",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
     params = {"code": code}
     if state:

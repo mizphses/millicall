@@ -82,6 +82,45 @@ def _pkce():
     return verifier, challenge
 
 
+def _ticket(
+    app,
+    *,
+    client_id="cli",
+    redirect_uri="https://claude.ai/cb",
+    code_challenge="ch",
+    state="",
+    scopes=None,
+    resource="",
+    explicit=True,
+):
+    """authorize() が発行する署名済みログインチケットを模して生成する。"""
+    return app.state.mcp_oauth_provider.sign_login_ticket(
+        {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "code_challenge": code_challenge,
+            "state": state,
+            "scopes": scopes if scopes is not None else [],
+            "resource": resource,
+            "explicit": explicit,
+        }
+    )
+
+
+async def _register_client(mcp_client, redirect_uris=None):
+    reg = await mcp_client.post(
+        "/register",
+        json={
+            "redirect_uris": redirect_uris or ["https://claude.ai/cb"],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+    )
+    assert reg.status_code == 201
+    return reg.json()["client_id"]
+
+
 # --------------------------------------------------------------------------
 # メタデータ
 # --------------------------------------------------------------------------
@@ -107,20 +146,15 @@ async def test_protected_resource_metadata(mcp_client):
 # --------------------------------------------------------------------------
 # ログインページ
 # --------------------------------------------------------------------------
-async def test_mcp_login_page_renders_form(mcp_client):
-    r = await mcp_client.get(
-        "/mcp-login",
-        params={
-            "client_id": "abc",
-            "redirect_uri": "https://claude.ai/cb",
-            "code_challenge": "xyz",
-            "state": "st1",
-        },
-    )
+async def test_mcp_login_page_renders_form(mcp_app, mcp_client):
+    ticket = _ticket(mcp_app, client_id="abc")
+    r = await mcp_client.get("/mcp-login", params={"ticket": ticket})
     assert r.status_code == 200
     assert 'action="/mcp-login/callback"' in r.text
-    assert 'value="abc"' in r.text
-    assert "code_challenge" in r.text
+    # 認可パラメータはチケットにのみ封入され、生の client_id 等はフォームに出さない。
+    assert 'name="ticket"' in r.text
+    assert 'name="client_id"' not in r.text
+    assert 'name="explicit"' not in r.text
 
 
 # --------------------------------------------------------------------------
@@ -130,13 +164,7 @@ async def test_login_callback_rejects_bad_password(mcp_app, mcp_client):
     await _make_user(mcp_app, username="u1", password="RightPass1", role="admin")
     r = await mcp_client.post(
         "/mcp-login/callback",
-        data={
-            "client_id": "c",
-            "redirect_uri": "https://claude.ai/cb",
-            "code_challenge": "ch",
-            "username": "u1",
-            "password": "WrongPass",
-        },
+        data={"ticket": _ticket(mcp_app), "username": "u1", "password": "WrongPass"},
     )
     assert r.status_code == 401
 
@@ -145,13 +173,7 @@ async def test_login_callback_rejects_disallowed_role(mcp_app, mcp_client):
     await _make_user(mcp_app, username="guest1", password="GuestPass1", role="guest")
     r = await mcp_client.post(
         "/mcp-login/callback",
-        data={
-            "client_id": "c",
-            "redirect_uri": "https://claude.ai/cb",
-            "code_challenge": "ch",
-            "username": "guest1",
-            "password": "GuestPass1",
-        },
+        data={"ticket": _ticket(mcp_app), "username": "guest1", "password": "GuestPass1"},
     )
     assert r.status_code == 403
 
@@ -172,31 +194,14 @@ async def test_full_oauth_flow(mcp_app, mcp_client):
     await _make_user(mcp_app, username="flow", password="FlowPass1", role="admin")
 
     # DCR
-    reg = await mcp_client.post(
-        "/register",
-        json={
-            "redirect_uris": ["https://claude.ai/cb"],
-            "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-        },
-    )
-    assert reg.status_code == 201
-    client_id = reg.json()["client_id"]
-
+    client_id = await _register_client(mcp_client)
     verifier, challenge = _pkce()
 
-    # ログイン → 認可コード（302 redirect）
+    # ログイン → 認可コード（302 redirect）。認可パラメータは署名チケット経由。
+    ticket = _ticket(mcp_app, client_id=client_id, code_challenge=challenge, state="s1")
     cb = await mcp_client.post(
         "/mcp-login/callback",
-        data={
-            "client_id": client_id,
-            "redirect_uri": "https://claude.ai/cb",
-            "code_challenge": challenge,
-            "state": "s1",
-            "username": "flow",
-            "password": "FlowPass1",
-        },
+        data={"ticket": ticket, "username": "flow", "password": "FlowPass1"},
     )
     assert cb.status_code == 302
     location = cb.headers["location"]
@@ -238,23 +243,12 @@ async def test_full_oauth_flow(mcp_app, mcp_client):
 
 async def test_wrong_pkce_verifier_rejected(mcp_app, mcp_client):
     await _make_user(mcp_app, username="pk", password="PkPass1", role="admin")
-    reg = await mcp_client.post(
-        "/register",
-        json={
-            "redirect_uris": ["https://claude.ai/cb"],
-            "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-        },
-    )
-    client_id = reg.json()["client_id"]
+    client_id = await _register_client(mcp_client)
     _, challenge = _pkce()
     cb = await mcp_client.post(
         "/mcp-login/callback",
         data={
-            "client_id": client_id,
-            "redirect_uri": "https://claude.ai/cb",
-            "code_challenge": challenge,
+            "ticket": _ticket(mcp_app, client_id=client_id, code_challenge=challenge),
             "username": "pk",
             "password": "PkPass1",
         },
@@ -302,23 +296,12 @@ async def test_allowed_hosts_wired(mcp_app):
 async def test_disallowed_host_rejected_on_mcp(mcp_app, mcp_client):
     # 有効トークンを得てから、許可外 Host で /mcp を叩くと拒否される（DNS リバインド対策）。
     await _make_user(mcp_app, username="host", password="HostPass1", role="admin")
-    reg = await mcp_client.post(
-        "/register",
-        json={
-            "redirect_uris": ["https://claude.ai/cb"],
-            "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-        },
-    )
-    client_id = reg.json()["client_id"]
+    client_id = await _register_client(mcp_client)
     verifier, challenge = _pkce()
     cb = await mcp_client.post(
         "/mcp-login/callback",
         data={
-            "client_id": client_id,
-            "redirect_uri": "https://claude.ai/cb",
-            "code_challenge": challenge,
+            "ticket": _ticket(mcp_app, client_id=client_id, code_challenge=challenge),
             "username": "host",
             "password": "HostPass1",
         },
@@ -346,6 +329,50 @@ async def test_disallowed_host_rejected_on_mcp(mcp_app, mcp_client):
 # --------------------------------------------------------------------------
 # mcp_enabled=False
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# セキュリティ: 署名チケット / redirect_uri バインディング（HIGH 指摘の回帰）
+# --------------------------------------------------------------------------
+async def test_login_callback_rejects_tampered_ticket(mcp_app, mcp_client):
+    await _make_user(mcp_app, username="t1", password="TamperPass1", role="admin")
+    ticket = _ticket(mcp_app, client_id="cli")
+    r = await mcp_client.post(
+        "/mcp-login/callback",
+        data={"ticket": ticket + "x", "username": "t1", "password": "TamperPass1"},
+    )
+    assert r.status_code == 400
+
+
+async def test_login_callback_rejects_unregistered_redirect_uri(mcp_app, mcp_client):
+    # 正規ログインに成功しても、redirect_uri が client 登録値に無ければコードを出さない
+    # （open redirect / 認可コード漏洩対策）。
+    await _make_user(mcp_app, username="rr", password="RedirPass1", role="admin")
+    client_id = await _register_client(mcp_client, redirect_uris=["https://claude.ai/cb"])
+    _, challenge = _pkce()
+    ticket = _ticket(
+        mcp_app,
+        client_id=client_id,
+        redirect_uri="https://evil.example/steal",
+        code_challenge=challenge,
+    )
+    r = await mcp_client.post(
+        "/mcp-login/callback",
+        data={"ticket": ticket, "username": "rr", "password": "RedirPass1"},
+    )
+    assert r.status_code == 400
+
+
+async def test_login_callback_rejects_unknown_client(mcp_app, mcp_client):
+    await _make_user(mcp_app, username="uc", password="UnknownPass1", role="admin")
+    _, challenge = _pkce()
+    # DCR していない client_id をチケットに封じても、コード発行時に fail-closed。
+    ticket = _ticket(mcp_app, client_id="never-registered", code_challenge=challenge)
+    r = await mcp_client.post(
+        "/mcp-login/callback",
+        data={"ticket": ticket, "username": "uc", "password": "UnknownPass1"},
+    )
+    assert r.status_code == 400
+
+
 async def test_mcp_disabled(tmp_path):
     settings = _mcp_settings(tmp_path)
     settings.mcp_enabled = False

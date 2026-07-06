@@ -52,6 +52,14 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(upgrade_to_head, settings.database_url)
     app.state.secrets = load_or_create_secrets(settings.data_dir)
 
+    # MCP OAuth プロバイダ（mount_mcp で create_app 時に生成済み）へ、認可パラメータ
+    # 署名用の SecretBox を注入する。secrets はここで初めて確定するため lifespan で行う。
+    _mcp_provider = getattr(app.state, "mcp_oauth_provider", None)
+    if _mcp_provider is not None:
+        from millicall.crypto import SecretBox
+
+        _mcp_provider.set_signer(SecretBox(app.state.secrets.master_key))
+
     engine = create_db_engine(settings.database_url)
     app.state.engine = engine
     app.state.sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

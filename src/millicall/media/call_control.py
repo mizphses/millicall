@@ -15,6 +15,12 @@ from millicall.telephony.esl import ESLConnectionClosed
 
 # DTMF 有効文字: 0-9, *, #, A, B, C, D, w（w はポーズ）
 _VALID_DTMF_RE = re.compile(r"^[0-9*#ABCDw]+$")
+# 転送先: 内線番号 / 外線番号 / エクステン名相当。空白・改行・ESL 区切りを含まない。
+_VALID_DEST_RE = re.compile(r"^[0-9A-Za-z_.+*#-]{1,64}$")
+# チャネル UUID: 全 bgapi コマンドに補間されるため登録時に検証し、コマンド
+# インジェクションの起点を塞ぐ。空白・改行・ESL 区切りを含まない英数/ハイフン/
+# アンダースコアのみ許可（実 FS UUID は hex+ハイフンでこれに収まる）。
+_VALID_UUID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 
 
 class CallControl(Protocol):
@@ -53,6 +59,8 @@ class EslCallControl:
         lock: asyncio.Lock | None = None,
         reconnect: Callable[[], Awaitable[_EslLike]] | None = None,
     ) -> None:
+        if not uuid or not _VALID_UUID_RE.match(uuid):
+            raise ValueError(f"invalid channel uuid: {uuid!r}")
         self._esl = esl
         self._uuid = uuid
         self._playback_done = asyncio.Event()
@@ -103,5 +111,9 @@ class EslCallControl:
         """通話を指定先に転送する（XML default コンテキスト）。
 
         ESL コマンド: ``uuid_transfer <uuid> <dest> XML default``
+
+        dest はコマンドインジェクション防止のため厳格な allowlist で検証する。
         """
+        if not dest or not _VALID_DEST_RE.match(dest):
+            raise ValueError(f"invalid transfer destination: {dest!r}")
         await self._bgapi(f"uuid_transfer {self._uuid} {dest} XML default")

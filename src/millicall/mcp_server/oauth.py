@@ -12,6 +12,7 @@
 秘密衛生: client_secret / access_token / refresh_token は本モジュールでログ出力しない。
 """
 
+import json
 import logging
 import secrets
 import time
@@ -25,13 +26,16 @@ from mcp.server.auth.provider import (
     RefreshToken,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, AnyUrl
+
+from millicall.crypto import SecretBox
 
 logger = logging.getLogger("millicall")
 
 _AUTH_CODE_TTL = 600  # 10 分
 _ACCESS_TTL = 86400  # 24 時間
 _REFRESH_TTL = 86400 * 30  # 30 日
+_LOGIN_TICKET_TTL = 600  # ログイン往復チケットの有効期限（10 分）
 
 
 def _mask(token: str) -> str:
@@ -51,6 +55,28 @@ class MillicallOAuthProvider(
         self._auth_codes: dict[str, AuthorizationCode] = {}
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, RefreshToken] = {}
+        # ログイン往復（authorize→/mcp-login→callback）の間、認可パラメータを
+        # 改ざん不能に保持するための署名器。secrets ロード後に lifespan で注入する。
+        self._signer: SecretBox | None = None
+
+    def set_signer(self, signer: SecretBox) -> None:
+        """認可パラメータ署名用の SecretBox を注入する（lifespan で secrets ロード後）。"""
+        self._signer = signer
+
+    def sign_login_ticket(self, payload: dict) -> str:
+        """authorize パラメータを署名付き opaque トークンにする。"""
+        if self._signer is None:
+            raise RuntimeError("OAuth signer not configured")
+        return self._signer.encrypt(json.dumps(payload, separators=(",", ":")))
+
+    def verify_login_ticket(self, token: str) -> dict:
+        """/mcp-login フォームから戻ってきたチケットを検証・展開する。
+
+        改ざん・期限切れ（TTL 600s）は InvalidToken を送出（呼び出し側が 400 に変換）。
+        """
+        if self._signer is None:
+            raise RuntimeError("OAuth signer not configured")
+        return json.loads(self._signer.decrypt(token, ttl=_LOGIN_TICKET_TTL))
 
     # -- DCR (Dynamic Client Registration) --
 
@@ -67,16 +93,23 @@ class MillicallOAuthProvider(
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
-        login_params = {
-            "client_id": client.client_id,
-            "redirect_uri": str(params.redirect_uri),
-            "code_challenge": params.code_challenge,
-            "state": params.state or "",
-            "scopes": ",".join(params.scopes) if params.scopes else "",
-            "resource": params.resource or "",
-            "explicit": "1" if params.redirect_uri_provided_explicitly else "0",
-        }
-        return f"{self._issuer}/mcp-login?{urllib.parse.urlencode(login_params)}"
+        # 認可パラメータ一式を署名付きチケットに封入し、クエリには ticket だけを載せる。
+        # これにより /mcp-login フォーム経由で client_id/redirect_uri/explicit 等を
+        # クライアントが改ざんする経路を塞ぐ（open redirect / redirect_uri バインディング
+        # バイパス対策）。redirect_uri は SDK 側 /authorize で client 登録値と照合済みだが、
+        # チケットに封じた値を token 交換まで信頼の起点にする。
+        ticket = self.sign_login_ticket(
+            {
+                "client_id": client.client_id,
+                "redirect_uri": str(params.redirect_uri),
+                "code_challenge": params.code_challenge,
+                "state": params.state or "",
+                "scopes": params.scopes or [],
+                "resource": params.resource or "",
+                "explicit": bool(params.redirect_uri_provided_explicitly),
+            }
+        )
+        return f"{self._issuer}/mcp-login?{urllib.parse.urlencode({'ticket': ticket})}"
 
     # -- 認可コード --
 
@@ -91,7 +124,25 @@ class MillicallOAuthProvider(
         resource: str | None = None,
         redirect_uri_provided_explicitly: bool = True,
     ) -> str:
-        """ログイン成功後に呼び出し、認可コードを発行する（login.py から使用）。"""
+        """ログイン成功後に呼び出し、認可コードを発行する（login.py から使用）。
+
+        fail-closed: client が未登録、redirect_uri が登録値に含まれない、または
+        scope が許可外の場合は ValueError を送出する（呼び出し側が 400 に変換）。
+        """
+        client = self._clients.get(client_id)
+        if client is None:
+            raise ValueError("unknown client")
+        # SDK の検証器で redirect_uri（登録済みか）と scope（許可済みか）を照合。
+        # 登録値は AnyUrl 型なので比較も AnyUrl で行う（AnyHttpUrl とは非等価）。
+        # SDK 例外（InvalidRedirectUriError/InvalidScopeError）は ValueError へ正規化して
+        # 呼び出し側（login.py）が一律 400 に変換できるようにする（fail-closed）。
+        try:
+            client.validate_redirect_uri(AnyUrl(redirect_uri))
+            client.validate_scope(" ".join(scopes) if scopes else None)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — SDK の検証例外を ValueError に正規化
+            raise ValueError(str(exc)) from exc
         code = secrets.token_urlsafe(32)
         self._auth_codes[code] = AuthorizationCode(
             code=code,
