@@ -17,6 +17,7 @@ dependencies = [
     "httpx>=0.27",
     "webrtcvad-wheels>=2.0.14",
     "google-auth>=2",
+    "mcp>=1.28.1",
 ]
 
 [project.optional-dependencies]

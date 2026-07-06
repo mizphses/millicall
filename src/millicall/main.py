@@ -19,8 +19,10 @@ from millicall.contacts.router import router as contacts_router
 from millicall.db import create_db_engine
 from millicall.db_migrations import upgrade_to_head
 from millicall.extensions.router import router as extensions_router
+from millicall.mcp_server.ephemeral import EphemeralAgentStore
+from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
-from millicall.media.service import SessionRegistry
+from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
 from millicall.providers.router import router as providers_router
 from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
@@ -51,6 +53,14 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(upgrade_to_head, settings.database_url)
     app.state.secrets = load_or_create_secrets(settings.data_dir)
 
+    # MCP OAuth プロバイダ（mount_mcp で create_app 時に生成済み）へ、認可パラメータ
+    # 署名用の SecretBox を注入する。secrets はここで初めて確定するため lifespan で行う。
+    _mcp_provider = getattr(app.state, "mcp_oauth_provider", None)
+    if _mcp_provider is not None:
+        from millicall.crypto import SecretBox
+
+        _mcp_provider.set_signer(SecretBox(app.state.secrets.master_key))
+
     engine = create_db_engine(settings.database_url)
     app.state.engine = engine
     app.state.sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -78,6 +88,14 @@ async def lifespan(app: FastAPI):
 
     settings.tts_cache_dir.mkdir(parents=True, exist_ok=True)
     app.state.session_registry = SessionRegistry()
+    # 発信オーケストレーション（MCP dial/converse）の応答待ちレジストリ。
+    # MediaEventRouter が CHANNEL_ANSWER で解決する。
+    app.state.answer_registry = AnswerRegistry()
+    # converse（Task 4）用: 通話終了完了待ちレジストリと一時エージェントストア。
+    # MediaEventRouter が CHANNEL_HANGUP_COMPLETE で hangup を解決し、audio_fork_ws が
+    # ?agent=ephemeral のとき ephemeral_store を call_uuid で引いてセッションを組む。
+    app.state.hangup_registry = HangupRegistry()
+    app.state.ephemeral_store = EphemeralAgentStore()
 
     # AI 再生制御用の共有 ESL コマンドクライアント（発着信制御と別接続）。
     # ESL 未到達（接続拒否・ハング）でも起動を止めない — timeout 付きで試行し warning のみ。
@@ -114,6 +132,8 @@ async def lifespan(app: FastAPI):
         ws_base_url=settings.media_ws_base_url,
         lock=app.state.esl_command_lock,
         reconnect=_esl_reconnect,
+        answer_registry=app.state.answer_registry,
+        hangup_registry=app.state.hangup_registry,
     )
 
     async def _compose_handler(event: dict) -> None:
@@ -133,18 +153,20 @@ async def lifespan(app: FastAPI):
     await event_listener.start()
     app.state.event_listener = event_listener
 
-    try:
-        yield
-    finally:
-        await event_listener.stop()
-        await esl_command.close()
-        await engine.dispose()
+    # MCP StreamableHTTP session manager を起動/停止する（mount_mcp 済みのときのみ実体を持つ）。
+    async with mcp_session_context(app):
+        try:
+            yield
+        finally:
+            await event_listener.stop()
+            await esl_command.close()
+            await engine.dispose()
 
 
 # SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。
 # これらに該当する未定義 GET は 404 を返し、API のセマンティクスを保つ。
 _SPA_EXCLUDED_PREFIXES = frozenset(
-    {"api", "media", "healthz", "openapi.json", "docs", "redoc"}
+    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known"}
 )
 
 
@@ -188,6 +210,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     register_media_ws(app)
+
+    # MCP（/mcp + OAuth 2.1 + /mcp-login）を SPA catch-all より前に取り込む。
+    mount_mcp(app)
 
     # SPA は最後にマウントする（catch-all を既存ルートの後段に置くため）。
     # static_dir が存在しない開発時は無効（Vite dev server + proxy を使う）。

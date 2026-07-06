@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +43,26 @@ class Settings(BaseSettings):
     session_max_age: int = 60 * 60 * 24 * 7
     cookie_secure: bool = True
     cookie_samesite: str = "lax"
+
+    # --- MCP サーバー (Phase 4a) ---
+    # /mcp を有効化するか（False で完全に非マウント）。
+    mcp_enabled: bool = True
+    # OAuth 2.1 の issuer / resource server URL。RFC8414 メタデータの base。
+    # SDK 制約: HTTPS 必須（localhost / 127.0.0.1 のみ http 許可）。本番は https://<host> を env で設定。
+    mcp_issuer_url: str = "http://localhost"
+    # mod DNS リバインド対策の許可 Host（TransportSecuritySettings.allowed_hosts）。
+    # 本番ホスト名を必ず含めること（漏れると /mcp が全拒否される）。
+    mcp_allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
+    # converse 既定エージェント（Phase 4a Task 4 で使用）。None なら enabled な ai_agents 最小 id。
+    mcp_default_agent_id: int | None = None
+
+    @field_validator("mcp_allowed_hosts", mode="before")
+    @classmethod
+    def _split_allowed_hosts(cls, v: object) -> object:
+        # env からはカンマ区切り文字列で渡せるようにする（既存 outbound_* と同系の運用）。
+        if isinstance(v, str):
+            return [h.strip() for h in v.split(",") if h.strip()]
+        return v
 
 
 @lru_cache
