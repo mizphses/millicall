@@ -13,3 +13,11 @@ __pycache__
 *.pyc
 *.local
 .env
+
+# frontend: ソースは COPY に必要なので残す。生成物のみ除外してコンテキスト肥大を防ぐ
+# (npm ci / panda codegen / vite build がイメージ内で再生成する)。
+frontend/node_modules
+frontend/dist
+frontend/styled-system
+frontend/*.tsbuildinfo
+frontend/src/api/openapi.json
