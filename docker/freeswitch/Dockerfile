@@ -123,4 +123,10 @@ RUN out="$(/lib64/ld-linux-x86-64.so.2 --list /usr/lib/freeswitch/mod/mod_audio_
 COPY docker/freeswitch-entrypoint.sh /usr/local/bin/fs-entrypoint.sh
 RUN chmod +x /usr/local/bin/fs-entrypoint.sh
 
+# ベースイメージ継承の HEALTHCHECK は fs_cli のデフォルトパスワード (ClueCon)
+# 前提のため、core が event_socket のパスワードをランダム生成する本構成では
+# 常に unhealthy になる。実際の設定ファイルからパスワードを読んで確認する。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD sh -c 'fs_cli -p "$(sed -n "s/.*name=\"password\" value=\"\([^\"]*\)\".*/\1/p" /etc/freeswitch/autoload_configs/event_socket.conf.xml)" -x status | grep -q "is ready"'
+
 ENTRYPOINT ["/bin/sh", "/usr/local/bin/fs-entrypoint.sh"]

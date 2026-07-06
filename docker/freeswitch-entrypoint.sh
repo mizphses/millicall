@@ -38,6 +38,14 @@ if [ ! -f /etc/freeswitch/freeswitch.xml ]; then
          /etc/freeswitch/sip_profiles/external-ipv6
 fi
 
+# mod_audio_stream（イメージ同梱、AI 音声フォーク用）を自動ロードに追加する。
+# vanilla の modules.conf.xml には当然含まれないため、mod_sofia の直後に挿入。
+# 冪等: 既に追加済み（または将来 core が管理）ならスキップ。
+MODCONF=/etc/freeswitch/autoload_configs/modules.conf.xml
+if [ -f "$MODCONF" ] && ! grep -q mod_audio_stream "$MODCONF"; then
+  sed -i '/<load module="mod_sofia"\/>/a\    <load module="mod_audio_stream"/>' "$MODCONF"
+fi
+
 # -nf: フォアグラウンド（フォークしない）
 # -nonat: 自動NAT検出無効化（host network / 同一LAN前提）
 # safarov イメージには freeswitch ユーザーが存在しないため root で起動
