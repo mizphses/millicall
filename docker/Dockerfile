@@ -1,10 +1,16 @@
-FROM python:3.12-slim
+# bookworm 固定: trixie (Debian 13) には OpenJTalk 音響モデル
+# hts-voice-nitech-jp-atr503-m001 が存在しない (non-free からも削除済み)。
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# hts-voice-nitech-jp-atr503-m001 (OpenJTalk 音響モデル) は Debian の
+# non-free コンポーネント配布のため、デフォルト (main のみ) に追加する。
+RUN sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
         open-jtalk open-jtalk-mecab-naist-jdic hts-voice-nitech-jp-atr503-m001 \
     && rm -rf /var/lib/apt/lists/*
 
