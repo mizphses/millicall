@@ -10,6 +10,7 @@ import { fetchCurrentUser } from "../auth/auth";
 import type { CurrentUser } from "../auth/auth";
 import { AppShell } from "../shell/AppShell";
 import { LoginPage } from "../pages/LoginPage";
+import { ExtensionsPage } from "../pages/ExtensionsPage";
 import { Placeholder } from "../pages/Placeholder";
 
 const rootRoute = createRootRoute({
@@ -54,7 +55,7 @@ const dashboardRoute = createRoute({
 const extensionsRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/extensions",
-  component: () => <Placeholder title="内線" description="内線番号の作成・編集・削除" />,
+  component: ExtensionsPage,
 });
 
 const trunksRoute = createRoute({
