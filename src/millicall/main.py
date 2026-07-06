@@ -19,6 +19,7 @@ from millicall.contacts.router import router as contacts_router
 from millicall.db import create_db_engine
 from millicall.db_migrations import upgrade_to_head
 from millicall.extensions.router import router as extensions_router
+from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
 from millicall.media.service import SessionRegistry
 from millicall.providers.router import router as providers_router
@@ -133,18 +134,20 @@ async def lifespan(app: FastAPI):
     await event_listener.start()
     app.state.event_listener = event_listener
 
-    try:
-        yield
-    finally:
-        await event_listener.stop()
-        await esl_command.close()
-        await engine.dispose()
+    # MCP StreamableHTTP session manager を起動/停止する（mount_mcp 済みのときのみ実体を持つ）。
+    async with mcp_session_context(app):
+        try:
+            yield
+        finally:
+            await event_listener.stop()
+            await esl_command.close()
+            await engine.dispose()
 
 
 # SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。
 # これらに該当する未定義 GET は 404 を返し、API のセマンティクスを保つ。
 _SPA_EXCLUDED_PREFIXES = frozenset(
-    {"api", "media", "healthz", "openapi.json", "docs", "redoc"}
+    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known"}
 )
 
 
@@ -188,6 +191,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     register_media_ws(app)
+
+    # MCP（/mcp + OAuth 2.1 + /mcp-login）を SPA catch-all より前に取り込む。
+    mount_mcp(app)
 
     # SPA は最後にマウントする（catch-all を既存ルートの後段に置くため）。
     # static_dir が存在しない開発時は無効（Vite dev server + proxy を使う）。
