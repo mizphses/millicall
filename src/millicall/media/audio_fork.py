@@ -14,7 +14,11 @@ import logging
 from fastapi import FastAPI, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from millicall.media.service import SessionRegistry, build_conversation_session
+from millicall.media.service import (
+    AnswerRegistry,
+    SessionRegistry,
+    build_conversation_session,
+)
 from millicall.media.vad import VadSegmenter
 from millicall.telephony.esl import ESLConnectionClosed
 
@@ -82,8 +86,10 @@ class MediaEventRouter:
         ws_base_url: str | None = None,
         lock: asyncio.Lock | None = None,
         reconnect=None,
+        answer_registry: AnswerRegistry | None = None,
     ) -> None:
         self._registry = registry
+        self._answer_registry = answer_registry
         self._esl = esl
         # 末尾スラッシュを除去して URL 組み立てを决定論的にする
         self._ws_base_url = ws_base_url.rstrip("/") if ws_base_url else None
@@ -101,6 +107,10 @@ class MediaEventRouter:
                 _, call_control = entry
                 call_control._notify_playback_done()
         elif name == "CHANNEL_ANSWER":
+            if self._answer_registry is not None:
+                uuid = event.get("Unique-ID") or event.get("Channel-Call-UUID") or ""
+                if uuid:
+                    self._answer_registry.resolve(uuid)
             await self._maybe_start_audio_stream(event)
         elif name == "CHANNEL_HANGUP_COMPLETE":
             uuid = event.get("Channel-Call-UUID") or event.get("Unique-ID") or ""

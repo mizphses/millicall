@@ -36,6 +36,45 @@ class SessionRegistry:
         return list(self._entries.keys())
 
 
+class AnswerRegistry:
+    """call_uuid -> 応答完了 Future を保持する（発信オーケストレーション用）。
+
+    OutboundCallService.dial/converse は originate 直前に `register(uuid)` して
+    Future を得、`wait(uuid, timeout)` で CHANNEL_ANSWER を待つ。MediaEventRouter は
+    CHANNEL_ANSWER 受信時に `resolve(uuid)` で Future を解決する。
+    未登録 uuid の resolve は no-op（着信 AI など発信起点でない ANSWER を無視）。
+    """
+
+    def __init__(self) -> None:
+        self._futures: dict[str, asyncio.Future[bool]] = {}
+
+    def register(self, call_uuid: str) -> asyncio.Future[bool]:
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future[bool] = loop.create_future()
+        self._futures[call_uuid] = fut
+        return fut
+
+    def resolve(self, call_uuid: str) -> None:
+        fut = self._futures.get(call_uuid)
+        if fut is not None and not fut.done():
+            fut.set_result(True)
+
+    def pop(self, call_uuid: str) -> None:
+        self._futures.pop(call_uuid, None)
+
+    async def wait(self, call_uuid: str, timeout: float) -> bool:
+        """CHANNEL_ANSWER を最大 timeout 秒待つ。応答なら True、タイムアウトで False。"""
+        fut = self._futures.get(call_uuid)
+        if fut is None:
+            fut = self.register(call_uuid)
+        try:
+            return await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
+        except TimeoutError:
+            return False
+        finally:
+            self.pop(call_uuid)
+
+
 async def _load_provider(
     db: AsyncSession, box: SecretBox, pid: int
 ) -> tuple[str, dict, str | None]:

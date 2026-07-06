@@ -21,7 +21,7 @@ from millicall.db_migrations import upgrade_to_head
 from millicall.extensions.router import router as extensions_router
 from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
-from millicall.media.service import SessionRegistry
+from millicall.media.service import AnswerRegistry, SessionRegistry
 from millicall.providers.router import router as providers_router
 from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
@@ -87,6 +87,9 @@ async def lifespan(app: FastAPI):
 
     settings.tts_cache_dir.mkdir(parents=True, exist_ok=True)
     app.state.session_registry = SessionRegistry()
+    # 発信オーケストレーション（MCP dial/converse）の応答待ちレジストリ。
+    # MediaEventRouter が CHANNEL_ANSWER で解決する。
+    app.state.answer_registry = AnswerRegistry()
 
     # AI 再生制御用の共有 ESL コマンドクライアント（発着信制御と別接続）。
     # ESL 未到達（接続拒否・ハング）でも起動を止めない — timeout 付きで試行し warning のみ。
@@ -123,6 +126,7 @@ async def lifespan(app: FastAPI):
         ws_base_url=settings.media_ws_base_url,
         lock=app.state.esl_command_lock,
         reconnect=_esl_reconnect,
+        answer_registry=app.state.answer_registry,
     )
 
     async def _compose_handler(event: dict) -> None:
