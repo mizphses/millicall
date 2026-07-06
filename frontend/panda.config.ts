@@ -225,6 +225,8 @@ export default defineConfig({
           toast: { value: "320px" },
           dialog: { value: "400px" },
           loginCard: { value: "360px" },
+          providerCard: { value: "280px" },
+          kindCard: { value: "150px" },
         },
       },
       semanticTokens: {

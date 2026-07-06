@@ -13,6 +13,7 @@ import { LoginPage } from "../pages/LoginPage";
 import { ExtensionsPage } from "../pages/ExtensionsPage";
 import { TrunksPage } from "../pages/TrunksPage";
 import { RoutesPage } from "../pages/RoutesPage";
+import { ProvidersPage } from "../pages/ProvidersPage";
 import { Placeholder } from "../pages/Placeholder";
 
 const rootRoute = createRootRoute({
@@ -75,7 +76,7 @@ const routesRoute = createRoute({
 const providersRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/providers",
-  component: () => <Placeholder title="プロバイダカタログ" description="LLM / TTS / STT プロバイダの登録と接続テスト" />,
+  component: ProvidersPage,
 });
 
 const aiAgentsRoute = createRoute({
