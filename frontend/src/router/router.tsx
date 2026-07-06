@@ -16,6 +16,7 @@ import { RoutesPage } from "../pages/RoutesPage";
 import { ProvidersPage } from "../pages/ProvidersPage";
 import { AiAgentsPage } from "../pages/AiAgentsPage";
 import { ContactsPage } from "../pages/ContactsPage";
+import { CdrPage } from "../pages/CdrPage";
 import { Placeholder } from "../pages/Placeholder";
 
 const rootRoute = createRootRoute({
@@ -96,7 +97,7 @@ const contactsRoute = createRoute({
 const cdrRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/cdr",
-  component: () => <Placeholder title="通話履歴" description="CDR と AI 会話ログ" />,
+  component: CdrPage,
 });
 
 const routeTree = rootRoute.addChildren([

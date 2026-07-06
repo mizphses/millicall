@@ -92,6 +92,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/call-messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Call Messages */
+        get: operations["list_call_messages_api_call_messages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/calls": {
         parameters: {
             query?: never;
@@ -456,6 +473,26 @@ export interface components {
         CallCreated: {
             /** Call Uuid */
             call_uuid: string;
+        };
+        /** CallMessageRead */
+        CallMessageRead: {
+            /** Agent Id */
+            agent_id: number | null;
+            /** Call Uuid */
+            call_uuid: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: number;
+            /** Latency Ms */
+            latency_ms: number | null;
+            /** Role */
+            role: string;
+            /** Text */
+            text: string;
         };
         /** CdrRead */
         CdrRead: {
@@ -1019,6 +1056,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserRead"];
+                };
+            };
+        };
+    };
+    list_call_messages_api_call_messages_get: {
+        parameters: {
+            query: {
+                call_uuid: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallMessageRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
