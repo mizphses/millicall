@@ -10,6 +10,7 @@ import { fetchCurrentUser } from "../auth/auth";
 import type { CurrentUser } from "../auth/auth";
 import { AppShell } from "../shell/AppShell";
 import { LoginPage } from "../pages/LoginPage";
+import { DashboardPage } from "../pages/DashboardPage";
 import { ExtensionsPage } from "../pages/ExtensionsPage";
 import { TrunksPage } from "../pages/TrunksPage";
 import { RoutesPage } from "../pages/RoutesPage";
@@ -17,7 +18,6 @@ import { ProvidersPage } from "../pages/ProvidersPage";
 import { AiAgentsPage } from "../pages/AiAgentsPage";
 import { ContactsPage } from "../pages/ContactsPage";
 import { CdrPage } from "../pages/CdrPage";
-import { Placeholder } from "../pages/Placeholder";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -55,7 +55,7 @@ function AuthenticatedLayout() {
 const dashboardRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/",
-  component: () => <Placeholder title="ダッシュボード" description="内線・トランク・AI エージェント件数と直近の通話" />,
+  component: DashboardPage,
 });
 
 const extensionsRoute = createRoute({
