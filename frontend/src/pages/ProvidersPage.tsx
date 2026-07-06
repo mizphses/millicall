@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { PlugZap, Pencil, Trash2 } from "lucide-react";
 
 import { css, cx } from "styled-system/css";
 import { badge, button, input, panel } from "styled-system/recipes";
@@ -498,14 +499,14 @@ function ProviderCard({
           onClick={onTest}
           disabled={testing}
         >
-          {testing ? "テスト中…" : "接続テスト"}
+          <PlugZap size={14} />{testing ? "テスト中…" : "接続テスト"}
         </button>
         <span className={css({ flex: "1" })} />
         <button type="button" className={button({ variant: "secondary", size: "sm" })} onClick={onEdit}>
-          編集
+          <Pencil size={14} />編集
         </button>
         <button type="button" className={button({ variant: "ghost", size: "sm" })} onClick={onDelete}>
-          削除
+          <Trash2 size={14} />削除
         </button>
       </div>
     </div>

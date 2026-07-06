@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Pencil, Trash2 } from "lucide-react";
 
 import { css, cx } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
@@ -200,14 +201,14 @@ export function AiAgentsPage() {
             className={button({ variant: "secondary", size: "sm" })}
             onClick={() => openEdit(row)}
           >
-            編集
+            <Pencil size={14} />編集
           </button>
           <button
             type="button"
             className={button({ variant: "ghost", size: "sm" })}
             onClick={() => setDeleteTarget(row)}
           >
-            削除
+            <Trash2 size={14} />削除
           </button>
         </div>
       ),
