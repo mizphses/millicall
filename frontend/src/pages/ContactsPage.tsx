@@ -5,6 +5,7 @@ import { css, cx } from "styled-system/css";
 import { button, input, panel } from "styled-system/recipes";
 
 import { api } from "../api/client";
+import { CONTACTS_KEY, EXTENSIONS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
@@ -21,9 +22,6 @@ import {
   type ContactRead,
   type ExtensionRead,
 } from "./contacts/formPayload";
-
-const CONTACTS_KEY = ["contacts"] as const;
-const EXTENSIONS_KEY = ["extensions"] as const;
 
 async function fetchContacts(): Promise<ContactRead[]> {
   const { data, error } = await api.GET("/api/contacts");

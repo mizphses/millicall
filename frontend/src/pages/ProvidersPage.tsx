@@ -5,6 +5,7 @@ import { css, cx } from "styled-system/css";
 import { badge, button, input, panel } from "styled-system/recipes";
 
 import { api } from "../api/client";
+import { PROVIDERS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PageLayout } from "../components/PageLayout";
 import { SlidePanel } from "../components/SlidePanel";
@@ -25,9 +26,6 @@ import {
   type ProviderKind,
   type ProviderRead,
 } from "./providers/formPayload";
-
-/** TanStack Query のキー。ミューテーション後に invalidate して一覧を再取得する。 */
-const PROVIDERS_KEY = ["providers"] as const;
 
 /** プロバイダ名の重複（409）を型で区別するためのエラー。 */
 class ProviderNameConflictError extends Error {}
@@ -336,22 +334,29 @@ export function ProvidersPage() {
           </Field>
 
           {activeKind.usesApiKey ? (
-            <Field label={editing ? "API キー（空のまま＝変更しない）" : "API キー（任意）"}>
-              <div className={css({ display: "flex", gap: "2" })}>
-                <input
-                  className={cx(input(), css({ flex: "1" }))}
-                  type={showApiKey ? "text" : "password"}
-                  value={form.api_key}
-                  onChange={(e) => setForm((f) => ({ ...f, api_key: e.target.value }))}
-                  placeholder={
-                    editing
-                      ? editing.api_key_masked
-                        ? `現在: ${editing.api_key_masked}`
-                        : "変更する場合のみ入力"
-                      : "sk-..."
-                  }
-                  autoComplete="new-password"
-                />
+            <div>
+              <div className={css({ display: "flex", alignItems: "flex-end", gap: "2" })}>
+                <label className={css({ display: "block", flex: "1" })}>
+                  <span
+                    className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
+                  >
+                    {editing ? "API キー（空のまま＝変更しない）" : "API キー（任意）"}
+                  </span>
+                  <input
+                    className={cx(input(), css({ width: "100%" }))}
+                    type={showApiKey ? "text" : "password"}
+                    value={form.api_key}
+                    onChange={(e) => setForm((f) => ({ ...f, api_key: e.target.value }))}
+                    placeholder={
+                      editing
+                        ? editing.api_key_masked
+                          ? `現在: ${editing.api_key_masked}`
+                          : "変更する場合のみ入力"
+                        : "sk-..."
+                    }
+                    autoComplete="new-password"
+                  />
+                </label>
                 <button
                   type="button"
                   className={button({ variant: "secondary", size: "sm" })}
@@ -360,7 +365,7 @@ export function ProvidersPage() {
                   {showApiKey ? "隠す" : "表示"}
                 </button>
               </div>
-            </Field>
+            </div>
           ) : null}
 
           {activeKind.fields.map((field) => (

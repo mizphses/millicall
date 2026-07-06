@@ -6,6 +6,7 @@ import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import type { components } from "../api/schema";
+import { ROUTES_KEY, EXTENSIONS_KEY, AGENTS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
@@ -23,11 +24,6 @@ import {
 
 type ExtensionRead = components["schemas"]["ExtensionRead"];
 type AiAgentRead = components["schemas"]["AiAgentRead"];
-
-/** TanStack Query キー。 */
-const ROUTES_KEY = ["routes"] as const;
-const EXTENSIONS_KEY = ["extensions"] as const;
-const AI_AGENTS_KEY = ["ai-agents"] as const;
 
 /** マッチ番号の重複（409）を型で区別するためのエラー。 */
 class MatchNumberConflictError extends Error {}
@@ -107,7 +103,7 @@ export function RoutesPage() {
 
   const listQuery = useQuery({ queryKey: ROUTES_KEY, queryFn: fetchRoutes });
   const extensionsQuery = useQuery({ queryKey: EXTENSIONS_KEY, queryFn: fetchExtensions });
-  const aiAgentsQuery = useQuery({ queryKey: AI_AGENTS_KEY, queryFn: fetchAiAgents });
+  const aiAgentsQuery = useQuery({ queryKey: AGENTS_KEY, queryFn: fetchAiAgents });
 
   const extensions = extensionsQuery.data ?? [];
   const aiAgents = aiAgentsQuery.data ?? [];

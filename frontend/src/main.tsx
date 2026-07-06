@@ -3,6 +3,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./toast/ToastProvider";
 import { router } from "./router/router";
 
@@ -19,10 +20,12 @@ if (!rootEl) throw new Error("#root が見つかりません");
 
 createRoot(rootEl).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <RouterProvider router={router} />
-      </ToastProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <RouterProvider router={router} />
+        </ToastProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );

@@ -6,6 +6,7 @@ import { badge, button } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import type { components } from "../api/schema";
+import { CDR_KEY, CALL_MESSAGES_KEY } from "../queryKeys";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
 import { SlidePanel } from "../components/SlidePanel";
@@ -15,9 +16,6 @@ type CdrRead = components["schemas"]["CdrRead"];
 type CallMessageRead = components["schemas"]["CallMessageRead"];
 
 const PAGE_SIZE = 50;
-
-const CDR_KEY = ["cdr"] as const;
-const CALL_MESSAGES_KEY = ["call-messages"] as const;
 
 async function fetchCdr(offset: number): Promise<CdrRead[]> {
   const { data, error } = await api.GET("/api/cdr", {
@@ -89,6 +87,11 @@ export function CdrPage() {
 
   return (
     <PageLayout title="通話履歴" description="CDR と AI 会話ログ（行をクリックで会話を表示）">
+      {listQuery.isError ? (
+        <p className={css({ color: "danger.text", py: "4" })}>
+          通話履歴の取得に失敗しました。再読み込みしてください。
+        </p>
+      ) : null}
       <DataTable
         columns={columns}
         rows={rows}

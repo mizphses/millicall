@@ -5,6 +5,7 @@ import { css, cx } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
+import { EXTENSIONS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
@@ -19,9 +20,6 @@ import {
   type ExtensionFormValues,
   type ExtensionRead,
 } from "./extensions/formPayload";
-
-/** TanStack Query のキー。ミューテーション後にこれを invalidate して一覧を再取得する。 */
-const EXTENSIONS_KEY = ["extensions"] as const;
 
 /** 内線番号の重複（409）を型で区別するためのエラー。フォームのインライン表示に使う。 */
 class NumberConflictError extends Error {}

@@ -5,6 +5,7 @@ import { css, cx } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
+import { TRUNKS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
@@ -19,9 +20,6 @@ import {
   type TrunkFormValues,
   type TrunkRead,
 } from "./trunks/formPayload";
-
-/** TanStack Query のキー。ミューテーション後にこれを invalidate して一覧を再取得する。 */
-const TRUNKS_KEY = ["trunks"] as const;
 
 /** トランク名の重複（409）を型で区別するためのエラー。フォームのインライン表示に使う。 */
 class TrunkNameConflictError extends Error {}

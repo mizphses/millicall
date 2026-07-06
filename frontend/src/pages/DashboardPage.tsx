@@ -6,6 +6,7 @@ import { badge } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import type { components } from "../api/schema";
+import { DASHBOARD_KEYS } from "../queryKeys";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
 import { formatDateTime, formatDuration } from "./cdr/format";
@@ -30,15 +31,21 @@ async function fetchRecentCdr(): Promise<CdrRead[]> {
 
 export function DashboardPage() {
   const extensionsQuery = useQuery({
-    queryKey: ["extensions"],
+    queryKey: DASHBOARD_KEYS.extensionsCount,
     queryFn: () => fetchCount("/api/extensions"),
   });
-  const trunksQuery = useQuery({ queryKey: ["trunks"], queryFn: () => fetchCount("/api/trunks") });
+  const trunksQuery = useQuery({
+    queryKey: DASHBOARD_KEYS.trunksCount,
+    queryFn: () => fetchCount("/api/trunks"),
+  });
   const aiAgentsQuery = useQuery({
-    queryKey: ["ai-agents"],
+    queryKey: DASHBOARD_KEYS.aiAgentsCount,
     queryFn: () => fetchCount("/api/ai-agents"),
   });
-  const cdrQuery = useQuery({ queryKey: ["cdr", 0], queryFn: fetchRecentCdr });
+  const cdrQuery = useQuery({
+    queryKey: DASHBOARD_KEYS.recentCdr,
+    queryFn: fetchRecentCdr,
+  });
 
   const cdrRows = cdrQuery.data ?? [];
   const cdrCountLabel =
@@ -84,24 +91,28 @@ export function DashboardPage() {
           label="内線数"
           value={extensionsQuery.data}
           loading={extensionsQuery.isLoading}
+          error={extensionsQuery.isError}
           to="/extensions"
         />
         <StatCard
           label="トランク数"
           value={trunksQuery.data}
           loading={trunksQuery.isLoading}
+          error={trunksQuery.isError}
           to="/trunks"
         />
         <StatCard
           label="AI エージェント数"
           value={aiAgentsQuery.data}
           loading={aiAgentsQuery.isLoading}
+          error={aiAgentsQuery.isError}
           to="/ai-agents"
         />
         <StatCard
           label="直近の通話"
           valueLabel={cdrCountLabel}
           loading={cdrQuery.isLoading}
+          error={cdrQuery.isError}
           to="/cdr"
         />
       </div>
@@ -136,15 +147,22 @@ function StatCard({
   value,
   valueLabel,
   loading,
+  error,
   to,
 }: {
   label: string;
   value?: number;
   valueLabel?: string;
   loading: boolean;
+  error?: boolean;
   to: string;
 }) {
-  const display = loading ? "…" : (valueLabel ?? (value != null ? String(value) : "-"));
+  const display = loading
+    ? "…"
+    : error
+      ? "取得エラー"
+      : (valueLabel ?? (value != null ? String(value) : "-"));
+
   return (
     <Link
       to={to}
@@ -164,7 +182,14 @@ function StatCard({
       <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "2" })}>
         {label}
       </span>
-      <span className={css({ display: "block", fontSize: "xl", fontWeight: "600", color: "text" })}>
+      <span
+        className={css({
+          display: "block",
+          fontSize: "xl",
+          fontWeight: "600",
+          color: error ? "danger.text" : "text",
+        })}
+      >
         {display}
       </span>
     </Link>

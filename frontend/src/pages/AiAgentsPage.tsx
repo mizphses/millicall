@@ -5,6 +5,7 @@ import { css, cx } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
+import { AGENTS_KEY, PROVIDERS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
@@ -20,9 +21,6 @@ import {
   type AiAgentRead,
   type ProviderRead,
 } from "./ai-agents/formPayload";
-
-const AGENTS_KEY = ["ai-agents"] as const;
-const PROVIDERS_KEY = ["providers"] as const;
 
 async function fetchAgents(): Promise<AiAgentRead[]> {
   const { data, error } = await api.GET("/api/ai-agents");

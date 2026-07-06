@@ -1,0 +1,30 @@
+/**
+ * TanStack Query キー一元管理。
+ *
+ * 一覧ページ（CRUD）と Dashboard（集計 / 最新 N 件）を別名前空間に分離し、
+ * キャッシュの型衝突（number vs 配列）を防ぐ。
+ *
+ * 各ページはここからキーをインポートし、ローカル定義を持たない。
+ */
+
+// ─────────────────────────────────────────────────────────
+// 一覧ページ用キー（API から配列を返す・ミューテーション後に invalidate する）
+// ─────────────────────────────────────────────────────────
+export const EXTENSIONS_KEY = ["extensions"] as const;
+export const TRUNKS_KEY = ["trunks"] as const;
+export const AGENTS_KEY = ["ai-agents"] as const;
+export const PROVIDERS_KEY = ["providers"] as const;
+export const ROUTES_KEY = ["routes"] as const;
+export const CONTACTS_KEY = ["contacts"] as const;
+export const CDR_KEY = ["cdr"] as const;
+export const CALL_MESSAGES_KEY = ["call-messages"] as const;
+
+// ─────────────────────────────────────────────────────────
+// Dashboard 専用キー（number / 最新 N 件を返す。一覧キーと別トップレベル）
+// ─────────────────────────────────────────────────────────
+export const DASHBOARD_KEYS = {
+  extensionsCount: ["dashboard", "extensions-count"] as const,
+  trunksCount: ["dashboard", "trunks-count"] as const,
+  aiAgentsCount: ["dashboard", "ai-agents-count"] as const,
+  recentCdr: ["dashboard", "recent-cdr"] as const,
+} as const;
