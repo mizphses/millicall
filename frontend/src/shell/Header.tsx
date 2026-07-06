@@ -13,9 +13,13 @@ export function Header({ username }: { username?: string }) {
   const toast = useToast();
 
   async function handleLogout() {
-    await api.POST("/api/auth/logout");
-    toast.success("ログアウトしました");
-    router.navigate({ to: "/login" });
+    try {
+      await api.POST("/api/auth/logout");
+      toast.success("ログアウトしました");
+      router.navigate({ to: "/login" });
+    } catch {
+      toast.error("ログアウトに失敗しました");
+    }
   }
 
   return (

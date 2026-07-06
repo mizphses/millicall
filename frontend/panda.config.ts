@@ -222,6 +222,9 @@ export default defineConfig({
           sidebar: { value: "232px" },
           header: { value: "56px" },
           panel: { value: "440px" },
+          toast: { value: "320px" },
+          dialog: { value: "400px" },
+          loginCard: { value: "360px" },
         },
       },
       semanticTokens: {

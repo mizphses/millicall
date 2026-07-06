@@ -1,4 +1,6 @@
-import { css } from "styled-system/css";
+import { useEffect } from "react";
+
+import { css, cx } from "styled-system/css";
 import { button, panel } from "styled-system/recipes";
 
 interface ConfirmDialogProps {
@@ -28,6 +30,15 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onCancel();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onCancel]);
+
   if (!open) return null;
   return (
     <div
@@ -48,9 +59,9 @@ export function ConfirmDialog({
       />
       <div
         role="alertdialog"
+        aria-modal="true"
         aria-label={title}
-        className={panel()}
-        style={{ position: "relative", width: "400px", maxWidth: "100%", padding: "20px" }}
+        className={cx(panel(), css({ position: "relative", w: "dialog", maxW: "100%", p: "5" }))}
       >
         <h2 className={css({ fontSize: "lg", fontWeight: "600", mb: "2" })}>{title}</h2>
         <p className={css({ fontSize: "md", color: "text.muted", mb: "5" })}>{message}</p>

@@ -1,7 +1,7 @@
 import { useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 
-import { css } from "styled-system/css";
+import { css, cx } from "styled-system/css";
 import { button, input, panel } from "styled-system/recipes";
 
 import { api } from "../api/client";
@@ -40,35 +40,38 @@ export function LoginPage() {
     >
       <form
         onSubmit={handleSubmit}
-        className={panel()}
-        style={{ width: "360px", maxWidth: "100%", padding: "32px" }}
+        className={cx(panel(), css({ w: "loginCard", maxW: "100%", p: "8" }))}
       >
         <div className={css({ textAlign: "center", mb: "6" })}>
           <div className={css({ fontSize: "xl", fontWeight: "600", color: "accent.text" })}>millicall</div>
           <div className={css({ fontSize: "md", color: "text.muted", mt: "1" })}>管理コンソール</div>
         </div>
 
-        <label className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
-          ユーザー名
+        <label className={css({ display: "block" })}>
+          <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+            ユーザー名
+          </span>
+          <input
+            className={input()}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            autoFocus
+          />
         </label>
-        <input
-          className={input()}
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          autoComplete="username"
-          autoFocus
-        />
 
-        <label className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1", mt: "4" })}>
-          パスワード
+        <label className={css({ display: "block", mt: "4" })}>
+          <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+            パスワード
+          </span>
+          <input
+            className={input()}
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
         </label>
-        <input
-          className={input()}
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete="current-password"
-        />
 
         {error ? (
           <p className={css({ color: "danger.text", fontSize: "sm", mt: "3" })}>{error}</p>
@@ -76,8 +79,7 @@ export function LoginPage() {
 
         <button
           type="submit"
-          className={button({ variant: "primary" })}
-          style={{ width: "100%", marginTop: "24px" }}
+          className={cx(button({ variant: "primary" }), css({ w: "100%", mt: "6" }))}
           disabled={busy || !username || !password}
         >
           {busy ? "ログイン中…" : "ログイン"}

@@ -1,10 +1,36 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
-import { css } from "styled-system/css";
-import { badge } from "styled-system/recipes";
+import { css, cx } from "styled-system/css";
 
 export type ToastTone = "success" | "warn" | "danger" | "neutral";
+
+/** トースト本文のベーススタイル（トークン経由）。 */
+const TOAST_ITEM_BASE = css({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "1",
+  fontSize: "sm",
+  fontWeight: "500",
+  lineHeight: "1",
+  px: "3",
+  py: "2",
+  borderRadius: "sm",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  whiteSpace: "nowrap",
+  maxW: "toast",
+  textAlign: "left",
+  cursor: "pointer",
+});
+
+/** tone ごとの色クラス（badge recipe と同一パレット、インラインは使わない）。 */
+const TONE_CLASS: Record<ToastTone, string> = {
+  neutral: css({ bg: "gray.50", color: "text.muted", borderColor: "border" }),
+  success: css({ bg: "success.soft", color: "success.text", borderColor: "success" }),
+  warn: css({ bg: "warn.soft", color: "warn.text", borderColor: "warn" }),
+  danger: css({ bg: "danger.soft", color: "danger.text", borderColor: "danger" }),
+};
 
 export interface Toast {
   id: number;
@@ -70,8 +96,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             type="button"
             key={t.id}
             onClick={() => dismiss(t.id)}
-            className={badge({ tone: t.tone })}
-            style={{ cursor: "pointer", padding: "10px 14px", maxWidth: "320px", textAlign: "left" }}
+            className={cx(TOAST_ITEM_BASE, TONE_CLASS[t.tone])}
           >
             {t.message}
           </button>

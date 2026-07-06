@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import { css } from "styled-system/css";
 import { button } from "styled-system/recipes";
@@ -18,6 +18,15 @@ interface SlidePanelProps {
  * 後続タスクは <SlidePanel open title onClose footer><form/></SlidePanel> で使う。
  */
 export function SlidePanel({ open, title, onClose, children, footer }: SlidePanelProps) {
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <div
@@ -36,6 +45,7 @@ export function SlidePanel({ open, title, onClose, children, footer }: SlidePane
       />
       <aside
         role="dialog"
+        aria-modal="true"
         aria-label={title}
         className={css({
           position: "relative",

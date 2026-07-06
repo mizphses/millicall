@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { css } from "styled-system/css";
+import { css, cx } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
@@ -137,6 +137,15 @@ export function ExtensionsPage() {
     const errors = validateForm(form, editing ? "edit" : "create");
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
+    // 編集時に変更がなければ PATCH を送らずパネルを閉じる。
+    if (editing) {
+      const payload = buildUpdatePayload(form, editing);
+      if (Object.keys(payload).length === 0) {
+        toast.show("変更はありません", "neutral");
+        setPanelOpen(false);
+        return;
+      }
+    }
     saveMutation.mutate();
   }
 
@@ -272,11 +281,10 @@ export function ExtensionsPage() {
               <Field label="SIP パスワード（自動生成・変更不可）">
                 <div className={css({ display: "flex", gap: "2" })}>
                   <input
-                    className={input()}
+                    className={cx(input(), css({ flex: "1" }))}
                     type={revealPassword ? "text" : "password"}
                     value={editing.sip_password}
                     readOnly
-                    style={{ flex: 1 }}
                   />
                   <button
                     type="button"
@@ -310,7 +318,9 @@ export function ExtensionsPage() {
   );
 }
 
-/** フォーム 1 項目（ラベル + 入力 + インラインエラー）。 */
+/** フォーム 1 項目（ラベル + 入力 + インラインエラー）。
+ * wrap 方式: label > span（テキスト）+ children（input 等）で関連付ける。
+ * Task 3-8 が踏襲する標準形。 */
 function Field({
   label,
   error,
@@ -322,10 +332,12 @@ function Field({
 }) {
   return (
     <div>
-      <label className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
-        {label}
+      <label className={css({ display: "block" })}>
+        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+          {label}
+        </span>
+        {children}
       </label>
-      {children}
       {error ? (
         <p className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>
       ) : null}
