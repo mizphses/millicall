@@ -16,6 +16,7 @@ dependencies = [
     "audioop-lts>=0.2; python_version >= '3.13'",
     "httpx>=0.27",
     "webrtcvad-wheels>=2.0.14",
+    "google-auth>=2",
 ]
 
 [project.optional-dependencies]

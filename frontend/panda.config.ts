@@ -51,7 +51,7 @@ const buttonRecipe = defineRecipe({
       },
     },
     size: {
-      sm: { h: "7", px: "3", fontSize: "sm" },
+      sm: { h: "8", px: "3", fontSize: "sm" },
       md: { h: "9", px: "4", fontSize: "md" },
     },
   },
@@ -204,6 +204,7 @@ export default defineConfig({
           "6": { value: "24px" },
           "7": { value: "28px" },
           "8": { value: "32px" },
+          "9": { value: "36px" },
           "10": { value: "40px" },
           "12": { value: "48px" },
         },

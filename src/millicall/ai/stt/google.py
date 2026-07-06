@@ -57,12 +57,15 @@ class GoogleStreamingSTT:
         language: str = "ja-JP",
         model: str = "chirp_2",
         client: Any | None = None,
+        api_key: str | None = None,
     ) -> None:
         self._project = project
         self._location = location
         self._language = language
         self._model = model
         self._client = client
+        # api_key はサービスアカウント JSON 文字列（GUI 登録用）。未設定なら ADC。
+        self._api_key = api_key
 
     def __repr__(self) -> str:
         # client オブジェクト（資格情報を保持しうる）を露出しない。
@@ -82,8 +85,22 @@ class GoogleStreamingSTT:
             from google.cloud.speech_v2 import SpeechClient
         except ImportError as exc:
             raise RuntimeError(_MISSING_MESSAGE) from exc
-        self._client = SpeechClient()
+        credentials = self._build_credentials()
+        if credentials is not None:
+            self._client = SpeechClient(credentials=credentials)
+        else:
+            self._client = SpeechClient()
         return self._client
+
+    def _build_credentials(self) -> Any | None:
+        """SA JSON（api_key）が設定されていれば資格情報を作る。無ければ None（ADC）。"""
+        if not self._api_key:
+            return None
+        import json
+
+        from google.oauth2.service_account import Credentials
+
+        return Credentials.from_service_account_info(json.loads(self._api_key))
 
     def _request_builders(self):
         """(make_config, make_audio) を返す。実型があれば実 gRPC リクエストを構築する。"""

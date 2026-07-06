@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PhoneCall, Pencil, Trash2 } from "lucide-react";
 
 import { css, cx } from "styled-system/css";
 import { button, input, panel } from "styled-system/recipes";
@@ -193,21 +194,21 @@ export function ContactsPage() {
             className={button({ variant: "primary", size: "sm" })}
             onClick={() => openDial(row)}
           >
-            発信
+            <PhoneCall size={14} />発信
           </button>
           <button
             type="button"
             className={button({ variant: "secondary", size: "sm" })}
             onClick={() => openEdit(row)}
           >
-            編集
+            <Pencil size={14} />編集
           </button>
           <button
             type="button"
             className={button({ variant: "ghost", size: "sm" })}
             onClick={() => setDeleteTarget(row)}
           >
-            削除
+            <Trash2 size={14} />削除
           </button>
         </div>
       ),

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { PlugZap, Pencil, Trash2 } from "lucide-react";
 
 import { css, cx } from "styled-system/css";
 import { badge, button, input, panel } from "styled-system/recipes";
@@ -20,6 +21,7 @@ import {
   KIND_ORDER,
   TYPE_LABEL,
   validateForm,
+  validateSaJson,
   withKind,
   type ProviderFormErrors,
   type ProviderFormValues,
@@ -96,6 +98,8 @@ export function ProvidersPage() {
   const [form, setForm] = useState<ProviderFormValues>(emptyForm());
   const [errors, setErrors] = useState<ProviderFormErrors>({ config: {} });
   const [showApiKey, setShowApiKey] = useState(false);
+  // SA JSON アップロードの検証エラー（vertex_ai / google_stt のみ）。
+  const [saJsonError, setSaJsonError] = useState<string | undefined>(undefined);
 
   const [deleteTarget, setDeleteTarget] = useState<ProviderRead | null>(null);
 
@@ -108,6 +112,7 @@ export function ProvidersPage() {
     setForm(emptyForm());
     setErrors({ config: {} });
     setShowApiKey(false);
+    setSaJsonError(undefined);
     setPanelOpen(true);
   }
 
@@ -116,7 +121,26 @@ export function ProvidersPage() {
     setForm(formFromProvider(provider));
     setErrors({ config: {} });
     setShowApiKey(false);
+    setSaJsonError(undefined);
     setPanelOpen(true);
+  }
+
+  /** アップロードされた SA JSON ファイルを読み、検証して api_key へ格納する。 */
+  function handleSaJsonFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = typeof reader.result === "string" ? reader.result : "";
+      const result = validateSaJson(text);
+      if (!result.ok) {
+        setSaJsonError(result.error);
+        setForm((f) => ({ ...f, api_key: "" }));
+        return;
+      }
+      setSaJsonError(undefined);
+      setForm((f) => ({ ...f, api_key: text }));
+    };
+    reader.onerror = () => setSaJsonError("ファイルの読み込みに失敗しました");
+    reader.readAsText(file);
   }
 
   function closePanel() {
@@ -368,6 +392,61 @@ export function ProvidersPage() {
             </div>
           ) : null}
 
+          {activeKind.usesSaJson ? (
+            <div>
+              <span
+                className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
+              >
+                {editing
+                  ? "サービスアカウント JSON（未選択＝変更しない）"
+                  : "サービスアカウント JSON"}
+              </span>
+              <input
+                type="file"
+                accept=".json,application/json"
+                className={css({ fontSize: "sm", display: "block", width: "100%" })}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleSaJsonFile(file);
+                }}
+              />
+              {form.api_key ? (
+                <textarea
+                  readOnly
+                  value={form.api_key}
+                  rows={4}
+                  className={css({
+                    width: "100%",
+                    mt: "2",
+                    p: "2",
+                    fontFamily: "monospace",
+                    fontSize: "xs",
+                    borderWidth: "1px",
+                    borderStyle: "solid",
+                    borderColor: "border",
+                    borderRadius: "md",
+                    bg: "gray.50",
+                    resize: "vertical",
+                  })}
+                />
+              ) : null}
+              <p
+                className={css({
+                  fontSize: "sm",
+                  color: saJsonError ? "danger.text" : "text.subtle",
+                  mt: "1",
+                })}
+              >
+                {saJsonError ??
+                  (form.api_key
+                    ? "送信前のみ保持されます（保存後はマスク表示になります）。"
+                    : editing && editing.api_key_masked
+                      ? `現在: ${editing.api_key_masked}（新しい JSON を選ぶと差し替えます）`
+                      : "サービスアカウントの JSON キーファイルを選択してください。")}
+              </p>
+            </div>
+          ) : null}
+
           {activeKind.fields.map((field) => (
             <Field key={field.key} label={field.label} error={errors.config[field.key]}>
               <input
@@ -498,14 +577,14 @@ function ProviderCard({
           onClick={onTest}
           disabled={testing}
         >
-          {testing ? "テスト中…" : "接続テスト"}
+          <PlugZap size={14} />{testing ? "テスト中…" : "接続テスト"}
         </button>
         <span className={css({ flex: "1" })} />
         <button type="button" className={button({ variant: "secondary", size: "sm" })} onClick={onEdit}>
-          編集
+          <Pencil size={14} />編集
         </button>
         <button type="button" className={button({ variant: "ghost", size: "sm" })} onClick={onDelete}>
-          削除
+          <Trash2 size={14} />削除
         </button>
       </div>
     </div>

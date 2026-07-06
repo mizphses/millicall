@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { X } from "lucide-react";
 
 import { css } from "styled-system/css";
 import { button } from "styled-system/recipes";
@@ -75,7 +76,7 @@ export function SlidePanel({ open, title, onClose, children, footer }: SlidePane
         >
           <h2 className={css({ fontSize: "lg", fontWeight: "600" })}>{title}</h2>
           <button type="button" aria-label="閉じる" className={button({ variant: "ghost", size: "sm" })} onClick={onClose}>
-            ✕
+            <X size={16} />
           </button>
         </header>
         <div className={css({ flex: 1, overflowY: "auto", p: "5" })}>{children}</div>

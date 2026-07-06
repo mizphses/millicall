@@ -11,6 +11,7 @@ class ProviderKind(enum.StrEnum):
     OPENAI_COMPATIBLE = "openai_compatible"
     ANTHROPIC = "anthropic"
     GEMINI = "gemini"
+    VERTEX_AI = "vertex_ai"
     VOICEVOX = "voicevox"
     OPENJTALK = "openjtalk"
     WHISPER = "whisper"
@@ -19,7 +20,12 @@ class ProviderKind(enum.StrEnum):
 
 # type ごとに許可される kind（保存時検証）
 KIND_BY_TYPE: dict[ProviderType, set[ProviderKind]] = {
-    ProviderType.LLM: {ProviderKind.OPENAI_COMPATIBLE, ProviderKind.ANTHROPIC, ProviderKind.GEMINI},
+    ProviderType.LLM: {
+        ProviderKind.OPENAI_COMPATIBLE,
+        ProviderKind.ANTHROPIC,
+        ProviderKind.GEMINI,
+        ProviderKind.VERTEX_AI,
+    },
     ProviderType.TTS: {ProviderKind.VOICEVOX, ProviderKind.OPENJTALK},
     ProviderType.STT: {ProviderKind.WHISPER, ProviderKind.GOOGLE_STT},
 }

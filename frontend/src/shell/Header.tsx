@@ -1,4 +1,5 @@
 import { useRouter, useRouterState } from "@tanstack/react-router";
+import { LogOut } from "lucide-react";
 
 import { css } from "styled-system/css";
 import { button } from "styled-system/recipes";
@@ -43,6 +44,7 @@ export function Header({ username }: { username?: string }) {
           <span className={css({ fontSize: "md", color: "text.muted" })}>{username}</span>
         ) : null}
         <button type="button" className={button({ variant: "secondary", size: "sm" })} onClick={handleLogout}>
+          <LogOut size={16} />
           ログアウト
         </button>
       </div>

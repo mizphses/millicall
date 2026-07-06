@@ -59,7 +59,7 @@ export function SideNav() {
                   _hover: { bg: active ? "accent.soft" : "gray.50", color: active ? "accent.text" : "text" },
                 })}
               >
-                <span className={css({ width: "5", textAlign: "center" })} aria-hidden>
+                <span className={css({ display: "flex", alignItems: "center", width: "5" })} aria-hidden>
                   {item.icon}
                 </span>
                 {item.label}

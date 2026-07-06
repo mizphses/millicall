@@ -632,7 +632,7 @@ export interface components {
          * ProviderKind
          * @enum {string}
          */
-        ProviderKind: "openai_compatible" | "anthropic" | "gemini" | "voicevox" | "openjtalk" | "whisper" | "google_stt";
+        ProviderKind: "openai_compatible" | "anthropic" | "gemini" | "vertex_ai" | "voicevox" | "openjtalk" | "whisper" | "google_stt";
         /** ProviderRead */
         ProviderRead: {
             /** Api Key Masked */
