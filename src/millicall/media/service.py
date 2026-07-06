@@ -16,6 +16,28 @@ from millicall.crypto import SecretBox
 from millicall.media.call_control import EslCallControl
 from millicall.media.conversation import ConversationSession
 from millicall.models import AiAgent, CallMessage, Provider
+from millicall.telephony.esl import ESLConnectionClosed
+
+
+async def locked_bgapi(esl, command: str, *, lock: asyncio.Lock, reconnect=None):
+    """共有 ESL 接続を lock で直列化して bgapi し、接続断時は reconnect で張り直して再送する。
+
+    プランレビュー I6: 単一 ESL 接続を複数通話・複数 writer で共有する場合、並行する
+    bgapi の書き込みが混線しないよう共有 lock で直列化する（EslCallControl._bgapi と同型）。
+    reconnect で esl が差し替わった場合、呼び出し元が参照を更新できるよう「使用した esl」を
+    返す（再接続時は新 esl、通常時は渡された esl）。reconnect 未注入時は
+    ESLConnectionClosed をそのまま伝播する（後方互換）。
+    """
+    async with lock:
+        try:
+            await esl.bgapi(command)
+            return esl
+        except ESLConnectionClosed:
+            if reconnect is None:
+                raise
+            esl = await reconnect()
+            await esl.bgapi(command)
+            return esl
 
 
 class SessionRegistry:

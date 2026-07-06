@@ -65,6 +65,8 @@ def _build_outbound(state) -> OutboundCallService:
         fetch_enabled_trunks=lambda: _fetch_enabled_trunks(sessionmaker),
         hangup_registry=state.hangup_registry,
         ephemeral_store=state.ephemeral_store,
+        lock=state.esl_command_lock,
+        reconnect=state.esl_reconnect,
     )
 
 
@@ -183,6 +185,8 @@ def register_tools(mcp: FastMCP) -> None:
             tts=providers.tts,
             stt=providers.stt,
             tts_dir=state.settings.tts_cache_dir,
+            lock=state.esl_command_lock,
+            reconnect=state.esl_reconnect,
         )
 
     # -- §2 say_and_listen ----------------------------------------------------

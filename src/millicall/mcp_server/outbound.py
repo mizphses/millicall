@@ -34,7 +34,7 @@ from millicall.ai import registry as ai_registry
 from millicall.ai.llm.base import ChatMessage
 from millicall.crypto import SecretBox
 from millicall.mcp_server.ephemeral import EphemeralAgentSpec, EphemeralAgentStore
-from millicall.media.service import AnswerRegistry, HangupRegistry
+from millicall.media.service import AnswerRegistry, HangupRegistry, locked_bgapi
 from millicall.models import AiAgent, Provider
 
 # 外線とみなす番号プレフィクス（0 = 一般外線、184/186 = 発信者番号通知制御）。
@@ -221,6 +221,8 @@ class OutboundCallService:
         hangup_registry: HangupRegistry | None = None,
         ephemeral_store: EphemeralAgentStore | None = None,
         run_conversation: Callable[..., Awaitable[None]] | None = None,
+        lock: asyncio.Lock | None = None,
+        reconnect: Callable[[], Awaitable[_EslLike]] | None = None,
     ) -> None:
         self._esl = esl
         self._answer_registry = answer_registry
@@ -234,6 +236,16 @@ class OutboundCallService:
         # 終話（[END_CALL]/相手切断）で hangup_registry が解決される」実運用経路の
         # テスト差し替え点。実運用では None（converse は hangup_registry を待つだけ）。
         self._run_conversation = run_conversation
+        # 共有 ESL 接続の直列化（I6）: 未注入時は per-instance lock・再接続なしに
+        # フォールバックする（後方互換。接続断は呼び出し元へ伝播）。
+        self._lock = lock if lock is not None else asyncio.Lock()
+        self._reconnect = reconnect
+
+    async def _bgapi(self, command: str) -> None:
+        """共有 ESL 接続を lock で直列化し、接続断時は reconnect で張り直して再送する。"""
+        self._esl = await locked_bgapi(
+            self._esl, command, lock=self._lock, reconnect=self._reconnect
+        )
 
     async def _resolve_target(
         self, phone_number: str, caller_id: str, trunk: str
@@ -297,7 +309,7 @@ class OutboundCallService:
 
         self._answer_registry.register(call_uuid)
         command = f"originate {{{var_str}}}{dest} &park"
-        await self._esl.bgapi(command)
+        await self._bgapi(command)
 
         answered = await self._answer_registry.wait(call_uuid, timeout=timeout)
         if not answered:
@@ -387,7 +399,7 @@ class OutboundCallService:
         self._answer_registry.register(call_uuid)
         self._hangup_registry.register(call_uuid)
         try:
-            await self._esl.bgapi(f"originate {{{var_str}}}{dest} &park")
+            await self._bgapi(f"originate {{{var_str}}}{dest} &park")
 
             answered = await self._answer_registry.wait(call_uuid, timeout=answer_timeout)
             if not answered:
@@ -414,7 +426,7 @@ class OutboundCallService:
             hung_up = await self._hangup_registry.wait(call_uuid, timeout=timeout)
             if not hung_up:
                 # フォールバック終話（future 取り逃し/END_CALL 無し）。
-                await self._esl.bgapi(f"uuid_kill {call_uuid}")
+                await self._bgapi(f"uuid_kill {call_uuid}")
             if conv_task is not None and not conv_task.done():
                 conv_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
