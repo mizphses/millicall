@@ -31,6 +31,10 @@ class SessionRegistry:
     def pop(self, call_uuid: str):
         return self._entries.pop(call_uuid, None)
 
+    def all_uuids(self) -> list[str]:
+        """登録中のすべての call_uuid を返す（list_active_calls 用）。"""
+        return list(self._entries.keys())
+
 
 async def _load_provider(
     db: AsyncSession, box: SecretBox, pid: int
