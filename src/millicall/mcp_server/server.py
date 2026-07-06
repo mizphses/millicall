@@ -85,6 +85,12 @@ def build_mcp(
         """疎通確認用のダミーツール。"pong" を返します。"""
         return "pong"
 
+    # 契約 §1–§15 の 15 ツール + guide://outbound-calling リソースを登録（Task 6）。
+    # 循環 import 回避のため関数内 import。
+    from millicall.mcp_server.tools import register_tools
+
+    register_tools(mcp)
+
     return mcp
 
 
