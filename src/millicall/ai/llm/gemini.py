@@ -1,8 +1,11 @@
-import json
 from collections.abc import AsyncIterator
 
 import httpx
 
+from millicall.ai.llm._google_genai import (
+    build_generate_content_payload,
+    parse_sse_texts,
+)
 from millicall.ai.llm.base import ChatMessage
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -38,21 +41,7 @@ class GeminiLLM:
         )
 
     async def stream_chat(self, messages: list[ChatMessage]) -> AsyncIterator[str]:
-        system = "\n".join(m.content for m in messages if m.role == "system")
-        contents = [
-            {
-                "role": "model" if m.role == "assistant" else "user",
-                "parts": [{"text": m.content}],
-            }
-            for m in messages
-            if m.role in ("user", "assistant")
-        ]
-        payload: dict = {
-            "contents": contents,
-            "generationConfig": {"temperature": self._temperature},
-        }
-        if system:
-            payload["systemInstruction"] = {"parts": [{"text": system}]}
+        payload = build_generate_content_payload(messages, self._temperature)
         url = f"{_BASE_URL}/{self._model}:streamGenerateContent"
         params = {"alt": "sse"}
         headers = {
@@ -67,15 +56,5 @@ class GeminiLLM:
         ):
             resp.raise_for_status()
             async for line in resp.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[len("data:") :].strip()
-                try:
-                    obj = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                for cand in obj.get("candidates", []):
-                    for part in cand.get("content", {}).get("parts", []):
-                        text = part.get("text")
-                        if text:
-                            yield text
+                for text in parse_sse_texts(line):
+                    yield text

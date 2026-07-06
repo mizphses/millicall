@@ -35,6 +35,16 @@ def build_llm(kind: str, config: dict, api_key: str | None):
             model=config.get("model", "gemini-2.5-flash"),
             temperature=config.get("temperature", 0.7),
         )
+    if kind == "vertex_ai":
+        from millicall.ai.llm.vertex import VertexAILLM
+
+        return VertexAILLM(
+            sa_json=api_key,
+            project=config.get("project", ""),
+            location=config.get("location", "us-central1"),
+            model=config.get("model", "gemini-2.0-flash"),
+            temperature=config.get("temperature", 0.7),
+        )
     raise UnknownProviderKind(kind)
 
 
@@ -77,5 +87,6 @@ def build_stt(kind: str, config: dict, api_key: str | None):
             location=config.get("location", "global"),
             language=config.get("language", "ja-JP"),
             model=config.get("model", "chirp_2"),
+            api_key=api_key,
         )
     raise UnknownProviderKind(kind)

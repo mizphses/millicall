@@ -12,7 +12,7 @@ class ProviderCreate(BaseModel):
     type: ProviderType
     kind: ProviderKind
     config: dict[str, Any] = Field(default_factory=dict)
-    api_key: str | None = Field(default=None, max_length=512)
+    api_key: str | None = Field(default=None, max_length=8192)
     enabled: bool = True
 
 
@@ -21,7 +21,7 @@ class ProviderUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=100)
     config: dict[str, Any] | None = None
-    api_key: str | None = Field(default=None, max_length=512)
+    api_key: str | None = Field(default=None, max_length=8192)
     enabled: bool | None = None
 
 

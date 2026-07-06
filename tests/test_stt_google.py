@@ -144,6 +144,64 @@ def test_registry_builds_google_stt_without_package():
     assert isinstance(provider, GoogleStreamingSTT)
 
 
+def test_api_key_json_builds_credentials(monkeypatch):
+    """api_key に SA JSON が渡ると from_service_account_info で credentials を作り、
+    SpeechClient(credentials=...) を生成する（実 GCP 不要・monkeypatch で検証）。"""
+    import sys
+    import types
+
+    captured: dict = {}
+
+    sa_module = types.ModuleType("google.oauth2.service_account")
+
+    class _Creds:
+        pass
+
+    _sentinel_creds = _Creds()
+
+    class _Credentials:
+        @staticmethod
+        def from_service_account_info(info):
+            captured["info"] = info
+            return _sentinel_creds
+
+    sa_module.Credentials = _Credentials
+
+    speech_module = types.ModuleType("google.cloud.speech_v2")
+
+    class _SpeechClient:
+        def __init__(self, credentials=None):
+            captured["credentials"] = credentials
+
+    speech_module.SpeechClient = _SpeechClient
+
+    monkeypatch.setitem(sys.modules, "google.oauth2.service_account", sa_module)
+    monkeypatch.setitem(sys.modules, "google.cloud.speech_v2", speech_module)
+
+    sa_json = '{"type":"service_account","project_id":"proj-x","private_key":"SECRET"}'
+    stt = GoogleStreamingSTT(project="proj-x", api_key=sa_json)
+    client = stt._ensure_client()
+
+    assert isinstance(client, _SpeechClient)
+    assert captured["credentials"] is _sentinel_creds
+    assert captured["info"]["type"] == "service_account"
+
+
+def test_repr_does_not_leak_sa_json():
+    sa_json = '{"type":"service_account","private_key":"SUPERSECRET"}'
+    stt = GoogleStreamingSTT(project="p", api_key=sa_json)
+    text = repr(stt)
+    assert "SUPERSECRET" not in text
+    assert "service_account" not in text
+
+
+def test_registry_passes_api_key_to_google_stt():
+    sa_json = '{"type":"service_account","private_key":"SECRET"}'
+    provider = build_stt("google_stt", {"project": "p"}, sa_json)
+    assert isinstance(provider, GoogleStreamingSTT)
+    assert provider._api_key == sa_json
+
+
 def test_registry_unknown_kind_still_raises():
     with pytest.raises(UnknownProviderKind):
         build_stt("nope", {}, None)
