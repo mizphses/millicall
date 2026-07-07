@@ -9,30 +9,52 @@
       </condition>
     </extension>
 {% if outbound_trunk %}
+    <!--
+      発信権限ゲート（トールフラウド対策 §7）
+      チャンネル変数 ${calling_permission} はディレクトリの <variable> で内線ごとに設定される。
+      - "international": 国際発信可（global allowlist との AND 条件）
+      - "domestic"     : 国内 PSTN まで（デフォルト）
+      - "internal"     : 内線のみ（国内 PSTN も不可）
+    -->
+
+    <!-- 国際発信 allowlist: "international" 権限かつ allowlist 一致の場合のみ通過 -->
 {% for prefix in international_allow_prefixes %}
     <extension name="outbound_intl_allow_{{ prefix }}">
       <condition field="destination_number" expression="^({{ prefix }}\d+)$">
-        <action application="set" data="effective_caller_id_number={{ outbound_trunk.caller_id }}"/>
-        <action application="set" data="effective_caller_id_name={{ outbound_trunk.caller_id }}"/>
-        <action application="set" data="hangup_after_bridge=true"/>
-        <action application="bridge" data="sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
-        <action application="hangup"/>
+        <condition field="${calling_permission}" expression="^international$">
+          <action application="set" data="effective_caller_id_number={{ outbound_trunk.caller_id }}"/>
+          <action application="set" data="effective_caller_id_name={{ outbound_trunk.caller_id }}"/>
+          <action application="set" data="hangup_after_bridge=true"/>
+          <action application="bridge" data="sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
+          <action application="hangup"/>
+          <anti-action application="log" data="WARNING calling_permission=${calling_permission} INTL_REJECTED: ${destination_number}"/>
+          <anti-action application="hangup" data="CALL_REJECTED"/>
+        </condition>
       </condition>
     </extension>
 {% endfor %}
+    <!-- 国際番号バックストップ: allowlist 外または権限不足を無条件ブロック -->
     <extension name="outbound_intl_block">
       <condition field="destination_number" expression="^(010\d+|00[1-9]\d+)$">
-        <action application="log" data="WARNING ===== INTL BLOCKED: ${destination_number} ====="/>
+        <action application="log" data="WARNING ===== INTL BLOCKED: ${destination_number} calling_permission=${calling_permission} ====="/>
         <action application="hangup" data="CALL_REJECTED"/>
       </condition>
     </extension>
+    <!--
+      国内 PSTN 発信: "domestic" または "international" 権限の場合のみ通過させる。
+      "internal" 権限の内線は CALL_REJECTED で拒否（トールフラウド対策）。
+    -->
     <extension name="outbound_external">
       <condition field="destination_number" expression="^(0\d+)$">
-        <action application="set" data="effective_caller_id_number={{ outbound_trunk.caller_id }}"/>
-        <action application="set" data="effective_caller_id_name={{ outbound_trunk.caller_id }}"/>
-        <action application="set" data="hangup_after_bridge=true"/>
-        <action application="bridge" data="sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
-        <action application="hangup"/>
+        <condition field="${calling_permission}" expression="^(domestic|international)$">
+          <action application="set" data="effective_caller_id_number={{ outbound_trunk.caller_id }}"/>
+          <action application="set" data="effective_caller_id_name={{ outbound_trunk.caller_id }}"/>
+          <action application="set" data="hangup_after_bridge=true"/>
+          <action application="bridge" data="sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
+          <action application="hangup"/>
+          <anti-action application="log" data="WARNING calling_permission=${calling_permission} DOMESTIC_REJECTED: ${destination_number}"/>
+          <anti-action application="hangup" data="CALL_REJECTED"/>
+        </condition>
       </condition>
     </extension>
 {% endif %}

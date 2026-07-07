@@ -27,6 +27,8 @@ class ExtensionConfig:
     number: str
     display_name: str
     sip_password: str = field(repr=False)
+    # 発信権限ティア: "internal" / "domestic" / "international"（デフォルト: "domestic"）
+    calling_permission: str = "domestic"
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,7 @@ class FreeswitchConfigWriter:
                     "number": ext.number,
                     "display_name": ext.display_name,
                     "sip_password": ext.sip_password,
+                    "calling_permission": ext.calling_permission,
                 },
             )
             written.append(self._write(f"directory/default/{ext.number}.xml", content))
@@ -152,7 +155,10 @@ class FreeswitchConfigWriter:
         written.append(
             self._write(
                 "dialplan/default.xml",
-                self._render("dialplan_default.xml.j2", {"outbound_trunk": outbound_trunk}),
+                self._render(
+                    "dialplan_default.xml.j2",
+                    {"outbound_trunk": outbound_trunk, "extensions": extensions},
+                ),
             )
         )
         written.append(

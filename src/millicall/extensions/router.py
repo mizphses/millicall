@@ -30,6 +30,7 @@ async def create_extension(
         display_name=body.display_name,
         sip_password=generate_sip_password(),
         enabled=True,
+        calling_permission=body.calling_permission,
     )
     session.add(ext)
     try:
@@ -72,6 +73,8 @@ async def update_extension(
         ext.display_name = body.display_name
     if body.enabled is not None:
         ext.enabled = body.enabled
+    if body.calling_permission is not None:
+        ext.calling_permission = body.calling_permission
     await session.commit()
     await session.refresh(ext)
     await listener.notify(session)

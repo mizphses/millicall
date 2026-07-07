@@ -71,7 +71,10 @@ class TelephonyChangeListener:
         )
         return [
             ExtensionConfig(
-                number=e.number, display_name=e.display_name, sip_password=e.sip_password
+                number=e.number,
+                display_name=e.display_name,
+                sip_password=e.sip_password,
+                calling_permission=e.calling_permission,
             )
             for e in result
         ]

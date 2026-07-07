@@ -89,6 +89,11 @@ class Extension(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )
+    # 発信権限ティア: "internal"（内線のみ）/ "domestic"（国内まで）/ "international"（国際可）
+    # デフォルトは "domestic"。国際発信はデフォルト禁止（トールフラウド対策 §7）。
+    calling_permission: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="domestic", server_default="domestic"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

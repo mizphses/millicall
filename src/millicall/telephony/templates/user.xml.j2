@@ -9,6 +9,8 @@
       <variable name="user_context" value="default"/>
       <variable name="effective_caller_id_name" value="{{ display_name }}"/>
       <variable name="effective_caller_id_number" value="{{ number }}"/>
+      <!-- 発信権限ティア: internal / domestic / international（トールフラウド対策 §7） -->
+      <variable name="calling_permission" value="{{ calling_permission }}"/>
     </variables>
   </user>
 </include>
