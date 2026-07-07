@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from millicall.ai_agents.router import router as ai_agents_router
 from millicall.audit_router import router as audit_router
+from millicall.auth.csrf import CsrfMiddleware
 from millicall.auth.router import router as auth_router
 from millicall.auth.service import ensure_admin_user
 from millicall.auth.totp_router import router as totp_router
@@ -222,6 +223,9 @@ def _mount_spa(app: FastAPI, static_dir: Path) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="millicall v2 core", lifespan=lifespan)
     app.state.settings = settings or get_settings()
+    # CSRF 保護ミドルウェア（double-submit cookie パターン）。
+    # ルーター登録より前に追加することで全ルートに適用される。
+    app.add_middleware(CsrfMiddleware)
     app.include_router(auth_router)
     app.include_router(totp_router)
     app.include_router(audit_router)

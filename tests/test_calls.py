@@ -8,6 +8,7 @@ from millicall.auth.security import hash_password
 from millicall.config import Settings
 from millicall.main import create_app
 from millicall.models import User
+from tests.conftest import CsrfAwareClient
 
 
 async def _fake_fs_capturing_originate():
@@ -64,7 +65,7 @@ async def call_env(tmp_path):
                        display_name="caller", role="admin", origin="local"))
             await s.commit()
         transport = ASGITransport(app=application)
-        async with AsyncClient(transport=transport, base_url="http://test") as c:
+        async with CsrfAwareClient(transport=transport, base_url="http://test") as c:
             await c.post("/api/auth/login", json={"username": "caller", "password": "Passw0rd1"})
             await c.post("/api/extensions", json={"number": "1001", "display_name": "A"})
             yield c, received
@@ -129,7 +130,7 @@ async def test_originate_esl_down_returns_503(tmp_path):
                        display_name="caller", role="admin", origin="local"))
             await s.commit()
         transport = ASGITransport(app=application)
-        async with AsyncClient(transport=transport, base_url="http://test") as c:
+        async with CsrfAwareClient(transport=transport, base_url="http://test") as c:
             await c.post("/api/auth/login", json={"username": "caller", "password": "Passw0rd1"})
             await c.post("/api/extensions", json={"number": "1001", "display_name": "A"})
             resp = await c.post("/api/calls", json={"from_extension": "1001", "to": "0312345678"})

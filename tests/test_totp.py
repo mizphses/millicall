@@ -705,16 +705,21 @@ def test_migration_0015_upgrade_downgrade(tmp_path):
 
 
 async def _new_client(app):
-    """app に対する新しい AsyncClient を返す。
+    """app に対する新しい CsrfAwareClient を返す。
 
     pytest-asyncio の fixture ではないため、
     テスト内で with ブロックなしに直接使いたいケース向け。
     cleanup は呼び出し元が行う（テスト終了まで接続を保持する）。
+
+    CsrfAwareClient を使うことで CSRF ミドルウェア有効時も
+    セッション Cookie 取得後の POST が自動的に X-CSRF-Token を付与する。
     """
-    from httpx import ASGITransport, AsyncClient
+    from httpx import ASGITransport
+
+    from tests.conftest import CsrfAwareClient
 
     transport = ASGITransport(app=app)
-    c = AsyncClient(transport=transport, base_url="http://test")
+    c = CsrfAwareClient(transport=transport, base_url="http://test")
     await c.__aenter__()
     return c
 

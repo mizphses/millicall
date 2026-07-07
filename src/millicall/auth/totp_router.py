@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.audit import get_client_ip, record_audit
 from millicall.auth.security import bump_session_epoch
+from millicall.auth.throttle import check_and_raise, record_failure
 from millicall.crypto import SecretBox
 from millicall.deps import get_current_user, get_secret_box, get_session
 from millicall.models import User
@@ -223,7 +224,22 @@ async def totp_verify(
     """TOTP コードを検証し、成功したら TOTP を有効化してリカバリコードを返す。
 
     リカバリコードはここで一度だけ平文で返す。以降は取得不可。
+    セッション取得済みのエンドポイントでも TOTP コードを何度も試行できるため
+    レート制限を適用する（H-2）。
     """
+    settings = request.app.state.settings
+    ip = get_client_ip(request)
+
+    # レート制限チェック（コード検証前に行う）
+    await check_and_raise(
+        session,
+        ip=ip,
+        username=user.username,
+        max_attempts=settings.login_max_attempts,
+        lockout_seconds=settings.login_lockout_seconds,
+        actor_user_id=user.id,
+    )
+
     if user.totp_secret is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -240,12 +256,14 @@ async def totp_verify(
 
     totp = pyotp.TOTP(plain_secret)
     if not totp.verify(body.code, valid_window=1):
+        # 失敗を記録する（H-2: TOTP verify も試行回数を追跡する）
+        await record_failure(session, ip=ip, username=user.username, action="totp")
         await record_audit(
             session,
             actor_user_id=user.id,
             actor_label=user.username,
             action="totp.verify_failure",
-            ip_address=get_client_ip(request),
+            ip_address=ip,
             # コードは audit detail に記録しない
         )
         await session.commit()
@@ -284,7 +302,22 @@ async def totp_disable(
     """TOTP を無効化する。有効な TOTP コードまたはリカバリコードが必要。
 
     bump_session_epoch を呼んで既存セッションを全て失効させる。
+    セッション取得済みのエンドポイントでも TOTP コードを何度も試行できるため
+    レート制限を適用する（H-2）。
     """
+    settings = request.app.state.settings
+    ip = get_client_ip(request)
+
+    # レート制限チェック（コード検証前に行う）
+    await check_and_raise(
+        session,
+        ip=ip,
+        username=user.username,
+        max_attempts=settings.login_max_attempts,
+        lockout_seconds=settings.login_lockout_seconds,
+        actor_user_id=user.id,
+    )
+
     if not user.totp_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -293,12 +326,14 @@ async def totp_disable(
 
     method = _verify_totp_or_recovery(user, box, body.code)
     if method is None:
+        # 失敗を記録する（H-2: TOTP disable も試行回数を追跡する）
+        await record_failure(session, ip=ip, username=user.username, action="totp")
         await record_audit(
             session,
             actor_user_id=user.id,
             actor_label=user.username,
             action="totp.disable_failure",
-            ip_address=get_client_ip(request),
+            ip_address=ip,
         )
         await session.commit()
         raise HTTPException(
@@ -317,7 +352,7 @@ async def totp_disable(
         actor_user_id=user.id,
         actor_label=user.username,
         action="totp.disable",
-        ip_address=get_client_ip(request),
+        ip_address=ip,
     )
     await session.commit()
 

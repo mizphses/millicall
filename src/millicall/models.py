@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy import false as sa_false
 from sqlalchemy import true as sa_true
 from sqlalchemy.orm import Mapped, mapped_column
@@ -339,6 +339,32 @@ class NetworkConfig(Base):
             if not k.startswith("_") and k != "tailscale_auth_key_encrypted"
         ]
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class LoginAttempt(Base):
+    """ログイン失敗試行の記録（レート制限・ロックアウト用）。
+
+    key + key_type でレート制限の対象を識別する。
+    created_at ウィンドウ内のカウントで上限超過を検出する。
+    """
+
+    __tablename__ = "login_attempts"
+    __table_args__ = (
+        Index("ix_login_attempts_key_created_at", "key", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # レート制限キー: IP アドレスまたはユーザー名の値
+    key: Mapped[str] = mapped_column(String(255), nullable=False)
+    # "ip" または "username"
+    key_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # どのエンドポイントでの失敗か: "login" / "totp"
+    action: Mapped[str] = mapped_column(String(30), nullable=False, server_default="login")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
 
 
 class Device(Base):

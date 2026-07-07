@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     # （レビュー M-1）。ステートレス署名チケットのため、この窓 = 総当たり可能時間。
     totp_ticket_max_age: int = 120
 
+    # ログイン試行レート制限（Phase 6 Task 3）
+    # 同一 IP またはユーザー名について、この回数を超えると lockout_seconds の間ブロックする。
+    login_max_attempts: int = 10
+    # ロックアウト期間（秒）。この期間内の失敗数が max_attempts を超えると 429 を返す。
+    login_lockout_seconds: int = 300
+
+    # CSRF 保護 (Phase 6 Task 3)
+    # double-submit cookie に使用する Cookie 名。non-HttpOnly で JS から読み取れる。
+    csrf_cookie_name: str = "millicall_csrf"
+
     # --- MCP サーバー (Phase 4a) ---
     # /mcp を有効化するか（False で完全に非マウント）。
     mcp_enabled: bool = True

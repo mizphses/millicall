@@ -10,6 +10,7 @@ from millicall.auth.security import hash_password
 from millicall.config import Settings
 from millicall.main import create_app
 from millicall.models import User
+from tests.conftest import CsrfAwareClient
 
 # ---------------------------------------------------------------------------
 # Wire-server helpers
@@ -74,7 +75,7 @@ async def _make_admin_client(application):
         )
         await session.commit()
     transport = ASGITransport(app=application)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    async with CsrfAwareClient(transport=transport, base_url="http://test") as c:
         await c.post("/api/auth/login", json={"username": "hooktest", "password": "Passw0rd1"})
         yield c
 
