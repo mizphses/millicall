@@ -24,6 +24,7 @@ from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
 from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
+from millicall.network.client import NetdClient
 from millicall.providers.router import router as providers_router
 from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
@@ -102,6 +103,10 @@ async def lifespan(app: FastAPI):
     app.state.hangup_registry = HangupRegistry()
     app.state.ephemeral_store = EphemeralAgentStore()
     app.state.dtmf_collector = DtmfCollector()
+
+    # netd UNIX ソケットクライアント（接続は遅延生成 — 呼び出し時に毎回接続する）。
+    # netd が起動していない開発・テスト環境でも app 起動は止めない。
+    app.state.netd_client = NetdClient(settings.netd_socket_path)
 
     # AI 再生制御用の共有 ESL コマンドクライアント（発着信制御と別接続）。
     # ESL 未到達（接続拒否・ハング）でも起動を止めない — timeout 付きで試行し warning のみ。
