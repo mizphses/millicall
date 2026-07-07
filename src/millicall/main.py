@@ -24,7 +24,11 @@ from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
 from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
+from millicall.network.client import NetdClient
+from millicall.network.router import router as network_router
 from millicall.providers.router import router as providers_router
+from millicall.provisioning.devices_router import router as devices_router
+from millicall.provisioning.router import router as provisioning_router
 from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
 from millicall.telephony.esl import ESLClient
@@ -102,6 +106,10 @@ async def lifespan(app: FastAPI):
     app.state.hangup_registry = HangupRegistry()
     app.state.ephemeral_store = EphemeralAgentStore()
     app.state.dtmf_collector = DtmfCollector()
+
+    # netd UNIX ソケットクライアント（接続は遅延生成 — 呼び出し時に毎回接続する）。
+    # netd が起動していない開発・テスト環境でも app 起動は止めない。
+    app.state.netd_client = NetdClient(settings.netd_socket_path)
 
     # AI 再生制御用の共有 ESL コマンドクライアント（発着信制御と別接続）。
     # ESL 未到達（接続拒否・ハング）でも起動を止めない — timeout 付きで試行し warning のみ。
@@ -185,7 +193,7 @@ async def lifespan(app: FastAPI):
 # SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。
 # これらに該当する未定義 GET は 404 を返し、API のセマンティクスを保つ。
 _SPA_EXCLUDED_PREFIXES = frozenset(
-    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known"}
+    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known", "provisioning"}
 )
 
 
@@ -224,6 +232,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ai_agents_router)
     app.include_router(tts_cache_router)
     app.include_router(workflows_router)
+    app.include_router(network_router)
+    app.include_router(provisioning_router)
+    app.include_router(devices_router)
 
     @app.exception_handler(WorkflowValidationError)
     async def _workflow_validation_handler(_request, exc: WorkflowValidationError):

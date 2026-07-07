@@ -37,3 +37,19 @@ export const WORKFLOWS_KEY = ["workflows"] as const;
 export const workflowKey = (id: number) => ["workflows", id] as const;
 /** node-types カタログ（更新不要なので単独キー）。 */
 export const WORKFLOW_NODE_TYPES_KEY = ["workflow-node-types"] as const;
+
+// ─────────────────────────────────────────────────────────
+// ネットワーク設定用キー（Phase 5 T4）
+// ─────────────────────────────────────────────────────────
+
+/** ネットワーク設定取得 / PUT 後の invalidate に使う。 */
+export const NETWORK_CONFIG_KEY = ["network-config"] as const;
+/** Tailscale ステータスポーリング用キー（config とは別トップレベル）。 */
+export const NETWORK_TAILSCALE_STATUS_KEY = ["network-tailscale-status"] as const;
+
+// ─────────────────────────────────────────────────────────
+// デバイス管理用キー（Phase 5 T6）
+// ─────────────────────────────────────────────────────────
+
+/** デバイス一覧取得 / sync / delete 後の invalidate に使う。 */
+export const DEVICES_KEY = ["devices"] as const;

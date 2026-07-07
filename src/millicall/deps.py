@@ -9,6 +9,7 @@ from millicall.models import User
 
 if TYPE_CHECKING:
     from millicall.config import Settings
+    from millicall.network.client import NetdClient
     from millicall.secrets_store import Secrets
 
 
@@ -38,6 +39,21 @@ def get_change_listener(request: Request):
 
 def get_esl_factory(request: Request):
     return request.app.state.esl_factory
+
+
+def get_netd_client(request: Request) -> "NetdClient":
+    """app.state から NetdClient を取得する FastAPI 依存関係。
+
+    netd UNIX ソケットクライアントを返す。クライアントは接続を遅延生成するため、
+    netd が未起動の状態でも依存関係の解決自体は成功する。
+
+    Args:
+        request: FastAPI リクエストオブジェクト。
+
+    Returns:
+        app.state に設定済みの NetdClient インスタンス。
+    """
+    return request.app.state.netd_client
 
 
 async def get_current_user(

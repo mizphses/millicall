@@ -20,6 +20,8 @@ import { ContactsPage } from "../pages/ContactsPage";
 import { CdrPage } from "../pages/CdrPage";
 import { WorkflowsPage } from "../pages/WorkflowsPage";
 import { WorkflowEditorPage } from "../pages/WorkflowEditorPage";
+import { NetworkPage } from "../pages/NetworkPage";
+import { DevicesPage } from "../pages/DevicesPage";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -114,6 +116,18 @@ const workflowEditorRoute = createRoute({
   component: WorkflowEditorPage,
 });
 
+const networkRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/network",
+  component: NetworkPage,
+});
+
+const devicesRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/devices",
+  component: DevicesPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   authLayoutRoute.addChildren([
@@ -127,6 +141,8 @@ const routeTree = rootRoute.addChildren([
     cdrRoute,
     workflowsRoute,
     workflowEditorRoute,
+    networkRoute,
+    devicesRoute,
   ]),
 ]);
 
