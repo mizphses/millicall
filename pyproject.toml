@@ -19,6 +19,7 @@ dependencies = [
     "google-auth>=2",
     "mcp>=1.28.1",
     "aiosmtplib>=5.1.2",
+    "pyotp>=2.10.0",
 ]
 
 [project.optional-dependencies]

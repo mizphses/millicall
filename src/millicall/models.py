@@ -37,17 +37,25 @@ class User(Base):
     session_epoch: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
-    # Phase 6 (TOTP 2FA) 用に予約。Phase 1 では常に NULL。
+    # SecretBox（Fernet）で暗号化した base32 TOTP シークレット。
+    # 平文は /totp/setup レスポンスでのみ返す。ログ・repr・audit に出してはならない。
     totp_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # totp_secret が存在しても verify 完了前は False。ログインゲートに使うのはこちら。
+    totp_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    # Argon2 ハッシュ済みリカバリコードの JSON 配列。平文は格納しない。
+    recovery_codes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
 
     def __repr__(self) -> str:
-        """秘密フィールド(totp_secret/hashed_password)を除外したrepr。"""
+        """秘密フィールド(totp_secret/recovery_codes/hashed_password)を除外したrepr。"""
+        hidden = frozenset({"totp_secret", "recovery_codes", "hashed_password"})
         attrs = [
             f"{k}={v!r}" for k, v in self.__dict__.items()
-            if not k.startswith("_") and k not in ("totp_secret", "hashed_password")
+            if not k.startswith("_") and k not in hidden
         ]
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
 

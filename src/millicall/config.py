@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     cookie_secure: bool = True
     cookie_samesite: str = "lax"
 
+    # --- 認証 (Phase 6) ---
+    # True のとき UI は TOTP 登録を強制する（バックエンドはフラグを公開するのみ；
+    # 強制の実施は T9 フロントエンド担当）。
+    totp_required: bool = False
+    # TOTP チャレンジチケットの有効期間（秒）。デフォルト 5 分。
+    totp_ticket_max_age: int = 300
+
     # --- MCP サーバー (Phase 4a) ---
     # /mcp を有効化するか（False で完全に非マウント）。
     mcp_enabled: bool = True

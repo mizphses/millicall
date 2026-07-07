@@ -12,6 +12,7 @@ from millicall.ai_agents.router import router as ai_agents_router
 from millicall.audit_router import router as audit_router
 from millicall.auth.router import router as auth_router
 from millicall.auth.service import ensure_admin_user
+from millicall.auth.totp_router import router as totp_router
 from millicall.call_messages.router import router as call_messages_router
 from millicall.calls.router import router as calls_router
 from millicall.cdr.router import router as cdr_router
@@ -222,6 +223,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="millicall v2 core", lifespan=lifespan)
     app.state.settings = settings or get_settings()
     app.include_router(auth_router)
+    app.include_router(totp_router)
     app.include_router(audit_router)
     app.include_router(contacts_router)
     app.include_router(extensions_router)
