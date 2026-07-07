@@ -8,6 +8,7 @@ import {
   Bot,
   BookUser,
   History,
+  GitBranch,
 } from "lucide-react";
 
 /** サイドナビとヘッダ題で共有するルート定義。 */
@@ -28,6 +29,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/ai-agents",  label: "AI エージェント",  icon: React.createElement(Bot,             { size: ICON_SIZE }) },
   { path: "/contacts",   label: "電話帳",           icon: React.createElement(BookUser,        { size: ICON_SIZE }) },
   { path: "/cdr",        label: "通話履歴",         icon: React.createElement(History,         { size: ICON_SIZE }) },
+  { path: "/workflows",  label: "ワークフロー",     icon: React.createElement(GitBranch,       { size: ICON_SIZE }) },
 ];
 
 /** パスから画面題を引く（ヘッダ用）。 */

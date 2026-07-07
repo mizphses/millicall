@@ -18,6 +18,7 @@ dependencies = [
     "webrtcvad-wheels>=2.0.14",
     "google-auth>=2",
     "mcp>=1.28.1",
+    "aiosmtplib>=5.1.2",
 ]
 
 [project.optional-dependencies]

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Callable
@@ -7,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.config import Settings
-from millicall.models import Extension, Route, Trunk
+from millicall.models import Extension, Route, Trunk, Workflow
 from millicall.secrets_store import Secrets
 from millicall.telephony.esl import ESLClient, ESLError
 from millicall.telephony.fsconfig import (
@@ -97,14 +98,26 @@ class TelephonyChangeListener:
         result = await session.scalars(
             select(Route).where(Route.enabled.is_(True)).order_by(Route.match_number)
         )
-        return [
-            RouteConfig(
+        routes: list[RouteConfig] = []
+        for r in result:
+            ring_count = 0
+            if r.target_type == "workflow":
+                try:
+                    wf = await session.get(Workflow, int(r.target_value))
+                    if wf is not None:
+                        defn = json.loads(wf.definition_json)
+                        start_nodes = [n for n in defn.get("nodes", []) if n.get("type") == "start"]
+                        if start_nodes:
+                            ring_count = int(start_nodes[0].get("config", {}).get("ring_count", 0))
+                except Exception:
+                    ring_count = 0  # any parse error -> default 0, never raise
+            routes.append(RouteConfig(
                 match_number=r.match_number,
                 target_type=r.target_type,
                 target_value=r.target_value,
-            )
-            for r in result
-        ]
+                ring_count=ring_count,
+            ))
+        return routes
 
     async def regenerate(self, session: AsyncSession) -> None:
         configs = await self._load_configs(session)

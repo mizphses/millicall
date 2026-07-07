@@ -39,6 +39,20 @@
         <action application="park"/>
       </condition>
     </extension>
+{% elif route.target_type == 'workflow' %}
+    <extension name="inbound_wf_{{ route.match_number }}">
+      <condition field="destination_number" expression="^{{ route.match_number | re_escape }}$">
+        <action application="log" data="INFO ===== INBOUND {{ route.match_number }} -> workflow {{ route.target_value }} ====="/>
+        <action application="set" data="verbose_events=true"/>
+        <action application="set" data="millicall_workflow={{ route.target_value }}"/>
+        {% if route.ring_count > 0 %}
+        <action application="ring_ready"/>
+        <action application="sleep" data="{{ route.ring_count * 6000 }}"/>
+        {% endif %}
+        <action application="answer"/>
+        <action application="park"/>
+      </condition>
+    </extension>
 {% endif %}
 {% endfor %}
     <extension name="inbound_no_route">

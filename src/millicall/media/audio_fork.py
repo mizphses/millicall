@@ -14,6 +14,7 @@ import logging
 from fastapi import FastAPI, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import (
     AnswerRegistry,
     HangupRegistry,
@@ -90,10 +91,14 @@ class MediaEventRouter:
         reconnect=None,
         answer_registry: AnswerRegistry | None = None,
         hangup_registry: HangupRegistry | None = None,
+        dtmf_collector: DtmfCollector | None = None,
+        workflow_runner=None,
     ) -> None:
         self._registry = registry
         self._answer_registry = answer_registry
         self._hangup_registry = hangup_registry
+        self._dtmf_collector = dtmf_collector
+        self._workflow_runner = workflow_runner
         self._esl = esl
         # 末尾スラッシュを除去して URL 組み立てを决定論的にする
         self._ws_base_url = ws_base_url.rstrip("/") if ws_base_url else None
@@ -101,6 +106,8 @@ class MediaEventRouter:
         self._reconnect = reconnect
         # CHANNEL_ANSWER の重複や再発火で二重起動しないよう、起動済み uuid を記録する
         self._started: set[str] = set()
+        # バックグラウンドタスクへの強参照を保持し GC による途中破棄を防ぐ。
+        self._bg_tasks: set[asyncio.Task] = set()
 
     async def handle(self, event: dict) -> None:
         name = event.get("Event-Name")
@@ -116,10 +123,18 @@ class MediaEventRouter:
                 if uuid:
                     self._answer_registry.resolve(uuid)
             await self._maybe_start_audio_stream(event)
+            await self._maybe_start_workflow(event)
+        elif name == "DTMF":
+            uuid = event.get("Unique-ID") or event.get("Channel-Call-UUID") or ""
+            digit = event.get("DTMF-Digit") or ""
+            if self._dtmf_collector is not None and uuid and digit:
+                self._dtmf_collector.feed(uuid, digit)
         elif name == "CHANNEL_HANGUP_COMPLETE":
             uuid = event.get("Channel-Call-UUID") or event.get("Unique-ID") or ""
             if self._hangup_registry is not None and uuid:
                 self._hangup_registry.resolve(uuid)
+            if self._dtmf_collector is not None and uuid:
+                self._dtmf_collector.unregister(uuid)
             self._registry.pop(uuid)
             self._started.discard(uuid)
 
@@ -152,6 +167,27 @@ class MediaEventRouter:
                     raise
                 self._esl = await self._reconnect()
                 await self._esl.bgapi(command)
+
+    async def _maybe_start_workflow(self, event: dict) -> None:
+        """variable_millicall_workflow があればワークフロー実行をバックグラウンドタスクで起動する。"""
+        if self._workflow_runner is None:
+            return
+        workflow_value = event.get("variable_millicall_workflow")
+        if not workflow_value:
+            return
+        uuid = event.get("Unique-ID") or event.get("Channel-Call-UUID") or ""
+        if not uuid or uuid in self._started:
+            return
+        self._started.add(uuid)
+        try:
+            workflow_id = int(workflow_value)
+        except (ValueError, TypeError):
+            logger.warning("invalid millicall_workflow value %r for uuid=%s", workflow_value, uuid)
+            self._started.discard(uuid)
+            return
+        task = asyncio.create_task(self._workflow_runner.start(uuid, workflow_id))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
 
 async def _build_ephemeral_session(state, call_uuid: str):

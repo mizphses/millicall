@@ -28,3 +28,12 @@ export const DASHBOARD_KEYS = {
   aiAgentsCount: ["dashboard", "ai-agents-count"] as const,
   recentCdr: ["dashboard", "recent-cdr"] as const,
 } as const;
+
+// ─────────────────────────────────────────────────────────
+// ワークフロー用キー（一覧 vs 個別を分離して型衝突を防ぐ）
+// ─────────────────────────────────────────────────────────
+export const WORKFLOWS_KEY = ["workflows"] as const;
+/** 個別ワークフロー取得（ [workflows, id] でネームスペース分離）。 */
+export const workflowKey = (id: number) => ["workflows", id] as const;
+/** node-types カタログ（更新不要なので単独キー）。 */
+export const WORKFLOW_NODE_TYPES_KEY = ["workflow-node-types"] as const;

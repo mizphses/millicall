@@ -34,6 +34,7 @@ class RouteConfig:
     match_number: str
     target_type: str
     target_value: str
+    ring_count: int = 0
 
 
 @dataclass(frozen=True)
