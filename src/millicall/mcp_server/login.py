@@ -131,6 +131,16 @@ async def mcp_login_callback(
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
+    # 無効化されたユーザーは MCP OAuth も通さない（Phase 6 でユーザー無効化が追加された。
+    # cookie セッションは get_current_user が enabled を見るが、MCP は別 Bearer 面のためここで明示）。
+    if not user.enabled:
+        return HTMLResponse(
+            "<html><body><script>"
+            'alert("このアカウントは無効化されています");history.back();'
+            "</script></body></html>",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
     if user.role not in _ALLOWED_ROLES:
         return HTMLResponse(
             "<html><body><script>"

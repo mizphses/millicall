@@ -29,7 +29,8 @@ class User(Base):
     origin: Mapped[str] = mapped_column(
         String(20), nullable=False, default="local", server_default="local"
     )
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # UNIQUE（migration 0017）。SQLite は複数 NULL を許容するためローカル既定 admin 等は影響なし。
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True, index=True)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )
