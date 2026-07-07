@@ -367,55 +367,73 @@ async def test_delete_self_blocked(app, client, user_factory):
     assert r.status_code == 400
 
 
-async def test_delete_last_admin_blocked(app, client, user_factory):
-    """唯一の管理者(自分以外)を削除しようとすると 400。
+async def test_delete_last_admin_blocked(app, user_factory):
+    """delete_user ルートハンドラーの last-admin guard を直接呼び出してユニットテストする。
 
-    シナリオ:
-    - admin_a と admin_b の 2 人を作成。
-    - admin_b でログイン。
-    - DB で admin_a 以外の全 admin(admin_b と初期 admin)を無効化 → admin_a が唯一の有効 admin。
-    - admin_b でログインしたクライアントとして admin_a を削除しようとする → 400。
-    ただし admin_b が無効化されているとセッションが revoked になるため、
-    代わりに admin_b が有効な状態で admin_a を唯一の有効 admin にする方法を使う:
-    - admin_a を有効な唯一の admin にする。
-    - admin_b を有効な admin としてログインしたまま admin_a を削除しようとする
-      → これは成功してしまう(admin_b がまだ有効 admin として残るから)。
-    結論: last-admin guard を DELETE でテストするには:
-    - admin_b でログインして admin_a を削除。admin_b が唯一に。
-    - admin_b でもう一度 admin_a を削除しようとする → 404(既に削除済み)。
-    実際のテスト: admin_x(唯一 enabled admin) が admin_y(別 admin)から削除されることを防ぐために
-    admin_x と admin_y が両方 enabled のときは削除できる。
-    → 唯一 enabled admin の削除ブロックは:
-      「削除しようとする対象が唯一の enabled admin」のとき。
-      「削除操作を行う人」も admin でないと API にアクセスできない。
-      → 削除操作を行う人が admin → 2 人以上の admin がいる → guard は発動しない。
-    → 唯一可能なシナリオ: 削除操作者 admin_b が有効で、ターゲット admin_a が唯一の enabled admin。
-      これは admin_b も enabled → 2 人なので guard 発動しない。
-    よって DELETE last-admin guard は self-delete シナリオでのみ観測できる。
-    本テストでは: admin_a が唯一の enabled admin の状態で admin_a が自分を DELETE → 400(self-delete)。
+    【なぜ直接呼び出しか】
+    HTTP スタック経由で last-admin guard（router.py lines 256-263）を到達させることは
+    構造的に不可能: ガードに到達するには actor が有効な admin である必要があるが、
+    actor が有効な admin の場合は enabled admin が必ず 2 人以上存在するため
+    _count_enabled_admins が 1 以下になれない。self-delete 分岐（lines 246-250）が
+    先にある問題も別途あるが、上記の理由が本質的な原因。
+
+    【テスト戦略】
+    - target: 唯一の enabled admin としてDB に作成する。
+    - actor: 別の admin として DB に作成後、DB 上で enabled=False に設定する。
+      これにより _count_enabled_admins(session) == 1（target のみ）となる。
+      actor.id != target.id なので self-delete 分岐はスキップされ、
+      last-admin guard コードパスに正確に到達する。
+    - require_admin / get_current_user をバイパスして delete_user を直接 await する。
+    - HTTPException(status_code=400, detail="最後の管理者...") が送出されることを検証。
     """
-    from millicall.models import User
+    from unittest.mock import MagicMock
 
-    admin_a_name, admin_a_pw = await user_factory(
-        username="lastadmindel", password="Passw0rd1", role="admin"
-    )
-    await _login_as(client, admin_a_name, admin_a_pw)
+    import pytest
+    from fastapi import HTTPException
+
+    from millicall.models import User
+    from millicall.users.router import delete_user
 
     sm = app.state.sessionmaker
+
+    # target: 唯一の有効な管理者
+    target_name, _ = await user_factory(username="lastadmin_target", password="Passw0rd1", role="admin")
+    # actor: 別の管理者（後で DB 上で無効化する）
+    actor_name, _ = await user_factory(username="lastadmin_actor", password="Passw0rd1", role="admin")
+
     async with sm() as session:
-        admin_a = await session.scalar(select(User).where(User.username == admin_a_name))
-        admin_a_id = admin_a.id
-        # admin_a 以外の全 admin を無効化 → admin_a が唯一の有効 admin
+        target = await session.scalar(select(User).where(User.username == target_name))
+        actor = await session.scalar(select(User).where(User.username == actor_name))
+        target_id = target.id
+
+        # target 以外のすべての admin（初期 admin 含む）を無効化 →
+        # target が唯一の enabled admin になる
         others = await session.scalars(
-            select(User).where(User.role == "admin", User.id != admin_a_id)
+            select(User).where(User.role == "admin", User.id != target_id)
         )
         for other in others:
             other.enabled = False
         await session.commit()
 
-    # admin_a が自分を削除しようとする → 400(self-delete が先, last-admin guard も適用可)
-    r = await client.delete(f"/api/users/{admin_a_id}")
-    assert r.status_code == 400
+        # actor オブジェクトを最新状態（enabled=False）で再取得
+        await session.refresh(actor)
+
+        # request.client を None にしておくことで get_client_ip が None を返す
+        fake_request = MagicMock()
+        fake_request.client = None
+
+        # last-admin guard に到達する: actor.id != target.id → self-delete スキップ
+        # enabled admin は target のみ → admin_count == 1 → guard 発動
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_user(
+                user_id=target_id,
+                request=fake_request,
+                session=session,
+                current_user=actor,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "最後の管理者" in exc_info.value.detail
 
 
 # ---------------------------------------------------------------------------
