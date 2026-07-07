@@ -38,6 +38,7 @@ from millicall.scim.router import api_router as scim_api_router
 from millicall.scim.router import scim_router
 from millicall.secrets_store import load_or_create_secrets
 from millicall.system.router import router as system_router
+from millicall.users.router import router as users_router
 from millicall.telephony.esl import ESLClient
 from millicall.telephony.events import CdrRecorder, EslEventListener
 from millicall.telephony.service import (
@@ -251,6 +252,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(scim_api_router)
     app.include_router(scim_router)
     app.include_router(system_router)
+    app.include_router(users_router)
 
     @app.exception_handler(WorkflowValidationError)
     async def _workflow_validation_handler(_request, exc: WorkflowValidationError):
