@@ -30,12 +30,23 @@ ctx への要求:
 
 from __future__ import annotations
 
+import re
 import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from millicall.workflows.executor import register_handler
+
+# mailbox はワークフロー作者が任意に設定できるため、録音パスに補間する前に
+# 安全な slug へ正規化する（英数・アンダースコア・ハイフン以外を "_" に置換）。
+# これにより ESL メタ文字・パス区切りの混入を防ぐ（record() 側でも二重に検証）。
+_MAILBOX_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _safe_mailbox(mailbox: str) -> str:
+    slug = _MAILBOX_SANITIZE_RE.sub("_", mailbox or "")[:64]
+    return slug or "default"
 
 if TYPE_CHECKING:
     from millicall.workflows.context import ChannelContext
@@ -133,7 +144,7 @@ async def handle_voicemail(node: object, ctx: ChannelContext) -> None:
         vm_dir = _voicemail_dir(ctx)
         vm_dir.mkdir(parents=True, exist_ok=True)
         ts = int(time.time())
-        path_str = str(vm_dir / f"vm_{ctx.uuid}_{config.mailbox}_{ts}.wav")
+        path_str = str(vm_dir / f"vm_{ctx.uuid}_{_safe_mailbox(config.mailbox)}_{ts}.wav")
         await ctx.primitives.record(path_str, config.max_seconds)
         ctx.set_var(_VOICEMAIL_PATH_VAR, path_str)
     else:

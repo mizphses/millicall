@@ -681,6 +681,98 @@ async def test_api_call_public_ip_is_allowed() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# SSRF ガード — 追加のバイパス回帰（正規化 / 分類フラグ / TOCTOU 固定）
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_api_call_ssrf_ipv4_mapped_ipv6_loopback_blocked() -> None:
+    """IPv4-mapped IPv6 (::ffff:127.0.0.1) → 正規化してブロック。"""
+    ctx = make_ctx()
+    node = make_api_call_node(url="http://example.com/api")
+
+    mapped = [(socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::ffff:127.0.0.1", 80, 0, 0))]
+    with patch("socket.getaddrinfo", return_value=mapped):
+        result = await handle_api_call(node, ctx)
+
+    assert result == "error"
+
+
+@pytest.mark.asyncio
+async def test_api_call_ssrf_cgnat_100_64_blocked() -> None:
+    """CGNAT 帯 (100.64.0.0/10) → is_private で塞ぐ（旧 CIDR 表の穴）。"""
+    ctx = make_ctx()
+    node = make_api_call_node(url="http://example.com/api")
+
+    cgnat = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("100.64.1.1", 80))]
+    with patch("socket.getaddrinfo", return_value=cgnat):
+        result = await handle_api_call(node, ctx)
+
+    assert result == "error"
+
+
+@pytest.mark.asyncio
+async def test_api_call_ssrf_unspecified_0_0_0_0_blocked() -> None:
+    """0.0.0.0/8 → is_unspecified/is_reserved で塞ぐ（旧 CIDR 表の穴）。"""
+    ctx = make_ctx()
+    node = make_api_call_node(url="http://example.com/api")
+
+    unspec = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("0.0.0.0", 80))]
+    with patch("socket.getaddrinfo", return_value=unspec):
+        result = await handle_api_call(node, ctx)
+
+    assert result == "error"
+
+
+@pytest.mark.asyncio
+async def test_api_call_ssrf_multi_ip_any_blocked_rejects() -> None:
+    """複数解決結果のうち 1 つでも内部 IP なら全体をブロック。"""
+    ctx = make_ctx()
+    node = make_api_call_node(url="http://example.com/api")
+
+    mixed = [
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 80)),
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.5", 80)),
+    ]
+    with patch("socket.getaddrinfo", return_value=mixed):
+        result = await handle_api_call(node, ctx)
+
+    assert result == "error"
+
+
+@pytest.mark.asyncio
+async def test_api_call_pins_resolved_ip_no_follow_redirects() -> None:
+    """検証済み IP に接続を固定し、follow_redirects=False で AsyncClient を構成する。"""
+    ctx = make_ctx()
+    node = make_api_call_node(url="http://example.com/api")
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.request = AsyncMock(return_value=_mock_http_response(200, "ok"))
+
+    captured: dict = {}
+
+    def _factory(*args, **kwargs):
+        captured.update(kwargs)
+        return mock_client
+
+    with (
+        patch("millicall.workflows.handlers.logic.httpx.AsyncClient", side_effect=_factory),
+        patch("socket.getaddrinfo", return_value=_PUBLIC_SOCKADDR),
+    ):
+        result = await handle_api_call(node, ctx)
+
+    assert result == "success"
+    assert captured.get("follow_redirects") is False
+    # pinned transport が渡っており、検証済み IP に固定されている
+    transport = captured.get("transport")
+    assert transport is not None
+    assert transport._pinned_ip == "93.184.216.34"
+    assert transport._pinned_host == "example.com"
+
+
+# --------------------------------------------------------------------------- #
 # ハンドラが executor.HANDLERS に登録されていること
 # --------------------------------------------------------------------------- #
 

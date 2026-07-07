@@ -33,34 +33,52 @@ if TYPE_CHECKING:
 # SSRF ガード — ブロック対象 IP ネットワーク
 # --------------------------------------------------------------------------- #
 
-_BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
-    # IPv4
-    ipaddress.ip_network("127.0.0.0/8"),    # ループバック
-    ipaddress.ip_network("10.0.0.0/8"),     # RFC 1918 プライベート
-    ipaddress.ip_network("172.16.0.0/12"),  # RFC 1918 プライベート
-    ipaddress.ip_network("192.168.0.0/16"), # RFC 1918 プライベート
-    ipaddress.ip_network("169.254.0.0/16"), # リンクローカル / AWS メタデータ含む
-    # IPv6
-    ipaddress.ip_network("::1/128"),        # IPv6 ループバック
-    ipaddress.ip_network("fc00::/7"),       # IPv6 ユニークローカル (fc00:: + fd00::)
-    ipaddress.ip_network("fe80::/10"),      # IPv6 リンクローカル
-]
+def _normalize_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> (
+    ipaddress.IPv4Address | ipaddress.IPv6Address
+):
+    """IPv4-mapped / IPv4-compatible IPv6 を素の IPv4 に畳み込む。
+
+    ``::ffff:127.0.0.1`` のような IPv4-mapped IPv6 は、IPv6 として見ると
+    ``is_loopback`` 等のフラグが立たず判定をすり抜ける。素の IPv4 に正規化して
+    から分類フラグを見ることでこのバイパスを塞ぐ。
+    """
+    if isinstance(ip, ipaddress.IPv6Address):
+        mapped = getattr(ip, "ipv4_mapped", None)
+        if mapped is not None:
+            return mapped
+        # ::a.b.c.d 形式（IPv4-compatible、廃止済みだが安全側で畳み込む）
+        if int(ip) != 0 and int(ip) <= 0xFFFFFFFF:
+            return ipaddress.IPv4Address(int(ip))
+    return ip
 
 
 def _is_blocked_ip(ip_str: str) -> bool:
-    """指定された IP 文字列がブロック対象かどうかを返す。"""
+    """指定された IP 文字列がブロック対象（内部到達可能）かどうかを返す。
+
+    手書きの CIDR 表ではなく標準ライブラリの分類フラグを使う。これにより
+    CGNAT (100.64.0.0/10)、0.0.0.0/8、ベンチマーク帯などの穴を一括で塞ぐ。
+    """
     try:
-        ip = ipaddress.ip_address(ip_str)
+        ip = _normalize_ip(ipaddress.ip_address(ip_str))
     except ValueError:
         return True  # パース不能 → 安全側でブロック
-    return any(ip in net for net in _BLOCKED_NETWORKS)
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
 
 
-def _check_ssrf(url: str) -> None:
-    """URL が SSRF ブロック対象を指していたら ValueError を送出する。
+def _resolve_and_check_ssrf(url: str) -> str:
+    """URL を解決・検証し、接続に固定すべき検証済み IP を返す。
 
-    ホスト名を ``socket.getaddrinfo`` で解決し、全ての解決済み IP を検査する。
-    いずれかが :data:`_BLOCKED_NETWORKS` に含まれる場合にブロックする。
+    ホスト名を ``socket.getaddrinfo`` で一度だけ解決し、全ての解決済み IP を
+    :func:`_is_blocked_ip` で検査する。いずれかが内部到達可能なら ``ValueError``。
+    返した IP を実際の接続先に固定する（呼び出し側の pinned transport）ことで、
+    検証後に再解決される DNS リバインディング (TOCTOU) を防ぐ。
     DNS 解決失敗も ValueError として扱う（フロー側は "error" に落ちる）。
     """
     parsed = urlparse(url)
@@ -68,19 +86,51 @@ def _check_ssrf(url: str) -> None:
     if not host:
         raise ValueError(f"URL からホスト名を解析できません: {url!r}")
 
+    # URL に直接 IP リテラルが書かれている場合も同じ経路で検査する。
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
         results = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise ValueError(f"DNS 解決失敗 ({host!r}): {exc}") from exc
 
-    for _family, _type, _proto, _canonname, sockaddr in results:
-        ip_str = sockaddr[0]  # sockaddr の最初の要素が IP 文字列
+    resolved_ips = [sockaddr[0] for *_rest, sockaddr in results]
+    if not resolved_ips:
+        raise ValueError(f"DNS 解決結果が空です ({host!r})")
+
+    for ip_str in resolved_ips:
         if _is_blocked_ip(ip_str):
             raise ValueError(
                 f"SSRF ブロック: {host!r} が {ip_str!r} に解決され、"
-                "プライベート/ループバック/リンクローカルアドレスへのアクセスは拒否されます"
+                "プライベート/ループバック/リンクローカル等の内部アドレスへの"
+                "アクセスは拒否されます"
             )
+
+    # 全 IP が検証を通過。接続はこの検証済み IP に固定する。
+    return resolved_ips[0]
+
+
+class _PinnedTransport(httpx.AsyncHTTPTransport):
+    """検証済み IP に接続先を固定する httpx トランスポート。
+
+    ``_resolve_and_check_ssrf`` が返した IP に接続を固定し、httpx 側の再解決を
+    封じる（TOCTOU/DNS リバインディング対策）。Host ヘッダと TLS SNI/証明書検証は
+    元のホスト名を保持するため、正当な仮想ホスト/証明書もそのまま機能する。
+    """
+
+    def __init__(self, pinned_host: str, pinned_ip: str, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._pinned_host = pinned_host
+        self._pinned_ip = pinned_ip
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host == self._pinned_host:
+            # SNI と証明書検証は元ホストで行い、接続先だけ検証済み IP に差し替える。
+            request.extensions = {
+                **request.extensions,
+                "sni_hostname": self._pinned_host,
+            }
+            request.url = request.url.copy_with(host=self._pinned_ip)
+        return await super().handle_async_request(request)
 
 
 # --------------------------------------------------------------------------- #
@@ -245,12 +295,20 @@ async def handle_api_call(node: object, ctx: ChannelContext) -> str:
             elif config.content_type == "form":
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
 
-        # --- SSRF ガード ---
-        _check_ssrf(url)  # ブロック対象なら ValueError を送出
+        # --- SSRF ガード（解決 + 検証 + 接続 IP の固定） ---
+        host = urlparse(url).hostname or ""
+        pinned_ip = _resolve_and_check_ssrf(url)  # ブロック対象なら ValueError
 
         # --- HTTP リクエスト ---
+        # 検証済み IP に接続を固定し、リダイレクトは辿らない（別ホストへの
+        # SSRF 迂回・再解決による TOCTOU を防ぐ）。
         content: bytes | None = body_str.encode() if body_str else None
-        async with httpx.AsyncClient(timeout=config.timeout) as client:
+        transport = _PinnedTransport(host, pinned_ip)
+        async with httpx.AsyncClient(
+            timeout=config.timeout,
+            transport=transport,
+            follow_redirects=False,
+        ) as client:
             response = await client.request(
                 config.method,
                 url,

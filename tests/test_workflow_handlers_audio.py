@@ -532,3 +532,63 @@ async def test_primitives_record_stop_issued_even_on_sleep_error(tmp_path: Path)
     assert any("stop" in c and recording_path in c for c in esl.cmds), (
         f"stop が呼ばれていない。cmds={esl.cmds}"
     )
+
+
+def _make_prim(tmp_path: Path) -> object:
+    from millicall.mcp_server.primitives import CallPrimitives
+
+    cc = MagicMock()
+    cc.play_file = AsyncMock()
+
+    async def fake_sleep(secs: float) -> None: ...
+
+    return CallPrimitives(
+        esl=_FakeEsl(),
+        call_uuid="uuid-x",
+        call_control=cc,
+        tts=_FakeTts(),
+        stt=_FakeStt(),
+        tts_dir=tmp_path,
+        sleep=fake_sleep,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "/tmp/vm.wav; uuid_kill uuid-x",   # ESL コマンド連結
+        "/tmp/vm.wav\nuuid_kill uuid-x",   # 改行注入
+        "/tmp/vm.wav && rm -rf /",          # シェルメタ
+        "/tmp/vm $(whoami).wav",            # 空白・コマンド置換
+        "/tmp/`id`.wav",                    # バッククォート
+        "/tmp/vm|tee.wav",                  # パイプ
+        "",                                  # 空文字
+    ],
+)
+async def test_primitives_record_rejects_injection_paths(tmp_path: Path, bad_path: str) -> None:
+    """record() は allowlist 外のパスを ValueError で拒否し bgapi を発行しない。"""
+    prim = _make_prim(tmp_path)
+    with pytest.raises(ValueError):
+        await prim.record(bad_path, max_seconds=5)
+    assert prim._esl.cmds == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_dur", [0, -1, 3.5, True, "5"])
+async def test_primitives_record_rejects_bad_duration(tmp_path: Path, bad_dur: object) -> None:
+    """record() は非正/非整数の max_seconds を拒否する。"""
+    prim = _make_prim(tmp_path)
+    with pytest.raises(ValueError):
+        await prim.record(str(tmp_path / "vm.wav"), max_seconds=bad_dur)  # type: ignore[arg-type]
+    assert prim._esl.cmds == []  # type: ignore[attr-defined]
+
+
+def test_safe_mailbox_strips_metacharacters() -> None:
+    """_safe_mailbox が ESL/パスメタ文字を除去し安全な slug にする。"""
+    from millicall.workflows.handlers.audio import _safe_mailbox
+
+    assert _safe_mailbox("box; rm -rf /") == "box__rm_-rf__"
+    assert _safe_mailbox("../../etc/passwd") == "______etc_passwd"
+    assert _safe_mailbox("") == "default"
+    assert _safe_mailbox("normal_box-1") == "normal_box-1"
