@@ -14,6 +14,8 @@ import asyncio
 import json
 import logging
 import os
+import socket as _socket
+import struct
 from typing import Any
 
 from millicall.netd.commands import dispatch
@@ -23,6 +25,26 @@ logger = logging.getLogger("millicall.netd.server")
 
 # リクエスト行の最大バイト数（メモリ枯渇防止）
 _MAX_LINE_BYTES = 65536  # 64 KiB
+
+
+def _peer_uid(writer: asyncio.StreamWriter) -> int | None:
+    """接続相手の UID を返す（取得不能なら None）。
+
+    Linux の ``SO_PEERCRED`` に依存する。非 Linux（macOS 等・開発機）や取得失敗時は
+    None を返し、その場合はファイルシステムのパーミッションを信頼境界とする。
+    """
+    sock = writer.get_extra_info("socket")
+    if sock is None:
+        return None
+    so_peercred = getattr(_socket, "SO_PEERCRED", None)
+    if so_peercred is None:
+        return None  # 非 Linux: fs パーミッションに委ねる
+    try:
+        creds = sock.getsockopt(_socket.SOL_SOCKET, so_peercred, struct.calcsize("3i"))
+        _pid, uid, _gid = struct.unpack("3i", creds)
+        return uid
+    except OSError:
+        return None
 
 
 async def _handle_connection(
@@ -44,6 +66,17 @@ async def _handle_connection(
     """
     peer = writer.get_extra_info("peername", "(unknown)")
     try:
+        # 接続相手認証（多層防御）: SO_PEERCRED が取れる環境では、root か
+        # netd 自身と同一 UID（＝同一ユーザで動く core）以外の接続を拒否する。
+        # 取得できない環境（macOS 等）では fs パーミッション（socket 0o660 /
+        # dir 0o750）を信頼境界とする。
+        uid = _peer_uid(writer)
+        if uid is not None and uid != 0 and uid != os.geteuid():
+            logger.warning("許可されない接続相手 uid=%d を拒否 (peer=%s)", uid, peer)
+            _write_error(writer, "unauthorized")
+            await writer.drain()
+            return
+
         # 最大行長を制限して読み込む
         try:
             line = await asyncio.wait_for(
@@ -135,10 +168,16 @@ async def serve(settings: Any, ops: SystemOps | None = None) -> None:
     except OSError as exc:
         logger.warning("古いソケットファイルの削除に失敗しました: %s (%s)", socket_path, exc)
 
-    # ソケットのディレクトリが存在しない場合は作成する
+    # ソケットのディレクトリが存在しない場合は作成し、0o750 に制限する
+    # （other からの接続経路を塞ぐ。makedirs の mode は umask・exist_ok の影響を
+    # 受けるため chmod を明示する）。
     socket_dir = os.path.dirname(socket_path)
     if socket_dir:
         os.makedirs(socket_dir, exist_ok=True)
+        try:
+            os.chmod(socket_dir, 0o750)
+        except OSError as exc:
+            logger.warning("ソケットディレクトリのパーミッション設定に失敗しました: %s", exc)
 
     server = await asyncio.start_unix_server(
         lambda r, w: _handle_connection(r, w, ops, settings),

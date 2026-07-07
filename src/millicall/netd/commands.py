@@ -12,11 +12,13 @@
 
 import json
 import logging
+import re
 from typing import Any
 
 from millicall.netd.config_gen import render_dnsmasq_conf, render_nftables_ruleset
 from millicall.netd.system import SystemOps
 from millicall.network.validation import (
+    is_valid_hostname,
     is_valid_interface,
     is_valid_tailscale_authkey,
     normalize_mac,
@@ -26,6 +28,9 @@ from millicall.network.validation import (
 )
 
 logger = logging.getLogger("millicall.netd.commands")
+
+# tailscale の出力に混入し得る認証キーを除去する（秘密情報漏洩防止）。
+_TSKEY_REDACT_RE = re.compile(r"tskey-\S+")
 
 
 def _err(msg: str) -> dict:
@@ -192,11 +197,10 @@ async def tailscale_up(
         ["tailscale", "up", "--authkey", auth_key, "--accept-dns=false"]
     )
     if rc != 0:
-        # stderr にキーが含まれる可能性があるため、stderr を長くても省略して返す
-        safe_stderr = stderr[:200] if stderr else ""
-        # キーが stderr に含まれていた場合は省略する（ベストエフォート）
-        if auth_key in safe_stderr:
-            safe_stderr = "（認証情報を含むエラー詳細は省略）"
+        # 秘密情報保護: 切り詰める前に完全な stderr から tskey を除去する
+        # （境界を跨ぐ部分一致漏洩を防ぐ。exact 一致だけでなく tskey-\S+ を正規表現で除去）。
+        redacted = _TSKEY_REDACT_RE.sub("(redacted)", stderr or "")
+        safe_stderr = redacted[:200]
         return _err(f"tailscale up 失敗 (rc={rc}): {safe_stderr}")
 
     return _ok()
@@ -328,7 +332,10 @@ async def get_dhcp_leases(
             continue
 
         # ホスト名は "*" の場合は空文字に置き換える
-        hostname = "" if hostname_raw == "*" else hostname_raw
+        # ホスト名は信頼できない LAN 端末が書くため境界で検証する。"*" や
+        # RFC 1123 非準拠（制御文字・過長・区切り注入）の値は空文字へ落とし、
+        # 下流（core プロビジョニング/GUI/ログ）へ汚染データを渡さない。
+        hostname = hostname_raw if (hostname_raw != "*" and is_valid_hostname(hostname_raw)) else ""
 
         leases.append({"mac": mac, "ip": ip_raw, "hostname": hostname})
 

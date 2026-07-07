@@ -7,10 +7,16 @@ import ipaddress
 import re
 
 # Linux IFNAMSIZ = 16。有効文字: 英数・アンダースコア・ハイフン・ドット。
-_IF_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,15}$")
+# 末尾 \n を許してしまう `$` ではなく `\Z` で厳密に行末アンカーする。
+_IF_RE = re.compile(r"\A[A-Za-z0-9_.\-]{1,15}\Z")
 
-# Tailscale 認証キーのプレフィックスパターン。
-_TSKEY_RE = re.compile(r"^tskey-[A-Za-z0-9\-]+$")
+# Tailscale 認証キーのプレフィックスパターン（末尾改行を許さないよう \Z）。
+_TSKEY_RE = re.compile(r"\Atskey-[A-Za-z0-9\-]+\Z")
+
+# RFC 1123 ホスト名ラベル（DHCP リースの hostname 検証用）。各ラベル ≤63 文字、
+# 英数とハイフン、ドット区切り、全体 ≤253 文字。信頼できない LAN 端末が書く値の
+# 境界サニタイズに使う。
+_HOSTNAME_LABEL_RE = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z")
 
 
 def is_valid_interface(name: str) -> bool:
@@ -75,6 +81,17 @@ def is_valid_tailscale_authkey(key: str) -> bool:
     期待フォーマット: ``tskey-`` で始まり英数字とハイフンのみ。
     """
     return bool(_TSKEY_RE.match(key))
+
+
+def is_valid_hostname(name: str) -> bool:
+    """RFC 1123 準拠のホスト名かどうかを返す（全体 ≤253、各ラベル ≤63）。
+
+    DHCP リースの hostname は信頼できない LAN 端末が書くため、境界で検証して
+    制御文字・過長・区切り注入を弾く。空文字は False。
+    """
+    if not name or len(name) > 253:
+        return False
+    return all(_HOSTNAME_LABEL_RE.match(label) for label in name.split("."))
 
 
 def normalize_mac(mac: str) -> str:

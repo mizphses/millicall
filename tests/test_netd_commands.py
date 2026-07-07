@@ -305,6 +305,19 @@ class TestTailscaleUp:
         assert ops.run_calls == []
 
     @pytest.mark.asyncio
+    async def test_key_echoed_in_stderr_is_redacted(self):
+        """rc!=0 で stderr にキーが混入しても、切り詰め前に tskey-\\S+ を除去する（レビュー N1）。"""
+        # 200 文字境界を跨いでもキーが残らないよう、長いパディングの先頭にキーを置く
+        stderr = self._VALID_KEY + " " + ("x" * 300)
+        ops = FakeSystemOps(run_rc=1, run_stderr=stderr)
+        payload = {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}
+        resp = await dispatch(payload, ops, SETTINGS)
+
+        assert resp["ok"] is False
+        assert self._VALID_KEY not in resp.get("error", "")
+        assert "tskey-" not in resp.get("error", "")
+
+    @pytest.mark.asyncio
     async def test_invalid_key_never_in_error_response(self):
         """不正なキーはエラーメッセージに含まれてはならない。"""
         ops = FakeSystemOps()
@@ -491,6 +504,16 @@ class TestGetDhcpLeases:
 
         assert resp["ok"] is True
         assert len(resp["leases"]) == 3  # 有効な 3 件のみ
+
+    @pytest.mark.asyncio
+    async def test_malicious_hostname_sanitized_to_empty(self):
+        """信頼できないリースの不正 hostname（制御文字/注入）は空文字へ落とす（レビュー M2）。"""
+        content = "100 aa:bb:cc:dd:ee:11 172.20.1.9 evil;rm\\x20-rf *\n"
+        ops = FakeSystemOps(read_content=content)
+        resp = await dispatch({"cmd": "get_dhcp_leases"}, ops, SETTINGS)
+        assert resp["ok"] is True
+        assert len(resp["leases"]) == 1
+        assert resp["leases"][0]["hostname"] == ""  # RFC1123 非準拠 → 空文字
 
     @pytest.mark.asyncio
     async def test_file_not_found_returns_empty_leases(self):

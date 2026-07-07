@@ -2,6 +2,7 @@
 import pytest
 
 from millicall.network.validation import (
+    is_valid_hostname,
     is_valid_interface,
     is_valid_tailscale_authkey,
     normalize_mac,
@@ -9,6 +10,40 @@ from millicall.network.validation import (
     validate_ipv4,
     validate_ipv4_range,
 )
+
+
+class TestTrailingNewlineAnchoring:
+    """`$` ではなく `\\Z` で行末アンカーし、末尾改行を弾くこと（レビュー M1）。"""
+
+    def test_interface_rejects_trailing_newline(self):
+        assert not is_valid_interface("eth0\n")
+
+    def test_tailscale_key_rejects_trailing_newline(self):
+        assert not is_valid_tailscale_authkey("tskey-abc123\n")
+
+
+class TestIsValidHostname:
+    """is_valid_hostname のテスト（RFC 1123、レビュー M2）。"""
+
+    def test_valid(self):
+        assert is_valid_hostname("phone-1")
+        assert is_valid_hostname("desk.example.local")
+        assert is_valid_hostname("a" * 63)
+
+    def test_empty_is_invalid(self):
+        assert not is_valid_hostname("")
+
+    def test_too_long_overall(self):
+        assert not is_valid_hostname(".".join(["a"] * 200))
+
+    def test_label_too_long(self):
+        assert not is_valid_hostname("a" * 64)
+
+    def test_control_chars_and_injection(self):
+        assert not is_valid_hostname("phone\nname")
+        assert not is_valid_hostname("ph one")
+        assert not is_valid_hostname("phone;rm -rf /")
+        assert not is_valid_hostname("under_score")  # RFC 1123 はアンダースコア不可
 
 
 class TestIsValidInterface:
