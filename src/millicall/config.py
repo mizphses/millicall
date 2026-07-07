@@ -65,6 +65,25 @@ class Settings(BaseSettings):
     # double-submit cookie に使用する Cookie 名。non-HttpOnly で JS から読み取れる。
     csrf_cookie_name: str = "millicall_csrf"
 
+    # --- SAML 2.0 SP (Phase 6 Task 4) ---
+    # True のとき /saml/* エンドポイントが有効になる。
+    saml_enabled: bool = False
+    # SP の Entity ID（例: https://millicall.example.com/saml/metadata）。
+    saml_sp_entity_id: str = ""
+    # Assertion Consumer Service URL（POST binding; 例: https://millicall.example.com/saml/acs）。
+    saml_sp_acs_url: str = ""
+    # IdP の Entity ID（メタデータ EntityDescriptor/@entityID）。
+    saml_idp_entity_id: str = ""
+    # IdP の SSO URL（HTTP-Redirect binding; 例: https://idp.example.com/sso）。
+    saml_idp_sso_url: str = ""
+    # IdP の X.509 証明書（PEM 形式; "-----BEGIN CERTIFICATE-----" から始まる）。
+    # この証明書のみを信頼する（out-of-band 事前共有）。
+    saml_idp_x509_cert: str = ""
+    # SAML SSO で新規作成するユーザーに付与するデフォルトロール。
+    saml_default_role: str = "user"
+    # 許容するクロック スキュー（秒）。NotBefore/NotOnOrAfter に±この値を加算する。
+    saml_allowed_clock_skew_seconds: int = 120
+
     # --- MCP サーバー (Phase 4a) ---
     # /mcp を有効化するか（False で完全に非マウント）。
     mcp_enabled: bool = True

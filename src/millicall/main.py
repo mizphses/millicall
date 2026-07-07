@@ -12,6 +12,7 @@ from millicall.ai_agents.router import router as ai_agents_router
 from millicall.audit_router import router as audit_router
 from millicall.auth.csrf import CsrfMiddleware
 from millicall.auth.router import router as auth_router
+from millicall.auth.saml.router import router as saml_router
 from millicall.auth.service import ensure_admin_user
 from millicall.auth.totp_router import router as totp_router
 from millicall.call_messages.router import router as call_messages_router
@@ -227,6 +228,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ルーター登録より前に追加することで全ルートに適用される。
     app.add_middleware(CsrfMiddleware)
     app.include_router(auth_router)
+    app.include_router(saml_router)
     app.include_router(totp_router)
     app.include_router(audit_router)
     app.include_router(contacts_router)
