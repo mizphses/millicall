@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     # double-submit cookie に使用する Cookie 名。non-HttpOnly で JS から読み取れる。
     csrf_cookie_name: str = "millicall_csrf"
 
+    # --- SCIM 2.0 プロビジョニング (Phase 6 Task 5) ---
+    # True のとき /scim/v2/* エンドポイントが有効になる。
+    # False（デフォルト）の場合、全 SCIM エンドポイントは 404 を返す（feature off）。
+    scim_enabled: bool = False
+
     # --- SAML 2.0 SP (Phase 6 Task 4) ---
     # True のとき /saml/* エンドポイントが有効になる。
     saml_enabled: bool = False

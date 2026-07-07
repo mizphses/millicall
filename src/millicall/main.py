@@ -34,6 +34,8 @@ from millicall.providers.router import router as providers_router
 from millicall.provisioning.devices_router import router as devices_router
 from millicall.provisioning.router import router as provisioning_router
 from millicall.routes_config.router import router as routes_router
+from millicall.scim.router import api_router as scim_api_router
+from millicall.scim.router import scim_router
 from millicall.secrets_store import load_or_create_secrets
 from millicall.telephony.esl import ESLClient
 from millicall.telephony.events import CdrRecorder, EslEventListener
@@ -197,7 +199,7 @@ async def lifespan(app: FastAPI):
 # SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。
 # これらに該当する未定義 GET は 404 を返し、API のセマンティクスを保つ。
 _SPA_EXCLUDED_PREFIXES = frozenset(
-    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known", "provisioning"}
+    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known", "provisioning", "scim"}
 )
 
 
@@ -245,6 +247,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(network_router)
     app.include_router(provisioning_router)
     app.include_router(devices_router)
+    app.include_router(scim_api_router)
+    app.include_router(scim_router)
 
     @app.exception_handler(WorkflowValidationError)
     async def _workflow_validation_handler(_request, exc: WorkflowValidationError):
