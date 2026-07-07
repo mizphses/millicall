@@ -67,6 +67,16 @@ class Settings(BaseSettings):
     smtp_starttls: bool = True
     smtp_timeout: int = 15
 
+    # --- netd / ネットワーク (Phase 5) ---
+    # netd UNIX ドメインソケットのパス（core から netd へのコマンド送信に使用）。
+    netd_socket_path: str = "/run/millicall/netd.sock"
+    # dnsmasq 設定ファイルのパス（netd が書き込む）。
+    dnsmasq_conf_path: str = "/etc/dnsmasq.d/millicall.conf"
+    # dnsmasq DHCP リースファイルのパス（netd が読み込む）。
+    dnsmasq_leases_path: str = "/var/lib/misc/dnsmasq.leases"
+    # nftables テーブル名（millicall NAT ルールを格納するテーブル）。
+    nftables_table: str = "millicall_nat"
+
     @field_validator("mcp_allowed_hosts", mode="before")
     @classmethod
     def _split_allowed_hosts(cls, v: object) -> object:
