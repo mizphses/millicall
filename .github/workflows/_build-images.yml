@@ -56,3 +56,17 @@ jobs:
             ${{ inputs.moving_tag != '' && format('ghcr.io/mizphses/millicall-freeswitch:{0}', inputs.moving_tag) || '' }}
           cache-from: type=gha,scope=freeswitch-amd64
           cache-to: type=gha,mode=max,scope=freeswitch-amd64
+
+      - name: Build & push netd (amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/netd/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/mizphses/millicall-netd:${{ inputs.sha_tag }}
+            ${{ inputs.moving_tag != '' && format('ghcr.io/mizphses/millicall-netd:{0}', inputs.moving_tag) || '' }}
+          cache-from: type=gha,scope=netd-amd64
+          cache-to: type=gha,mode=max,scope=netd-amd64

@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     # --- netd / ネットワーク (Phase 5) ---
     # netd UNIX ドメインソケットのパス（core から netd へのコマンド送信に使用）。
     netd_socket_path: str = "/run/millicall/netd.sock"
+    # dnsmasq 再起動コマンド（シェルワード文字列; shlex.split で argv リストに変換して使用）。
+    # コンテナ環境では MILLICALL_DNSMASQ_RELOAD_CMD=/usr/local/bin/reload-dnsmasq.sh に上書きする。
+    dnsmasq_reload_cmd: str = "systemctl restart dnsmasq"
     # dnsmasq 設定ファイルのパス（netd が書き込む）。
     dnsmasq_conf_path: str = "/etc/dnsmasq.d/millicall.conf"
     # dnsmasq DHCP リースファイルのパス（netd が読み込む）。

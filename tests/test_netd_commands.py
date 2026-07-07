@@ -61,6 +61,7 @@ class FakeSettings:
     dnsmasq_conf_path = "/etc/dnsmasq.d/millicall.conf"
     dnsmasq_leases_path = "/var/lib/misc/dnsmasq.leases"
     nftables_table = "millicall_nat"
+    dnsmasq_reload_cmd = "systemctl restart dnsmasq"
 
 
 SETTINGS = FakeSettings()
@@ -193,6 +194,34 @@ class TestApplyDhcp:
 
         assert resp["ok"] is False
         assert "dnsmasq" in resp["error"].lower() or "1" in resp["error"]
+
+    @pytest.mark.asyncio
+    async def test_custom_reload_cmd_is_used(self):
+        """dnsmasq_reload_cmd を上書きすると、その argv が ops.run に渡される。"""
+
+        class CustomReloadSettings(FakeSettings):
+            dnsmasq_reload_cmd = "/usr/local/bin/reload-dnsmasq.sh"
+
+        ops = FakeSystemOps()
+        resp = await dispatch(_VALID_DHCP_PAYLOAD, ops, CustomReloadSettings())
+
+        assert resp["ok"] is True
+        assert len(ops.run_calls) == 1
+        argv, _ = ops.run_calls[0]
+        assert argv == ["/usr/local/bin/reload-dnsmasq.sh"]
+
+    @pytest.mark.asyncio
+    async def test_empty_reload_cmd_returns_error(self):
+        """dnsmasq_reload_cmd が空文字列のときはエラーを返す。"""
+
+        class EmptyReloadSettings(FakeSettings):
+            dnsmasq_reload_cmd = ""
+
+        ops = FakeSystemOps()
+        resp = await dispatch(_VALID_DHCP_PAYLOAD, ops, EmptyReloadSettings())
+
+        assert resp["ok"] is False
+        assert ops.run_calls == []
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@
 import json
 import logging
 import re
+import shlex
 from typing import Any
 
 from millicall.netd.config_gen import render_dnsmasq_conf, render_nftables_ruleset
@@ -104,7 +105,11 @@ async def apply_dhcp(
     except OSError as exc:
         return _err(f"設定ファイル書き込みエラー: {exc}")
 
-    rc, _stdout, stderr = await ops.run(["systemctl", "restart", "dnsmasq"])
+    reload_argv = shlex.split(settings.dnsmasq_reload_cmd)
+    if not reload_argv:
+        return _err("dnsmasq_reload_cmd が空です")
+
+    rc, _stdout, stderr = await ops.run(reload_argv)
     if rc != 0:
         return _err(f"dnsmasq 再起動失敗 (rc={rc}): {stderr[:200]}")
 

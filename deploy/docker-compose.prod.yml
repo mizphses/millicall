@@ -7,6 +7,10 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      # netd との UNIX ソケット共有。netd が /run/millicall/netd.sock を作成し、
+      # core の NetdClient がこのパスに接続する。
+      # core は netd の起動を待たず (lazy connect)、netd が未起動の場合は各呼び出しでエラーを返す。
+      - millicall-run:/run/millicall
     healthcheck:
       test:
         - CMD
@@ -34,3 +38,36 @@ services:
       - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
       - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
     restart: unless-stopped
+
+  netd:
+    image: ghcr.io/mizphses/millicall-netd:${MILLICALL_VERSION:-latest}
+    pull_policy: always
+    # LAN/WAN インターフェイスを直接扱うためホストネットワークを使用する。
+    # dnsmasq (UDP 53/67) / Tailscale (UDP 41641) はホストのポートを直接 bind する。
+    network_mode: host
+    cap_add:
+      - NET_ADMIN  # nftables / ip route 操作に必要
+      - NET_RAW    # 低レベルソケット (Tailscale ICMP 等) に必要
+    devices:
+      # Tailscale カーネル TUN モード用。ホストに /dev/net/tun が無い場合は
+      # このエントリを削除するか、entrypoint が userspace-networking で起動する。
+      - "/dev/net/tun:/dev/net/tun"
+    env_file:
+      - .env
+    environment:
+      # コンテナ内では systemctl が使えないため、専用のリロードスクリプトに差し替える。
+      - MILLICALL_DNSMASQ_RELOAD_CMD=/usr/local/bin/reload-dnsmasq.sh
+    volumes:
+      # netd が作成した UNIX ソケット (/run/millicall/netd.sock) を core と共有する。
+      # 両コンテナが network_mode: host のため、ネットワーク分離は無いが
+      # UNIX ソケットはファイルシステム経由のため named volume での共有が必要。
+      - millicall-run:/run/millicall
+      - ./data:/app/data
+    restart: unless-stopped
+    # netd は core の起動に依存しない (独立してネットワーク管理を担う)。
+    # core の NetdClient は接続を per-call で試みるため、netd が後から起動しても動作する。
+
+volumes:
+  # netd と core が UNIX ソケットを共有するための named volume。
+  # /run/millicall に mount され、netd.sock がここに作成される。
+  millicall-run: {}
