@@ -1,16 +1,61 @@
 services:
+  # ------------------------------------------------------------------
+  # docker-proxy: Docker Engine HTTP API を最小 API のみに限定して公開する。
+  #
+  # Tecnativa/docker-socket-proxy を使用し、core が必要とする操作のみ許可:
+  #   CONTAINERS=1  コンテナ一覧・検査
+  #   POST=1        POST メソッド（restart に必要）
+  #   INFO=1        /info エンドポイント
+  #   VERSION=1     /version エンドポイント
+  # IMAGES・EXEC・volumes・swarm・secrets・networks 等は全て 0（デフォルト）のまま。
+  #
+  # core は network_mode: host のため 127.0.0.1:2375 でプロキシに到達できる。
+  # core 側の環境変数: MILLICALL_DOCKER_PROXY_URL=http://127.0.0.1:2375
+  #
+  # セキュリティ: raw docker.sock は proxy コンテナにのみ :ro でマウントする。
+  # core・freeswitch・netd は docker.sock を一切マウントしない。
+  # ------------------------------------------------------------------
+  docker-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:latest
+    environment:
+      # コンテナ一覧・検査を許可
+      - CONTAINERS=1
+      # POST メソッドを許可（restart エンドポイントに必要）
+      - POST=1
+      # /info エンドポイントを許可
+      - INFO=1
+      # /version エンドポイントを許可
+      - VERSION=1
+      # その他は全て 0（デフォルト）のまま:
+      # IMAGES=0, EXEC=0, VOLUMES=0, NETWORKS=0, SWARM=0, SECRETS=0 ...
+    volumes:
+      # Docker socket は read-only で proxy コンテナのみにマウントする。
+      # core・freeswitch・netd にはマウントしない。
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      # core (network_mode: host) から 127.0.0.1:2375 でアクセスできるようにバインドする。
+      # ループバックバインドにより外部ネットワークからのアクセスを防ぐ。
+      - "127.0.0.1:2375:2375"
+    restart: unless-stopped
+
   core:
     image: ghcr.io/mizphses/millicall-core:${MILLICALL_VERSION:-latest}
     pull_policy: always
     network_mode: host
     env_file:
       - .env
+    environment:
+      # Docker socket-proxy 経由の Docker API エンドポイント。
+      # core は raw docker.sock に一切触れない。docker-proxy コンテナが仲介する。
+      - MILLICALL_DOCKER_PROXY_URL=http://127.0.0.1:2375
     volumes:
       - ./data:/app/data
       # netd との UNIX ソケット共有。netd が /run/millicall/netd.sock を作成し、
       # core の NetdClient がこのパスに接続する。
       # core は netd の起動を待たず (lazy connect)、netd が未起動の場合は各呼び出しでエラーを返す。
       - millicall-run:/run/millicall
+    depends_on:
+      - docker-proxy
     healthcheck:
       test:
         - CMD

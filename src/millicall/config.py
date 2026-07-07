@@ -44,6 +44,51 @@ class Settings(BaseSettings):
     cookie_secure: bool = True
     cookie_samesite: str = "lax"
 
+    # --- 認証 (Phase 6) ---
+    # True のとき UI は TOTP 登録を強制する（バックエンドはフラグを公開するのみ；
+    # 強制の実施は T9 フロントエンド担当）。
+    totp_required: bool = False
+    # TOTP チャレンジチケットの有効期間（秒）。ブルートフォース窓を狭めるため短めにする
+    # （レビュー M-1）。ステートレス署名チケットのため、この窓 = 総当たり可能時間。
+    totp_ticket_max_age: int = 120
+
+    # ログイン試行レート制限（Phase 6 Task 3 / レビュー H-1 で IP・ユーザー名しきい値を分離）
+    # IP しきい値（一次防御・低め）: 単一 IP からの総当たりを止める。
+    login_max_attempts: int = 10
+    # ユーザー名しきい値（二次防御・高め）: 分散総当たりに備える。IP しきい値より高くすることで、
+    # 単一 IP の攻撃者は自分の IP が先にロックされ、正規アカウントを容易に DoS ロックアウトできない。
+    login_username_max_attempts: int = 30
+    # ロックアウト期間（秒）。この期間内の失敗数がしきい値を超えると 429 を返す。
+    login_lockout_seconds: int = 300
+
+    # CSRF 保護 (Phase 6 Task 3)
+    # double-submit cookie に使用する Cookie 名。non-HttpOnly で JS から読み取れる。
+    csrf_cookie_name: str = "millicall_csrf"
+
+    # --- SCIM 2.0 プロビジョニング (Phase 6 Task 5) ---
+    # True のとき /scim/v2/* エンドポイントが有効になる。
+    # False（デフォルト）の場合、全 SCIM エンドポイントは 404 を返す（feature off）。
+    scim_enabled: bool = False
+
+    # --- SAML 2.0 SP (Phase 6 Task 4) ---
+    # True のとき /saml/* エンドポイントが有効になる。
+    saml_enabled: bool = False
+    # SP の Entity ID（例: https://millicall.example.com/saml/metadata）。
+    saml_sp_entity_id: str = ""
+    # Assertion Consumer Service URL（POST binding; 例: https://millicall.example.com/saml/acs）。
+    saml_sp_acs_url: str = ""
+    # IdP の Entity ID（メタデータ EntityDescriptor/@entityID）。
+    saml_idp_entity_id: str = ""
+    # IdP の SSO URL（HTTP-Redirect binding; 例: https://idp.example.com/sso）。
+    saml_idp_sso_url: str = ""
+    # IdP の X.509 証明書（PEM 形式; "-----BEGIN CERTIFICATE-----" から始まる）。
+    # この証明書のみを信頼する（out-of-band 事前共有）。
+    saml_idp_x509_cert: str = ""
+    # SAML SSO で新規作成するユーザーに付与するデフォルトロール。
+    saml_default_role: str = "user"
+    # 許容するクロック スキュー（秒）。NotBefore/NotOnOrAfter に±この値を加算する。
+    saml_allowed_clock_skew_seconds: int = 120
+
     # --- MCP サーバー (Phase 4a) ---
     # /mcp を有効化するか（False で完全に非マウント）。
     mcp_enabled: bool = True
@@ -66,6 +111,53 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_starttls: bool = True
     smtp_timeout: int = 15
+
+    # --- SIP 多層防御 (Phase 6 Task 7) ---
+    # FreeSWITCH ACL "millicall_trusted" に登録する信頼 CIDR リスト。
+    # カンマ区切り文字列（env MILLICALL_SIP_TRUSTED_CIDRS）または直接 list[str] で指定可。
+    # デフォルト: RFC1918 プライベート全帯域 + loopback。
+    # HGW 192.168.1.1 は 192.168.0.0/16 に内包されているため、このデフォルトで実機着信を維持する。
+    # WAN からの任意送信元は ACL default="deny" により FreeSWITCH レイヤでも拒否される（nftables に次ぐ第二層）。
+    sip_trusted_cidrs: list[str] = [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.1/32",
+    ]
+
+    # !! 重要: デフォルト False !!
+    # True にすると着信 caller-ID が anonymous/非通知の呼を CALL_REJECTED で拒否する。
+    # NTT ひかり電話 HGW 回線は 186 プレフィックス未付与時に caller-ID が非通知（anonymous）になる。
+    # このオプションを True にすると実机着信がすべて拒否される。絶対に本番で True にしないこと。
+    sip_reject_anonymous: bool = False
+
+    # --- システム管理 / Docker socket-proxy (Phase 6 Task 8) ---
+    # Docker HTTP API エンドポイント（Tecnativa socket-proxy 経由）。
+    # core は raw docker.sock に一切触れず、このプロキシ URL のみ使用する。
+    # 空文字の場合はシステム管理機能が無効化され、全エンドポイントが 503 を返す。
+    # core が network_mode: host のため、プロキシが 127.0.0.1:2375 に bind していれば
+    # http://127.0.0.1:2375 でアクセスできる（docker-compose.prod.yml 参照）。
+    docker_proxy_url: str = ""
+    # 再起動を許可するコンテナ名（compose サービス名）のカンマ区切りリスト。
+    # この allowlist 外のコンテナを再起動しようとすると 403 を返す。
+    # 任意コンテナの再起動を防ぐ最小権限の強制（raw socket 非接触と組み合わせ）。
+    system_managed_containers: str = "core,freeswitch,netd,docker-proxy"
+
+    @field_validator("system_managed_containers", mode="before")
+    @classmethod
+    def _validate_system_managed_containers(cls, v: object) -> object:
+        # カンマ区切り文字列として受け取るが、フィールド自体は str のまま保持する。
+        # 利用側は split_managed_containers() を使ってリスト化する。
+        if isinstance(v, str):
+            return v
+        # list が渡された場合（テスト等）はカンマ結合して str に戻す。
+        if isinstance(v, list):
+            return ",".join(str(x).strip() for x in v if str(x).strip())
+        return v
+
+    def split_managed_containers(self) -> list[str]:
+        """system_managed_containers をカンマ分割して stripped リストで返す。"""
+        return [s.strip() for s in self.system_managed_containers.split(",") if s.strip()]
 
     # --- netd / ネットワーク (Phase 5) ---
     # netd UNIX ドメインソケットのパス（core から netd へのコマンド送信に使用）。
@@ -90,6 +182,14 @@ class Settings(BaseSettings):
         # env からはカンマ区切り文字列で渡せるようにする（既存 outbound_* と同系の運用）。
         if isinstance(v, str):
             return [h.strip() for h in v.split(",") if h.strip()]
+        return v
+
+    @field_validator("sip_trusted_cidrs", mode="before")
+    @classmethod
+    def _split_sip_trusted_cidrs(cls, v: object) -> object:
+        # env MILLICALL_SIP_TRUSTED_CIDRS はカンマ区切り文字列で渡せる（mcp_allowed_hosts と同系）。
+        if isinstance(v, str):
+            return [c.strip() for c in v.split(",") if c.strip()]
         return v
 
 

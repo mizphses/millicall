@@ -10,6 +10,14 @@ import {
   CDR_KEY,
   CALL_MESSAGES_KEY,
   DASHBOARD_KEYS,
+  WORKFLOWS_KEY,
+  NETWORK_CONFIG_KEY,
+  DEVICES_KEY,
+  USERS_KEY,
+  SYSTEM_CONTAINERS_KEY,
+  SYSTEM_INFO_KEY,
+  AUTH_ME_KEY,
+  auditKey,
 } from "../queryKeys";
 
 /**
@@ -45,5 +53,33 @@ describe("queryKeys", () => {
     const dashboardKeys = Object.values(DASHBOARD_KEYS).map((k) => k.join("/"));
     const unique = new Set(dashboardKeys);
     expect(unique.size).toBe(dashboardKeys.length);
+  });
+
+  it("Phase 6 キーのトップレベルは既存キーと衝突しない", () => {
+    const existingTop = [
+      ...listKeys,
+      WORKFLOWS_KEY[0],
+      NETWORK_CONFIG_KEY[0],
+      DEVICES_KEY[0],
+      ...Object.values(DASHBOARD_KEYS).map((k) => k[0]),
+    ] as readonly string[];
+    const p6Top = [
+      USERS_KEY[0],
+      SYSTEM_CONTAINERS_KEY[0],
+      SYSTEM_INFO_KEY[0],
+      AUTH_ME_KEY[0],
+      auditKey(50, 0)[0],
+    ];
+    for (const k of p6Top) {
+      expect(existingTop).not.toContain(k);
+    }
+    // Phase 6 トップレベル同士も一意
+    expect(new Set(p6Top).size).toBe(p6Top.length);
+  });
+
+  it("auditKey は limit/offset を含む一意なキーを返す", () => {
+    expect(auditKey(50, 0)).toEqual(["p6-audit", 50, 0]);
+    expect(auditKey(50, 50)).toEqual(["p6-audit", 50, 50]);
+    expect(auditKey(50, 0)).not.toEqual(auditKey(50, 50));
   });
 });

@@ -14,16 +14,32 @@ const original: ExtensionRead = {
   display_name: "営業部 田中",
   sip_password: "generated-secret",
   enabled: true,
+  calling_permission: "domestic",
 };
 
 function formOf(overrides: Partial<ExtensionFormValues>): ExtensionFormValues {
-  return { number: "1001", display_name: "営業部 田中", enabled: true, ...overrides };
+  return {
+    number: "1001",
+    display_name: "営業部 田中",
+    enabled: true,
+    calling_permission: "domestic",
+    ...overrides,
+  };
 }
 
 describe("buildCreatePayload", () => {
-  it("number / display_name のみを送り、前後の空白を除去する", () => {
+  it("number / display_name / calling_permission を送り、前後の空白を除去する", () => {
     const payload = buildCreatePayload(formOf({ number: " 1002 ", display_name: " 経理 佐藤 " }));
-    expect(payload).toEqual({ number: "1002", display_name: "経理 佐藤" });
+    expect(payload).toEqual({
+      number: "1002",
+      display_name: "経理 佐藤",
+      calling_permission: "domestic",
+    });
+  });
+
+  it("発信権限を選択したら payload に反映する", () => {
+    const payload = buildCreatePayload(formOf({ calling_permission: "international" }));
+    expect(payload.calling_permission).toBe("international");
   });
 });
 
@@ -51,6 +67,12 @@ describe("buildUpdatePayload（編集フォーム → PATCH payload 変換）", 
     expect(
       buildUpdatePayload(formOf({ display_name: "新名称", enabled: false }), original),
     ).toEqual({ display_name: "新名称", enabled: false });
+  });
+
+  it("発信権限を変更したときだけ calling_permission を含める", () => {
+    expect(buildUpdatePayload(formOf({ calling_permission: "internal" }), original)).toEqual({
+      calling_permission: "internal",
+    });
   });
 });
 

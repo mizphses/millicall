@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy import false as sa_false
 from sqlalchemy import true as sa_true
 from sqlalchemy.orm import Mapped, mapped_column
@@ -29,10 +29,53 @@ class User(Base):
     origin: Mapped[str] = mapped_column(
         String(20), nullable=False, default="local", server_default="local"
     )
-    # Phase 6 (TOTP 2FA) 用に予約。Phase 1 では常に NULL。
-    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # UNIQUE（migration 0017）。SQLite は複数 NULL を許容するためローカル既定 admin 等は影響なし。
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    session_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # SecretBox（Fernet）で暗号化した base32 TOTP シークレット。
+    # 平文は /totp/setup レスポンスでのみ返す。ログ・repr・audit に出してはならない。
+    totp_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # totp_secret が存在しても verify 完了前は False。ログインゲートに使うのはこちら。
+    totp_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    # Argon2 ハッシュ済みリカバリコードの JSON 配列。平文は格納しない。
+    recovery_codes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        """秘密フィールド(totp_secret/recovery_codes/hashed_password)を除外したrepr。"""
+        hidden = frozenset({"totp_secret", "recovery_codes", "hashed_password"})
+        attrs = [
+            f"{k}={v!r}" for k, v in self.__dict__.items()
+            if not k.startswith("_") and k not in hidden
+        ]
+        return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    target_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), index=True
     )
 
 
@@ -46,6 +89,11 @@ class Extension(Base):
     sip_password: Mapped[str] = mapped_column(String(64), nullable=False)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    # 発信権限ティア: "internal"（内線のみ）/ "domestic"（国内まで）/ "international"（国際可）
+    # デフォルトは "domestic"。国際発信はデフォルト禁止（トールフラウド対策 §7）。
+    calling_permission: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="domestic", server_default="domestic"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
@@ -297,6 +345,32 @@ class NetworkConfig(Base):
             if not k.startswith("_") and k != "tailscale_auth_key_encrypted"
         ]
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class LoginAttempt(Base):
+    """ログイン失敗試行の記録（レート制限・ロックアウト用）。
+
+    key + key_type でレート制限の対象を識別する。
+    created_at ウィンドウ内のカウントで上限超過を検出する。
+    """
+
+    __tablename__ = "login_attempts"
+    __table_args__ = (
+        Index("ix_login_attempts_key_created_at", "key", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # レート制限キー: IP アドレスまたはユーザー名の値
+    key: Mapped[str] = mapped_column(String(255), nullable=False)
+    # "ip" または "username"
+    key_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # どのエンドポイントでの失敗か: "login" / "totp"
+    action: Mapped[str] = mapped_column(String(30), nullable=False, server_default="login")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
 
 
 class Device(Base):

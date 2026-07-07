@@ -9,8 +9,12 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from millicall.ai_agents.router import router as ai_agents_router
+from millicall.audit_router import router as audit_router
+from millicall.auth.csrf import CsrfMiddleware
 from millicall.auth.router import router as auth_router
+from millicall.auth.saml.router import router as saml_router
 from millicall.auth.service import ensure_admin_user
+from millicall.auth.totp_router import router as totp_router
 from millicall.call_messages.router import router as call_messages_router
 from millicall.calls.router import router as calls_router
 from millicall.cdr.router import router as cdr_router
@@ -30,7 +34,11 @@ from millicall.providers.router import router as providers_router
 from millicall.provisioning.devices_router import router as devices_router
 from millicall.provisioning.router import router as provisioning_router
 from millicall.routes_config.router import router as routes_router
+from millicall.scim.router import api_router as scim_api_router
+from millicall.scim.router import scim_router
 from millicall.secrets_store import load_or_create_secrets
+from millicall.system.router import router as system_router
+from millicall.users.router import router as users_router
 from millicall.telephony.esl import ESLClient
 from millicall.telephony.events import CdrRecorder, EslEventListener
 from millicall.telephony.service import (
@@ -193,7 +201,7 @@ async def lifespan(app: FastAPI):
 # SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。
 # これらに該当する未定義 GET は 404 を返し、API のセマンティクスを保つ。
 _SPA_EXCLUDED_PREFIXES = frozenset(
-    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known", "provisioning"}
+    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known", "provisioning", "scim"}
 )
 
 
@@ -220,7 +228,13 @@ def _mount_spa(app: FastAPI, static_dir: Path) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="millicall v2 core", lifespan=lifespan)
     app.state.settings = settings or get_settings()
+    # CSRF 保護ミドルウェア（double-submit cookie パターン）。
+    # ルーター登録より前に追加することで全ルートに適用される。
+    app.add_middleware(CsrfMiddleware)
     app.include_router(auth_router)
+    app.include_router(saml_router)
+    app.include_router(totp_router)
+    app.include_router(audit_router)
     app.include_router(contacts_router)
     app.include_router(extensions_router)
     app.include_router(trunks_router)
@@ -235,6 +249,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(network_router)
     app.include_router(provisioning_router)
     app.include_router(devices_router)
+    app.include_router(scim_api_router)
+    app.include_router(scim_router)
+    app.include_router(system_router)
+    app.include_router(users_router)
 
     @app.exception_handler(WorkflowValidationError)
     async def _workflow_validation_handler(_request, exc: WorkflowValidationError):

@@ -4,32 +4,56 @@ export type ExtensionRead = components["schemas"]["ExtensionRead"];
 export type ExtensionCreate = components["schemas"]["ExtensionCreate"];
 export type ExtensionUpdate = components["schemas"]["ExtensionUpdate"];
 
+/** 発信権限の選択肢。 */
+export const CALLING_PERMISSIONS = ["internal", "domestic", "international"] as const;
+export type CallingPermission = (typeof CALLING_PERMISSIONS)[number];
+
+export const CALLING_PERMISSION_LABEL: Record<CallingPermission, string> = {
+  internal: "内線のみ",
+  domestic: "国内発信",
+  international: "国際発信",
+};
+
+/** 未知値も安全に扱うためのナローイング。 */
+export function toCallingPermission(v: string): CallingPermission {
+  return (CALLING_PERMISSIONS as readonly string[]).includes(v)
+    ? (v as CallingPermission)
+    : "domestic";
+}
+
 /** SlidePanel フォームが保持する値。API 型とは分離し、UI 都合の型に寄せる。 */
 export interface ExtensionFormValues {
   number: string;
   display_name: string;
   enabled: boolean;
+  calling_permission: CallingPermission;
 }
 
 /** 作成フォームの初期値。 */
 export function emptyForm(): ExtensionFormValues {
-  return { number: "", display_name: "", enabled: true };
+  return { number: "", display_name: "", enabled: true, calling_permission: "domestic" };
 }
 
 /** 既存内線を編集フォーム値へ写像する。 */
 export function formFromExtension(ext: ExtensionRead): ExtensionFormValues {
-  return { number: ext.number, display_name: ext.display_name, enabled: ext.enabled };
+  return {
+    number: ext.number,
+    display_name: ext.display_name,
+    enabled: ext.enabled,
+    calling_permission: toCallingPermission(ext.calling_permission),
+  };
 }
 
 /**
  * 作成 payload への変換。
- * backend の ExtensionCreate は number / display_name のみ受け付ける
+ * backend の ExtensionCreate は number / display_name / calling_permission を受け付ける
  * （sip_password はサーバ側で自動生成される）。
  */
 export function buildCreatePayload(form: ExtensionFormValues): ExtensionCreate {
   return {
     number: form.number.trim(),
     display_name: form.display_name.trim(),
+    calling_permission: form.calling_permission,
   };
 }
 
@@ -55,6 +79,9 @@ export function buildUpdatePayload(
   }
   if (form.enabled !== original.enabled) {
     payload.enabled = form.enabled;
+  }
+  if (form.calling_permission !== original.calling_permission) {
+    payload.calling_permission = form.calling_permission;
   }
   return payload;
 }

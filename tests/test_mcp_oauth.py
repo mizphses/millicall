@@ -58,7 +58,7 @@ async def mcp_client(mcp_app):
         yield c
 
 
-async def _make_user(app, username="mcpadmin", password="Passw0rd1", role="admin"):
+async def _make_user(app, username="mcpadmin", password="Passw0rd1", role="admin", enabled=True):
     from millicall.auth.security import hash_password
     from millicall.models import User
 
@@ -70,6 +70,7 @@ async def _make_user(app, username="mcpadmin", password="Passw0rd1", role="admin
                 display_name=username,
                 role=role,
                 origin="local",
+                enabled=enabled,
             )
         )
         await session.commit()
@@ -174,6 +175,16 @@ async def test_login_callback_rejects_disallowed_role(mcp_app, mcp_client):
     r = await mcp_client.post(
         "/mcp-login/callback",
         data={"ticket": _ticket(mcp_app), "username": "guest1", "password": "GuestPass1"},
+    )
+    assert r.status_code == 403
+
+
+async def test_login_callback_rejects_disabled_user(mcp_app, mcp_client):
+    """無効化されたユーザーは MCP OAuth ログインを 403 で拒否される（全体レビュー minor #1）。"""
+    await _make_user(mcp_app, username="disabled1", password="DisPass1", role="admin", enabled=False)
+    r = await mcp_client.post(
+        "/mcp-login/callback",
+        data={"ticket": _ticket(mcp_app), "username": "disabled1", "password": "DisPass1"},
     )
     assert r.status_code == 403
 

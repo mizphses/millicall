@@ -1,0 +1,12 @@
+<configuration name="acl.conf" description="Network Lists">
+  <network-lists>
+    <!--
+      millicall_trusted: SIP 信頼 CIDR リスト（SIP多層防御 Phase 6 Task 7）。
+      default="deny" により未登録送信元は FreeSWITCH レイヤでも拒否される（nftables に次ぐ第二層）。
+      HGW (192.168.1.1) は 192.168.0.0/16 に内包されているため、デフォルト設定で実機着信を維持する。
+    -->
+    <list name="millicall_trusted" default="deny">
+{% for cidr in sip_trusted_cidrs %}      <node type="allow" cidr="{{ cidr }}"/>
+{% endfor %}    </list>
+  </network-lists>
+</configuration>
