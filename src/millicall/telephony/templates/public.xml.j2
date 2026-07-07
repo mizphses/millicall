@@ -6,6 +6,23 @@
 #}
 <include>
   <context name="public">
+{#
+  匿名着信拒否オプション (Phase 6 Task 7):
+  sip_reject_anonymous=True のとき、caller-ID が anonymous/restricted/空の呼を
+  CALL_REJECTED で拒否する extension をコンテキスト先頭に挿入する。
+  !! 重要: デフォルト False !!
+  NTT ひかり電話 HGW 回線は 186 プレフィックス未付与時に caller-ID が非通知になるため、
+  True にすると実機着信がすべて拒否される。本番では絶対に True にしないこと。
+  186プレフィックス付き（caller-ID あり）の呼はこの extension にマッチしないため通過する。
+#}
+{% if sip_reject_anonymous %}
+    <extension name="reject_anonymous" continue="false">
+      <condition field="${caller_id_number}" expression="^(anonymous|restricted|Anonymous|)$">
+        <action application="log" data="WARNING ===== ANONYMOUS CALL REJECTED: ${caller_id_number} ====="/>
+        <action application="hangup" data="CALL_REJECTED"/>
+      </condition>
+    </extension>
+{% endif %}
 {% for route in routes %}
 {% if route.target_type == 'extension' %}
     <extension name="inbound_{{ route.match_number }}">

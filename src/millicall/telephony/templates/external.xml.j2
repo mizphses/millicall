@@ -58,7 +58,8 @@
     -->
     <param name="enable-timer"               value="true"/>
     <param name="auth-calls"                 value="false"/>
-    <param name="apply-inbound-acl"          value="none"/>
+    <!-- SIP多層防御: HGW (192.168.1.1) は192.168.0.0/16に内包され通過する。WAN任意送信元は拒否。-->
+    <param name="apply-inbound-acl"          value="millicall_trusted"/>
     <param name="inbound-late-negotiation"   value="true"/>
     <param name="manage-presence"            value="false"/>
     <param name="rtp-timer-name"             value="soft"/>

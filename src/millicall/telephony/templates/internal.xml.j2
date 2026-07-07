@@ -8,6 +8,8 @@
     <param name="auth-calls" value="true"/>
     <param name="accept-blind-reg" value="false"/>
     <param name="accept-blind-auth" value="false"/>
+    <!-- SIP多層防御: 信頼CIDRからのみ内線登録を受け付ける（auth-callsと二重防御）-->
+    <param name="apply-inbound-acl" value="millicall_trusted"/>
     <param name="inbound-codec-prefs" value="PCMU,PCMA"/>
     <param name="outbound-codec-prefs" value="PCMU,PCMA"/>
     <param name="rtp-timer-name" value="soft"/>

@@ -44,6 +44,9 @@ def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfi
         event_socket_port=settings.esl_port,
         external_sip_port=settings.external_sip_port,
         international_allow_prefixes=raw_prefixes,
+        # SIP多層防御 (Phase 6 Task 7)
+        sip_trusted_cidrs=settings.sip_trusted_cidrs,
+        sip_reject_anonymous=settings.sip_reject_anonymous,
     )
 
 

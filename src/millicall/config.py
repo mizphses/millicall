@@ -112,6 +112,25 @@ class Settings(BaseSettings):
     smtp_starttls: bool = True
     smtp_timeout: int = 15
 
+    # --- SIP 多層防御 (Phase 6 Task 7) ---
+    # FreeSWITCH ACL "millicall_trusted" に登録する信頼 CIDR リスト。
+    # カンマ区切り文字列（env MILLICALL_SIP_TRUSTED_CIDRS）または直接 list[str] で指定可。
+    # デフォルト: RFC1918 プライベート全帯域 + loopback。
+    # HGW 192.168.1.1 は 192.168.0.0/16 に内包されているため、このデフォルトで実機着信を維持する。
+    # WAN からの任意送信元は ACL default="deny" により FreeSWITCH レイヤでも拒否される（nftables に次ぐ第二層）。
+    sip_trusted_cidrs: list[str] = [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.1/32",
+    ]
+
+    # !! 重要: デフォルト False !!
+    # True にすると着信 caller-ID が anonymous/非通知の呼を CALL_REJECTED で拒否する。
+    # NTT ひかり電話 HGW 回線は 186 プレフィックス未付与時に caller-ID が非通知（anonymous）になる。
+    # このオプションを True にすると実机着信がすべて拒否される。絶対に本番で True にしないこと。
+    sip_reject_anonymous: bool = False
+
     # --- netd / ネットワーク (Phase 5) ---
     # netd UNIX ドメインソケットのパス（core から netd へのコマンド送信に使用）。
     netd_socket_path: str = "/run/millicall/netd.sock"
@@ -135,6 +154,14 @@ class Settings(BaseSettings):
         # env からはカンマ区切り文字列で渡せるようにする（既存 outbound_* と同系の運用）。
         if isinstance(v, str):
             return [h.strip() for h in v.split(",") if h.strip()]
+        return v
+
+    @field_validator("sip_trusted_cidrs", mode="before")
+    @classmethod
+    def _split_sip_trusted_cidrs(cls, v: object) -> object:
+        # env MILLICALL_SIP_TRUSTED_CIDRS はカンマ区切り文字列で渡せる（mcp_allowed_hosts と同系）。
+        if isinstance(v, str):
+            return [c.strip() for c in v.split(",") if c.strip()]
         return v
 
 

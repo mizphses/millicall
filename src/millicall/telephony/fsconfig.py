@@ -64,6 +64,9 @@ class FreeswitchConfigWriter:
         sip_bind_ip: str | None = None,
         external_sip_port: int = 5080,
         international_allow_prefixes: list[str] | None = None,
+        # SIP多層防御 (Phase 6 Task 7): 信頼CIDR と 匿名着信拒否フラグ
+        sip_trusted_cidrs: list[str] | None = None,
+        sip_reject_anonymous: bool = False,
     ) -> None:
         self.output_dir = Path(output_dir)
         safe_prefixes: list[str] = international_allow_prefixes or []
@@ -75,6 +78,8 @@ class FreeswitchConfigWriter:
                     f"国際発信allowlistに無効なプレフィックスが含まれています: "
                     f"'{p}' （2〜8桁の数字のみ）"
                 )
+        # デフォルト: RFC1918プライベート全帯域 + loopback（HGW 192.168.1.1 は192.168.0.0/16に内包）
+        _default_cidrs = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"]
         self._base = {
             "sip_domain": sip_domain,
             "sip_port": sip_port,
@@ -86,6 +91,8 @@ class FreeswitchConfigWriter:
             "esl_password": esl_password,
             "external_sip_port": external_sip_port,
             "international_allow_prefixes": safe_prefixes,
+            "sip_trusted_cidrs": sip_trusted_cidrs if sip_trusted_cidrs is not None else _default_cidrs,
+            "sip_reject_anonymous": sip_reject_anonymous,
         }
         self._env = Environment(
             loader=PackageLoader("millicall.telephony", "templates"),
@@ -168,6 +175,13 @@ class FreeswitchConfigWriter:
             self._write(
                 "autoload_configs/event_socket.conf.xml",
                 self._render("event_socket.xml.j2"),
+            )
+        )
+        # SIP多層防御: ACL設定（millicall_trusted, default=deny, RFC1918+loopback許可）
+        written.append(
+            self._write(
+                "autoload_configs/acl.conf.xml",
+                self._render("acl.conf.xml.j2"),
             )
         )
         return written
