@@ -601,6 +601,32 @@ async def test_tailscale_up_no_key_returns_400(auth_client_with_telephony, app):
 
 
 @pytest.mark.asyncio
+async def test_tailscale_up_corrupt_key_returns_400(auth_client_with_telephony, app):
+    """保存された auth key が復号不能（破損/キー更新）でも 500 化せず 400 を返す（レビュー M-1）。"""
+    fake = _FakeNetdClient()
+    _inject_fake_netd(app, fake)
+    try:
+        c = auth_client_with_telephony
+        # 復号できない不正な値を tailscale_auth_key_encrypted に直接書き込む
+        from millicall.models import NetworkConfig
+        async with app.state.sessionmaker() as session:
+            cfg = await session.get(NetworkConfig, 1)
+            if cfg is None:
+                cfg = NetworkConfig(id=1)
+                session.add(cfg)
+            cfg.tailscale_enabled = True
+            cfg.tailscale_auth_key_encrypted = "not-a-valid-fernet-token"
+            await session.commit()
+
+        resp = await c.post("/api/network/tailscale/up")
+        assert resp.status_code == 400
+        # netd は呼ばれない
+        assert len(fake.tailscale_up_calls) == 0
+    finally:
+        _remove_fake_netd(app)
+
+
+@pytest.mark.asyncio
 async def test_tailscale_up_netd_error_returns_502(auth_client_with_telephony, app):
     """netd が失敗したとき 502 を返すこと。キーはレスポンスに含まれない。"""
     fake = _FakeNetdClient()

@@ -25,7 +25,7 @@ from millicall.network.validation import (
 # http://<IPv4 アドレス>:<ポート>/<パス> のみ許可。
 # HTTPS / ホスト名 / シェルメタ文字 / 空白 / 改行はすべて拒否。
 _PROVISIONING_URL_RE = re.compile(
-    r"^http://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})(/[^\s\r\n]*)?$"
+    r"\Ahttp://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})(/[^\s\r\n]*)?\Z"
 )
 
 # シェルメタ文字・改行・制御文字を検出する正規表現

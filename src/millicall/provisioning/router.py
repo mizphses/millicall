@@ -54,6 +54,9 @@ async def _require_lan(
     nc = await session.get(NetworkConfig, 1)
     if nc is None:
         raise HTTPException(status_code=404)
+    # request.client が None（一部 ASGI 経路）なら送信元不明として fail-closed で拒否。
+    if request.client is None:
+        raise HTTPException(status_code=404)
     try:
         network = ipaddress.IPv4Network(f"{nc.lan_ip}/{nc.lan_prefix}", strict=False)
         client_ip = ipaddress.IPv4Address(request.client.host)

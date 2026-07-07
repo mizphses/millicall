@@ -26,9 +26,9 @@ from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
 from millicall.network.client import NetdClient
 from millicall.network.router import router as network_router
+from millicall.providers.router import router as providers_router
 from millicall.provisioning.devices_router import router as devices_router
 from millicall.provisioning.router import router as provisioning_router
-from millicall.providers.router import router as providers_router
 from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
 from millicall.telephony.esl import ESLClient

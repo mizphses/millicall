@@ -312,7 +312,14 @@ async def tailscale_up(
             detail="tailscale の auth key が未設定です。先にキーを登録してください。",
         )
 
-    auth_key = box.decrypt(cfg.tailscale_auth_key_encrypted)
+    # 復号失敗（マスターキー更新・保存値破損等）は 400 で返す（500 化させない）。
+    try:
+        auth_key = box.decrypt(cfg.tailscale_auth_key_encrypted)
+    except Exception as exc:  # noqa: BLE001 — InvalidToken 等をまとめて 400 化
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="保存された auth key を復号できません。キーを再登録してください。",
+        ) from exc
     try:
         await netd.tailscale_up(auth_key=auth_key)
     except NetdError as exc:
