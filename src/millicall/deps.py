@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from millicall.auth.security import read_session
+from millicall.auth.security import SessionData, read_session
 from millicall.models import User
 
 if TYPE_CHECKING:
@@ -65,12 +65,20 @@ async def get_current_user(
     token = request.cookies.get(settings.session_cookie_name)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    uid = read_session(secrets.session_secret, token, settings.session_max_age)
-    if uid is None:
+    session_data: SessionData | None = read_session(
+        secrets.session_secret, token, settings.session_max_age
+    )
+    if session_data is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
-    user = await session.get(User, uid)
+    user = await session.get(User, session_data.uid)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unknown user")
+    # セッション失効チェック: epochが不一致なら無効
+    if user.session_epoch != session_data.epoch:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
+    # 無効化ユーザーチェック
+    if not user.enabled:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account disabled")
     return user
 
 

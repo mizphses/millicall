@@ -29,10 +29,44 @@ class User(Base):
     origin: Mapped[str] = mapped_column(
         String(20), nullable=False, default="local", server_default="local"
     )
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    session_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     # Phase 6 (TOTP 2FA) 用に予約。Phase 1 では常に NULL。
-    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    totp_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        """秘密フィールド(totp_secret/hashed_password)を除外したrepr。"""
+        attrs = [
+            f"{k}={v!r}" for k, v in self.__dict__.items()
+            if not k.startswith("_") and k not in ("totp_secret", "hashed_password")
+        ]
+        return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    target_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), index=True
     )
 
 

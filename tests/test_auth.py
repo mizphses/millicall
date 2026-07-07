@@ -15,13 +15,16 @@ def test_password_hash_roundtrip() -> None:
 
 
 def test_session_token_roundtrip() -> None:
-    token = issue_session("k" * 40, 42)
-    assert read_session("k" * 40, token, 3600) == 42
+    token = issue_session("k" * 40, 42, epoch=0)
+    data = read_session("k" * 40, token, 3600)
+    assert data is not None
+    assert data.uid == 42
+    assert data.epoch == 0
     assert read_session("other-secret", token, 3600) is None
 
 
 def test_session_token_expired() -> None:
-    token = issue_session("k" * 40, 7)
+    token = issue_session("k" * 40, 7, epoch=0)
     assert read_session("k" * 40, token, -1) is None
 
 
