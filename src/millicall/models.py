@@ -204,6 +204,32 @@ class AiAgent(Base):
     )
 
 
+class Workflow(Base):
+    __tablename__ = "workflows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # 着信番号。UNIQUE（同 number の Route を自動プロビジョニングする — Phase 4b 裁定#9）。
+    number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # ワークフロー既定 TTS プロバイダ（ノードで tts_provider_id 未指定時のフォールバック）。
+    default_tts_provider_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # WorkflowDefinition({nodes, edges}) の JSON 文字列。GUI メタ含む生 JSON を保持。
+    definition_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default='{"nodes": [], "edges": []}',
+        server_default='{"nodes": [], "edges": []}',
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class CallMessage(Base):
     __tablename__ = "call_messages"
 

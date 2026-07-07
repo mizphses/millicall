@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -35,6 +35,9 @@ from millicall.telephony.service import (
 )
 from millicall.trunks.router import router as trunks_router
 from millicall.tts_cache.router import router as tts_cache_router
+from millicall.workflows.errors import WorkflowValidationError
+from millicall.workflows.router import router as workflows_router
+from millicall.workflows.service import NoLlmProviderError
 
 logger = logging.getLogger("millicall")
 
@@ -204,6 +207,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(providers_router)
     app.include_router(ai_agents_router)
     app.include_router(tts_cache_router)
+    app.include_router(workflows_router)
+
+    @app.exception_handler(WorkflowValidationError)
+    async def _workflow_validation_handler(_request, exc: WorkflowValidationError):
+        # 壊れた定義の保存拒否（旧の最重要問題を解消）: ハード違反は 422。
+        return JSONResponse(status_code=422, content={"detail": exc.errors})
+
+    @app.exception_handler(NoLlmProviderError)
+    async def _no_llm_handler(_request, exc: NoLlmProviderError):
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
