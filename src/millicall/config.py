@@ -131,6 +131,34 @@ class Settings(BaseSettings):
     # このオプションを True にすると実机着信がすべて拒否される。絶対に本番で True にしないこと。
     sip_reject_anonymous: bool = False
 
+    # --- システム管理 / Docker socket-proxy (Phase 6 Task 8) ---
+    # Docker HTTP API エンドポイント（Tecnativa socket-proxy 経由）。
+    # core は raw docker.sock に一切触れず、このプロキシ URL のみ使用する。
+    # 空文字の場合はシステム管理機能が無効化され、全エンドポイントが 503 を返す。
+    # core が network_mode: host のため、プロキシが 127.0.0.1:2375 に bind していれば
+    # http://127.0.0.1:2375 でアクセスできる（docker-compose.prod.yml 参照）。
+    docker_proxy_url: str = ""
+    # 再起動を許可するコンテナ名（compose サービス名）のカンマ区切りリスト。
+    # この allowlist 外のコンテナを再起動しようとすると 403 を返す。
+    # 任意コンテナの再起動を防ぐ最小権限の強制（raw socket 非接触と組み合わせ）。
+    system_managed_containers: str = "core,freeswitch,netd,docker-proxy"
+
+    @field_validator("system_managed_containers", mode="before")
+    @classmethod
+    def _validate_system_managed_containers(cls, v: object) -> object:
+        # カンマ区切り文字列として受け取るが、フィールド自体は str のまま保持する。
+        # 利用側は split_managed_containers() を使ってリスト化する。
+        if isinstance(v, str):
+            return v
+        # list が渡された場合（テスト等）はカンマ結合して str に戻す。
+        if isinstance(v, list):
+            return ",".join(str(x).strip() for x in v if str(x).strip())
+        return v
+
+    def split_managed_containers(self) -> list[str]:
+        """system_managed_containers をカンマ分割して stripped リストで返す。"""
+        return [s.strip() for s in self.system_managed_containers.split(",") if s.strip()]
+
     # --- netd / ネットワーク (Phase 5) ---
     # netd UNIX ドメインソケットのパス（core から netd へのコマンド送信に使用）。
     netd_socket_path: str = "/run/millicall/netd.sock"
