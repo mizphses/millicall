@@ -405,10 +405,12 @@ async def list_users(  # noqa: N802
     all_users = (await session.scalars(stmt)).all()
     total = len(all_users)
 
-    # ページング（startIndex は 1-based）
+    # ページング（startIndex は 1-based）。count は [0, 1000] にクランプする
+    # （負値の予期しないスライス・上限超過を防ぐ、レビュー M-2）。
+    safe_count = max(0, min(count, 1000))
     start = max(startIndex, 1)
     idx = start - 1
-    paged = all_users[idx : idx + count]
+    paged = all_users[idx : idx + safe_count]
 
     resources = [_user_to_scim(u, base) for u in paged]
     return {
@@ -645,8 +647,11 @@ async def patch_user(
                     user.external_id = value["externalId"] or None
                     changed = True
             elif path == "active":
+                # active op は真偽値必須（値なし/非 bool を deactivate と誤解釈しない、レビュー M-1）
+                if not isinstance(value, bool):
+                    return _scim_error(400, "active must be a boolean", "invalidValue")
                 was = user.enabled
-                new_val = bool(value)
+                new_val = value
                 if not new_val and was:
                     user.enabled = False
                     bump_session_epoch(user)
@@ -682,7 +687,11 @@ async def patch_user(
         elif op_name in {"add", "remove"} and (
             path == "active" or (not path and isinstance(value, dict) and "active" in value)
         ):
-            act_val = bool(value) if path == "active" else bool(value.get("active"))  # type: ignore[union-attr]
+            raw_active = value if path == "active" else value.get("active")  # type: ignore[union-attr]
+            # active は真偽値必須（値なし/非 bool を deactivate と誤解釈しない、レビュー M-1）
+            if not isinstance(raw_active, bool):
+                return _scim_error(400, "active must be a boolean", "invalidValue")
+            act_val = raw_active
             was = user.enabled
             if not act_val and was:
                 user.enabled = False

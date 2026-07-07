@@ -776,3 +776,44 @@ async def test_secret_hygiene_token_not_in_user_response(known_admin_client, cli
     assert "hashed_password" not in response_text
     assert "totp_secret" not in response_text
     assert "session_epoch" not in response_text
+
+
+# ---------------------------------------------------------------------------
+# レビュー M-1/M-2 回帰
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_patch_active_without_boolean_value_400(known_admin_client, client):
+    """active op に真偽値以外/値なしを渡すと 400（誤 deactivate 防止、M-1）。"""
+    token = await _get_scim_token(known_admin_client)
+    headers = {"Authorization": f"Bearer {token}"}
+    r = await client.post(
+        "/scim/v2/Users",
+        json={"schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"], "userName": "scim.m1"},
+        headers=headers,
+    )
+    assert r.status_code == 201
+    user_id = r.json()["id"]
+
+    # value を省略した replace active → 400
+    r2 = await client.patch(
+        f"/scim/v2/Users/{user_id}",
+        json={
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "replace", "path": "active"}],
+        },
+        headers=headers,
+    )
+    assert r2.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_list_users_count_clamped(known_admin_client, client):
+    """count に過大値/負値を渡してもエラーにならずクランプされる（M-2）。"""
+    token = await _get_scim_token(known_admin_client)
+    headers = {"Authorization": f"Bearer {token}"}
+    r = await client.get("/scim/v2/Users?count=1000000000", headers=headers)
+    assert r.status_code == 200
+    r2 = await client.get("/scim/v2/Users?count=-1", headers=headers)
+    assert r2.status_code == 200
