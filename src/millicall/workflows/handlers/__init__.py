@@ -14,5 +14,6 @@ from millicall.workflows.handlers import (
     ai,  # noqa: F401
     audio,  # noqa: F401
     dtmf,  # noqa: F401
+    email,  # noqa: F401
     logic,  # noqa: F401
 )

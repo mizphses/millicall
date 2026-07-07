@@ -70,6 +70,7 @@ class ChannelContext:
     provider_resolver: Callable[[int], Awaitable[Any]] | None = None  # Task 5/7
     agent_resolver: Callable[[int], Awaitable[Any]] | None = None  # Task 7
     default_tts_provider_id: int | None = None
+    smtp: Any = None  # SmtpEmailSender — Task 8, wired by the runner factory in Task 9
 
     # Lifecycle flag: set once the channel has been (or is being) hung up.
     hung_up: bool = False

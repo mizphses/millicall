@@ -56,6 +56,17 @@ class Settings(BaseSettings):
     # converse 既定エージェント（Phase 4a Task 4 で使用）。None なら enabled な ai_agents 最小 id。
     mcp_default_agent_id: int | None = None
 
+    # --- Email 通知 (Phase 4b) ---
+    # smtp_host が空文字の場合はメール送信が無効化される。
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    # From アドレス。空の場合は smtp_username にフォールバック。
+    smtp_from: str = ""
+    smtp_starttls: bool = True
+    smtp_timeout: int = 15
+
     @field_validator("mcp_allowed_hosts", mode="before")
     @classmethod
     def _split_allowed_hosts(cls, v: object) -> object:
