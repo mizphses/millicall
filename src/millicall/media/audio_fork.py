@@ -14,6 +14,7 @@ import logging
 from fastapi import FastAPI, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import (
     AnswerRegistry,
     HangupRegistry,
@@ -90,10 +91,12 @@ class MediaEventRouter:
         reconnect=None,
         answer_registry: AnswerRegistry | None = None,
         hangup_registry: HangupRegistry | None = None,
+        dtmf_collector: DtmfCollector | None = None,
     ) -> None:
         self._registry = registry
         self._answer_registry = answer_registry
         self._hangup_registry = hangup_registry
+        self._dtmf_collector = dtmf_collector
         self._esl = esl
         # 末尾スラッシュを除去して URL 組み立てを决定論的にする
         self._ws_base_url = ws_base_url.rstrip("/") if ws_base_url else None
@@ -116,10 +119,17 @@ class MediaEventRouter:
                 if uuid:
                     self._answer_registry.resolve(uuid)
             await self._maybe_start_audio_stream(event)
+        elif name == "DTMF":
+            uuid = event.get("Unique-ID") or event.get("Channel-Call-UUID") or ""
+            digit = event.get("DTMF-Digit") or ""
+            if self._dtmf_collector is not None and uuid and digit:
+                self._dtmf_collector.feed(uuid, digit)
         elif name == "CHANNEL_HANGUP_COMPLETE":
             uuid = event.get("Channel-Call-UUID") or event.get("Unique-ID") or ""
             if self._hangup_registry is not None and uuid:
                 self._hangup_registry.resolve(uuid)
+            if self._dtmf_collector is not None and uuid:
+                self._dtmf_collector.unregister(uuid)
             self._registry.pop(uuid)
             self._started.discard(uuid)
 

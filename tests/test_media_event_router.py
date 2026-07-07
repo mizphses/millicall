@@ -101,3 +101,110 @@ async def test_channel_answer_without_esl_configured_is_noop():
             "variable_millicall_ai_agent": "7",
         }
     )
+
+
+# --------------------------------------------------------------------------- #
+# DTMF イベント配線 (Task 6)
+# --------------------------------------------------------------------------- #
+
+
+class _FakeDtmfCollector:
+    """フェイク DtmfCollector — feed/unregister の呼び出しを記録する。"""
+
+    def __init__(self) -> None:
+        self.fed: list[tuple[str, str]] = []
+        self.unregistered: list[str] = []
+
+    def feed(self, uuid: str, digit: str) -> None:
+        self.fed.append((uuid, digit))
+
+    def unregister(self, uuid: str) -> None:
+        self.unregistered.append(uuid)
+
+
+@pytest.mark.asyncio
+async def test_dtmf_event_calls_collector_feed():
+    """DTMF イベントが dtmf_collector.feed(uuid, digit) を呼ぶ。"""
+    reg = SessionRegistry()
+    collector = _FakeDtmfCollector()
+    router = MediaEventRouter(reg, dtmf_collector=collector)
+    await router.handle(
+        {
+            "Event-Name": "DTMF",
+            "Unique-ID": "abc",
+            "DTMF-Digit": "5",
+        }
+    )
+    assert collector.fed == [("abc", "5")]
+
+
+@pytest.mark.asyncio
+async def test_dtmf_event_uses_channel_call_uuid_fallback():
+    """Unique-ID がない場合は Channel-Call-UUID を uuid として使う。"""
+    reg = SessionRegistry()
+    collector = _FakeDtmfCollector()
+    router = MediaEventRouter(reg, dtmf_collector=collector)
+    await router.handle(
+        {
+            "Event-Name": "DTMF",
+            "Channel-Call-UUID": "xyz",
+            "DTMF-Digit": "3",
+        }
+    )
+    assert collector.fed == [("xyz", "3")]
+
+
+@pytest.mark.asyncio
+async def test_dtmf_event_without_collector_is_noop():
+    """dtmf_collector 未注入（None）でも例外を出さない（後方互換）。"""
+    reg = SessionRegistry()
+    router = MediaEventRouter(reg)  # dtmf_collector=None
+    # 例外なく処理される
+    await router.handle(
+        {
+            "Event-Name": "DTMF",
+            "Unique-ID": "abc",
+            "DTMF-Digit": "1",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_dtmf_event_empty_digit_is_noop():
+    """DTMF-Digit が空文字の場合は feed を呼ばない。"""
+    reg = SessionRegistry()
+    collector = _FakeDtmfCollector()
+    router = MediaEventRouter(reg, dtmf_collector=collector)
+    await router.handle(
+        {
+            "Event-Name": "DTMF",
+            "Unique-ID": "abc",
+            "DTMF-Digit": "",
+        }
+    )
+    assert collector.fed == []
+
+
+@pytest.mark.asyncio
+async def test_hangup_calls_dtmf_collector_unregister():
+    """CHANNEL_HANGUP_COMPLETE が dtmf_collector.unregister(uuid) を呼ぶ。"""
+    reg = SessionRegistry()
+    reg.register("u1", session=object(), call_control=_CC())
+    collector = _FakeDtmfCollector()
+    router = MediaEventRouter(reg, dtmf_collector=collector)
+    await router.handle(
+        {"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "u1"}
+    )
+    assert "u1" in collector.unregistered
+
+
+@pytest.mark.asyncio
+async def test_hangup_without_dtmf_collector_still_removes_session():
+    """dtmf_collector が None でもハングアップ時にセッションが正しく削除される。"""
+    reg = SessionRegistry()
+    reg.register("u1", session=object(), call_control=_CC())
+    router = MediaEventRouter(reg)  # dtmf_collector=None
+    await router.handle(
+        {"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "u1"}
+    )
+    assert reg.get("u1") is None
