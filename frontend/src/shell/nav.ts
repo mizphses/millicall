@@ -10,6 +10,7 @@ import {
   History,
   GitBranch,
   Wifi,
+  Smartphone,
 } from "lucide-react";
 
 /** サイドナビとヘッダ題で共有するルート定義。 */
@@ -32,6 +33,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/cdr",        label: "通話履歴",         icon: React.createElement(History,         { size: ICON_SIZE }) },
   { path: "/workflows",  label: "ワークフロー",     icon: React.createElement(GitBranch,       { size: ICON_SIZE }) },
   { path: "/network",   label: "ネットワーク",     icon: React.createElement(Wifi,            { size: ICON_SIZE }) },
+  { path: "/devices",   label: "デバイス",         icon: React.createElement(Smartphone,       { size: ICON_SIZE }) },
 ];
 
 /** パスから画面題を引く（ヘッダ用）。 */

@@ -180,6 +180,92 @@ export interface paths {
         patch: operations["update_contact_api_contacts__contact_id__patch"];
         trace?: never;
     };
+    "/api/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Devices
+         * @description デバイス一覧を返す（Extension 情報付き）。
+         *
+         *     デバイス数は少ないため N+1 で Extension を取得しても問題ない。
+         */
+        get: operations["list_devices_api_devices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/devices/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync Devices
+         * @description DHCP リースからデバイス行を upsert して結果を返す。
+         *
+         *     netd が利用できない場合は 502 を返す。
+         */
+        post: operations["sync_devices_api_devices_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/devices/{device_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Device
+         * @description デバイスを削除する。
+         */
+        delete: operations["delete_device_api_devices__device_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/devices/{device_id}/quick-provision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Quick Provision Endpoint
+         * @description デバイスに内線を割り当て、プロビジョニング完了状態にする。
+         *
+         *     内線割り当て後、best-effort で電話機への HTTP resync 要求も送る。
+         */
+        post: operations["quick_provision_endpoint_api_devices__device_id__quick_provision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/extensions": {
         parameters: {
             query?: never;
@@ -587,6 +673,152 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/provisioning/Panasonic/ConfigCommon.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Panasonic Common Config
+         * @description Panasonic KX-HDV 共通設定ファイルを返す（LAN 制限のみ）。
+         *
+         *     端末固有のクレデンシャルを含まない共通設定。
+         */
+        get: operations["panasonic_common_config_provisioning_Panasonic_ConfigCommon_cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/Panasonic/Config{mac}.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Panasonic Device Config
+         * @description Panasonic KX-HDV 端末固有設定ファイルを返す（LAN 制限 + known-device + トークンゲート）。
+         *
+         *     SIP 認証情報を含むため、プロビジョニング済みデバイスのみアクセス可能。
+         */
+        get: operations["panasonic_device_config_provisioning_Panasonic_Config_mac__cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/Yealink/common.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Yealink Common Config
+         * @description Yealink 共通設定ファイルを返す（LAN 制限のみ）。
+         */
+        get: operations["yealink_common_config_provisioning_Yealink_common_cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/Yealink/y000000000000.boot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Yealink Boot
+         * @description Yealink 自動プロビジョニング起動ファイルを返す（LAN 制限のみ）。
+         */
+        get: operations["yealink_boot_provisioning_Yealink_y000000000000_boot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/Yealink/{mac}.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Yealink Device Config
+         * @description Yealink 端末固有設定ファイルを返す（LAN 制限 + known-device + トークンゲート）。
+         *
+         *     SIP 認証情報を含むため、プロビジョニング済みデバイスのみアクセス可能。
+         */
+        get: operations["yealink_device_config_provisioning_Yealink__mac__cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/phonebook/panasonic.xml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Panasonic Phonebook
+         * @description Panasonic XML 電話帳を返す（LAN 制限のみ）。
+         */
+        get: operations["panasonic_phonebook_provisioning_phonebook_panasonic_xml_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/phonebook/yealink.xml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Yealink Phonebook
+         * @description Yealink XML 電話帳を返す（LAN 制限のみ）。
+         */
+        get: operations["yealink_phonebook_provisioning_phonebook_yealink_xml_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -784,6 +1016,39 @@ export interface components {
             notes?: string | null;
             /** Phone Number */
             phone_number?: string | null;
+        };
+        /**
+         * DeviceRead
+         * @description デバイス情報レスポンスモデル。provision_token は絶対に含めない。
+         */
+        DeviceRead: {
+            /** Active */
+            active: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Extension Display Name */
+            extension_display_name: string | null;
+            /** Extension Id */
+            extension_id: number | null;
+            /** Extension Number */
+            extension_number: string | null;
+            /** Hostname */
+            hostname: string | null;
+            /** Id */
+            id: number;
+            /** Ip Address */
+            ip_address: string | null;
+            /** Last Seen */
+            last_seen: string | null;
+            /** Mac Address */
+            mac_address: string;
+            /** Model */
+            model: string | null;
+            /** Provisioned */
+            provisioned: boolean;
         };
         /** ExtensionCreate */
         ExtensionCreate: {
@@ -1004,6 +1269,16 @@ export interface components {
             enabled?: boolean | null;
             /** Name */
             name?: string | null;
+        };
+        /**
+         * QuickProvisionBody
+         * @description クイックプロビジョニングリクエストボディ。
+         */
+        QuickProvisionBody: {
+            /** Display Name */
+            display_name: string;
+            /** Extension Number */
+            extension_number: string;
         };
         /** RouteCreate */
         RouteCreate: {
@@ -1694,6 +1969,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContactRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_devices_api_devices_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceRead"][];
+                };
+            };
+        };
+    };
+    sync_devices_api_devices_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceRead"][];
+                };
+            };
+        };
+    };
+    delete_device_api_devices__device_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    quick_provision_endpoint_api_devices__device_id__quick_provision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuickProvisionBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceRead"];
                 };
             };
             /** @description Validation Error */
@@ -2708,6 +3087,172 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    panasonic_common_config_provisioning_Panasonic_ConfigCommon_cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    panasonic_device_config_provisioning_Panasonic_Config_mac__cfg_get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                mac: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    yealink_common_config_provisioning_Yealink_common_cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    yealink_boot_provisioning_Yealink_y000000000000_boot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    yealink_device_config_provisioning_Yealink__mac__cfg_get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                mac: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    panasonic_phonebook_provisioning_phonebook_panasonic_xml_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    yealink_phonebook_provisioning_phonebook_yealink_xml_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

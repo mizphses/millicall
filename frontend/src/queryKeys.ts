@@ -46,3 +46,10 @@ export const WORKFLOW_NODE_TYPES_KEY = ["workflow-node-types"] as const;
 export const NETWORK_CONFIG_KEY = ["network-config"] as const;
 /** Tailscale ステータスポーリング用キー（config とは別トップレベル）。 */
 export const NETWORK_TAILSCALE_STATUS_KEY = ["network-tailscale-status"] as const;
+
+// ─────────────────────────────────────────────────────────
+// デバイス管理用キー（Phase 5 T6）
+// ─────────────────────────────────────────────────────────
+
+/** デバイス一覧取得 / sync / delete 後の invalidate に使う。 */
+export const DEVICES_KEY = ["devices"] as const;
