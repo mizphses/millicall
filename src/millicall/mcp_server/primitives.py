@@ -118,6 +118,26 @@ class CallPrimitives:
         pcm = wav_to_pcm8k(wav)
         return await self._transcribe(pcm)
 
+    async def record(self, path: str, max_seconds: int) -> str:
+        """指定パスに録音し、ファイルを保存する（STT なし、ファイル削除なし）。
+
+        voicemail 等の録音保存用。:meth:`listen` と異なり、STT 変換・ファイル削除を行わない。
+        ファイルの作成は FreeSWITCH に委ねる（呼び出し元がディレクトリを事前に作成すること）。
+
+        bgapi コマンド:
+            ``uuid_record <uuid> start <path> <max_seconds>``
+            ``uuid_record <uuid> stop <path>``   (finally で確実に停止)
+
+        Returns:
+            path: 録音ファイルのパス（格納先の確認用）。
+        """
+        await self._bgapi(f"uuid_record {self._call_uuid} start {path} {max_seconds}")
+        try:
+            await self._sleep(max_seconds)
+        finally:
+            await self._bgapi(f"uuid_record {self._call_uuid} stop {path}")
+        return path
+
     async def say_and_listen(self, text: str, max_seconds: int = 15) -> tuple[str, str]:
         """say → listen を 1 ターンで行い、(話した内容, 聞き取り) を返す。"""
         await self.say(text)
