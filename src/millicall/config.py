@@ -52,10 +52,13 @@ class Settings(BaseSettings):
     # （レビュー M-1）。ステートレス署名チケットのため、この窓 = 総当たり可能時間。
     totp_ticket_max_age: int = 120
 
-    # ログイン試行レート制限（Phase 6 Task 3）
-    # 同一 IP またはユーザー名について、この回数を超えると lockout_seconds の間ブロックする。
+    # ログイン試行レート制限（Phase 6 Task 3 / レビュー H-1 で IP・ユーザー名しきい値を分離）
+    # IP しきい値（一次防御・低め）: 単一 IP からの総当たりを止める。
     login_max_attempts: int = 10
-    # ロックアウト期間（秒）。この期間内の失敗数が max_attempts を超えると 429 を返す。
+    # ユーザー名しきい値（二次防御・高め）: 分散総当たりに備える。IP しきい値より高くすることで、
+    # 単一 IP の攻撃者は自分の IP が先にロックされ、正規アカウントを容易に DoS ロックアウトできない。
+    login_username_max_attempts: int = 30
+    # ロックアウト期間（秒）。この期間内の失敗数がしきい値を超えると 429 を返す。
     login_lockout_seconds: int = 300
 
     # CSRF 保護 (Phase 6 Task 3)

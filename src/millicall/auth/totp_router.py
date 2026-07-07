@@ -235,7 +235,8 @@ async def totp_verify(
         session,
         ip=ip,
         username=user.username,
-        max_attempts=settings.login_max_attempts,
+        ip_max_attempts=settings.login_max_attempts,
+        username_max_attempts=settings.login_username_max_attempts,
         lockout_seconds=settings.login_lockout_seconds,
         actor_user_id=user.id,
     )
@@ -313,7 +314,8 @@ async def totp_disable(
         session,
         ip=ip,
         username=user.username,
-        max_attempts=settings.login_max_attempts,
+        ip_max_attempts=settings.login_max_attempts,
+        username_max_attempts=settings.login_username_max_attempts,
         lockout_seconds=settings.login_lockout_seconds,
         actor_user_id=user.id,
     )

@@ -128,7 +128,8 @@ async def login(
         session,
         ip=ip,
         username=body.username,
-        max_attempts=settings.login_max_attempts,
+        ip_max_attempts=settings.login_max_attempts,
+        username_max_attempts=settings.login_username_max_attempts,
         lockout_seconds=settings.login_lockout_seconds,
     )
 
@@ -216,7 +217,8 @@ async def login_totp(
         session,
         ip=ip,
         username=user.username,
-        max_attempts=settings.login_max_attempts,
+        ip_max_attempts=settings.login_max_attempts,
+        username_max_attempts=settings.login_username_max_attempts,
         lockout_seconds=settings.login_lockout_seconds,
         actor_user_id=user.id,
     )

@@ -38,27 +38,38 @@ async def _count_recent(
     return result or 0
 
 
+async def _prune_expired(session: AsyncSession, *, window_seconds: int) -> None:
+    """ウィンドウより古い失敗行を削除してテーブルの無制限成長を防ぐ（レビュー N-3）。"""
+    cutoff = _now_utc() - timedelta(seconds=window_seconds)
+    await session.execute(delete(LoginAttempt).where(LoginAttempt.created_at < cutoff))
+
+
 async def check_and_raise(
     session: AsyncSession,
     *,
     ip: str | None,
     username: str,
-    max_attempts: int,
+    ip_max_attempts: int,
+    username_max_attempts: int,
     lockout_seconds: int,
     actor_user_id: int | None = None,
 ) -> None:
     """ロックアウト状態なら HTTPException(429) を送出する。
 
-    IP とユーザー名の両軸をチェックし、どちらかが上限を超えていれば
-    audit に "login.lockout" を記録して 429 を返す。
+    IP とユーザー名で **別々のしきい値** を用いる（レビュー H-1）:
+      - IP しきい値 (低め) が一次防御。単一 IP からの総当たりを止める。
+      - ユーザー名しきい値 (高め) が二次防御。分散総当たりに備える。
+    ユーザー名しきい値を IP しきい値より高くすることで、単一 IP の攻撃者は自分の IP が
+    先にロックされ、正規ユーザーのアカウントを容易にロックアウト（DoS）できない。
 
     commit は呼び出し元の責務（audit record の flush のため）。
     """
     retry_after = str(lockout_seconds)
+    await _prune_expired(session, window_seconds=lockout_seconds)
 
     if ip:
         ip_count = await _count_recent(session, key=ip, window_seconds=lockout_seconds)
-        if ip_count >= max_attempts:
+        if ip_count >= ip_max_attempts:
             await record_audit(
                 session,
                 actor_user_id=actor_user_id,
@@ -75,7 +86,7 @@ async def check_and_raise(
             )
 
     username_count = await _count_recent(session, key=username, window_seconds=lockout_seconds)
-    if username_count >= max_attempts:
+    if username_count >= username_max_attempts:
         await record_audit(
             session,
             actor_user_id=actor_user_id,

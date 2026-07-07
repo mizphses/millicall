@@ -8,6 +8,8 @@
   - ロックアウト時に audit ログが記録される
 """
 import pyotp
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import func, select
 
 from millicall.auth.security import hash_password
@@ -296,3 +298,40 @@ async def test_totp_disable_endpoint_rate_limited(tmp_path):
             # 4 回目以降は 429
             resp = await c.post("/api/auth/totp/disable", json={"code": "000000"})
             assert resp.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# IP・ユーザー名しきい値の分離（レビュー H-1 回帰）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_username_threshold_decoupled_from_ip(app):
+    """ip=None のとき、IP しきい値(10)ではロックされず、ユーザー名しきい値(30)でロックされる。
+
+    これにより単一 IP の攻撃者（IP キーが先に 10 でロック）が正規アカウントを
+    容易に DoS ロックアウトできないことを担保する。
+    """
+    from millicall.auth.throttle import check_and_raise, record_failure
+
+    async with app.state.sessionmaker() as s:
+        # 15 回失敗（username キーのみ）。IP しきい値 10 は超えるが username しきい値 30 未満。
+        for _ in range(15):
+            await record_failure(s, ip=None, username="victim", action="login")
+        await s.commit()
+
+        # username=victim, ip=None → username_count=15 < 30 なので通過（例外なし）
+        await check_and_raise(
+            s, ip=None, username="victim",
+            ip_max_attempts=10, username_max_attempts=30, lockout_seconds=300,
+        )
+
+        # さらに 20 回（計 35）失敗させると username しきい値 30 を超えてロック
+        for _ in range(20):
+            await record_failure(s, ip=None, username="victim", action="login")
+        await s.commit()
+        with pytest.raises(HTTPException) as ei:
+            await check_and_raise(
+                s, ip=None, username="victim",
+                ip_max_attempts=10, username_max_attempts=30, lockout_seconds=300,
+            )
+        assert ei.value.status_code == 429

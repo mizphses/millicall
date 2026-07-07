@@ -24,12 +24,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
-# CSRF チェックが不要なパス接頭辞（pre-auth または非 Cookie 認証）
+# CSRF チェックが不要なパス（pre-auth または非 Cookie 認証）。
+# レビュー M-1/M-2: 素の startswith は `/mcp-login/callback` や将来の
+# `/api/auth/login-history` 等を意図せず免除してしまう。境界を意識した一致
+# （完全一致 または prefix + "/" で始まる）に限定する。
 _EXEMPT_PREFIXES = (
-    "/api/auth/login",   # POST /api/auth/login および /api/auth/login/totp
-    "/saml/",            # SAML IdP からの cross-origin POST（T4/T5）
-    "/scim/",            # SCIM (Bearer auth); Cookie を使わない
-    "/mcp",              # MCP OAuth Bearer
+    "/api/auth/login",      # POST /api/auth/login（完全一致）
+    "/api/auth/login/totp",  # 2 段階ログイン
+    "/saml",                # SAML IdP からの cross-origin POST（T4/T5）
+    "/scim",                # SCIM (Bearer auth); Cookie を使わない
+    "/mcp",                 # MCP OAuth Bearer
 )
 
 # CSRF チェック対象のメソッド（状態変更リクエスト）
@@ -37,8 +41,10 @@ _CHECKED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def _is_exempt(path: str) -> bool:
-    """パスが CSRF チェック除外対象かどうかを返す。"""
-    return any(path.startswith(prefix) for prefix in _EXEMPT_PREFIXES)
+    """パスが CSRF チェック除外対象かどうかを返す（境界一致）。"""
+    return any(
+        path == prefix or path.startswith(prefix + "/") for prefix in _EXEMPT_PREFIXES
+    )
 
 
 class CsrfMiddleware(BaseHTTPMiddleware):
@@ -89,8 +95,13 @@ def set_csrf_cookie(response: Response, settings, token: str) -> None:
 
 
 def clear_csrf_cookie(response: Response, settings) -> None:
-    """ログアウト時に CSRF Cookie を削除する。"""
-    response.delete_cookie(key=settings.csrf_cookie_name, path="/")
+    """ログアウト時に CSRF Cookie を削除する（set 時と同じ属性で厳密に削除）。"""
+    response.delete_cookie(
+        key=settings.csrf_cookie_name,
+        path="/",
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite,
+    )
 
 
 def generate_csrf_token() -> str:

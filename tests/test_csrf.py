@@ -307,3 +307,25 @@ async def test_csrf_cookie_set_on_totp_login(tmp_path):
             assert totp_resp.status_code == 200
             # TOTP ログイン成功後も CSRF Cookie がセットされる
             assert "millicall_csrf" in totp_resp.cookies
+
+
+# ---------------------------------------------------------------------------
+# 除外パスの境界一致（レビュー M-1/M-2 回帰）
+# ---------------------------------------------------------------------------
+
+def test_csrf_exempt_boundary_matching():
+    """startswith の過剰マッチを防ぎ、境界一致のみ除外する。"""
+    from millicall.auth.csrf import _is_exempt
+
+    # 正当な除外
+    assert _is_exempt("/api/auth/login") is True
+    assert _is_exempt("/api/auth/login/totp") is True
+    assert _is_exempt("/mcp") is True
+    assert _is_exempt("/mcp/messages") is True
+    assert _is_exempt("/scim/v2/Users") is True
+    assert _is_exempt("/saml/acs") is True
+    # 過剰マッチしてはならないもの
+    assert _is_exempt("/api/auth/login-history") is False
+    assert _is_exempt("/mcp-login/callback") is False
+    assert _is_exempt("/api/auth/logout") is False
+    assert _is_exempt("/api/network") is False
