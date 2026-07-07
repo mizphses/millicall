@@ -20,6 +20,7 @@ import { ContactsPage } from "../pages/ContactsPage";
 import { CdrPage } from "../pages/CdrPage";
 import { WorkflowsPage } from "../pages/WorkflowsPage";
 import { WorkflowEditorPage } from "../pages/WorkflowEditorPage";
+import { NetworkPage } from "../pages/NetworkPage";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -114,6 +115,12 @@ const workflowEditorRoute = createRoute({
   component: WorkflowEditorPage,
 });
 
+const networkRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/network",
+  component: NetworkPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   authLayoutRoute.addChildren([
@@ -127,6 +134,7 @@ const routeTree = rootRoute.addChildren([
     cdrRoute,
     workflowsRoute,
     workflowEditorRoute,
+    networkRoute,
   ]),
 ]);
 

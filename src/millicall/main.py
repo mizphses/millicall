@@ -25,6 +25,7 @@ from millicall.media.audio_fork import MediaEventRouter, register_media_ws
 from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
 from millicall.network.client import NetdClient
+from millicall.network.router import router as network_router
 from millicall.providers.router import router as providers_router
 from millicall.routes_config.router import router as routes_router
 from millicall.secrets_store import load_or_create_secrets
@@ -229,6 +230,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ai_agents_router)
     app.include_router(tts_cache_router)
     app.include_router(workflows_router)
+    app.include_router(network_router)
 
     @app.exception_handler(WorkflowValidationError)
     async def _workflow_validation_handler(_request, exc: WorkflowValidationError):

@@ -217,6 +217,127 @@ export interface paths {
         patch: operations["update_extension_api_extensions__ext_id__patch"];
         trace?: never;
     };
+    "/api/network": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Network Config
+         * @description 現在のネットワーク設定を返す。id=1 行が存在しない場合はデフォルト値で作成する。
+         *
+         *     tailscale_auth_key_encrypted はレスポンスに**含めない**。
+         */
+        get: operations["get_network_config_api_network_get"];
+        /**
+         * Update Network Config
+         * @description ネットワーク設定を更新して保存する。netd への適用は行わない。
+         *
+         *     tailscale_auth_key の扱い:
+         *       - None / 未指定: 既存キーを変更しない
+         *       - 空文字列 "": キーを削除（NULL に）
+         *       - 非空文字列: 検証後に暗号化して保存
+         */
+        put: operations["update_network_config_api_network_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/network/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Network Config
+         * @description 保存済み設定を netd 経由でホストへ適用する。
+         *
+         *     apply_dhcp → apply_nat の順で実行する。
+         *     NetdError は 502 Bad Gateway に変換する（秘密情報は含まない）。
+         *     このエンドポイントを呼ばない限り設定はホストに反映されない（PUT は保存のみ）。
+         */
+        post: operations["apply_network_config_api_network_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/network/tailscale/down": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tailscale Down
+         * @description Tailscale VPN を停止する。
+         */
+        post: operations["tailscale_down_api_network_tailscale_down_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/network/tailscale/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tailscale Status
+         * @description Tailscale VPN の現在ステータスを返す。
+         *
+         *     NetdError 発生時も 200 で返し、connected=False と error メッセージを含む。
+         *     これにより GUI は常に状態をレンダリングできる。
+         */
+        get: operations["tailscale_status_api_network_tailscale_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/network/tailscale/up": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tailscale Up
+         * @description Tailscale VPN を起動する。
+         *
+         *     tailscale_enabled が True かつ認証キーが設定されている必要がある。
+         *     キーはレスポンス・ログに一切出力しない。
+         */
+        post: operations["tailscale_up_api_network_tailscale_up_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/providers": {
         parameters: {
             query?: never;
@@ -550,6 +671,11 @@ export interface components {
             /** Tts Provider Id */
             tts_provider_id?: number | null;
         };
+        /** ApplyResult */
+        ApplyResult: {
+            /** Ok */
+            ok: boolean;
+        };
         /** CallCreate */
         CallCreate: {
             /** From Extension */
@@ -698,6 +824,112 @@ export interface components {
             /** Username */
             username: string;
         };
+        /**
+         * NetworkConfigRead
+         * @description GET /api/network / PUT /api/network のレスポンス。
+         *
+         *     tailscale_auth_key_encrypted はこのスキーマに含めない。
+         *     代わりに tailscale_auth_key_set (bool) でキー設定有無のみ伝える。
+         */
+        NetworkConfigRead: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Dhcp Lease Hours */
+            dhcp_lease_hours: number;
+            /** Dhcp Range End */
+            dhcp_range_end: string;
+            /** Dhcp Range Start */
+            dhcp_range_start: string;
+            /** Id */
+            id: number;
+            /** Lan Interface */
+            lan_interface: string;
+            /** Lan Ip */
+            lan_ip: string;
+            /** Lan Prefix */
+            lan_prefix: number;
+            /** Nat Enabled */
+            nat_enabled: boolean;
+            /** Provisioning Base Url */
+            provisioning_base_url: string;
+            /** Tailscale Auth Key Set */
+            tailscale_auth_key_set: boolean;
+            /** Tailscale Enabled */
+            tailscale_enabled: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Wan Interface */
+            wan_interface: string;
+        };
+        /**
+         * NetworkConfigUpdate
+         * @description PUT /api/network のリクエストボディ。
+         *
+         *     tailscale_auth_key の扱い:
+         *       - None / 未指定: 既存のキーを変更しない。
+         *       - 空文字列 "": 既存のキーを削除する（クリア）。
+         *       - 非空文字列: 検証後に SecretBox 暗号化して保存する。
+         */
+        NetworkConfigUpdate: {
+            /**
+             * Dhcp Lease Hours
+             * @default 12
+             */
+            dhcp_lease_hours: number;
+            /**
+             * Dhcp Range End
+             * @default 172.20.254.254
+             */
+            dhcp_range_end: string;
+            /**
+             * Dhcp Range Start
+             * @default 172.20.1.1
+             */
+            dhcp_range_start: string;
+            /**
+             * Lan Interface
+             * @default enp3s0
+             */
+            lan_interface: string;
+            /**
+             * Lan Ip
+             * @default 172.20.0.1
+             */
+            lan_ip: string;
+            /**
+             * Lan Prefix
+             * @default 16
+             */
+            lan_prefix: number;
+            /**
+             * Nat Enabled
+             * @default true
+             */
+            nat_enabled: boolean;
+            /**
+             * Provisioning Base Url
+             * @default
+             */
+            provisioning_base_url: string;
+            /** Tailscale Auth Key */
+            tailscale_auth_key?: string | null;
+            /**
+             * Tailscale Enabled
+             * @default false
+             */
+            tailscale_enabled: boolean;
+            /**
+             * Wan Interface
+             * @default
+             */
+            wan_interface: string;
+        };
         /** ProviderCreate */
         ProviderCreate: {
             /** Api Key */
@@ -825,6 +1057,17 @@ export interface components {
             cached: boolean;
             /** Path */
             path: string;
+        };
+        /** TailscaleStatusResult */
+        TailscaleStatusResult: {
+            /** Connected */
+            connected: boolean;
+            /** Detail */
+            detail?: {
+                [key: string]: unknown;
+            } | null;
+            /** Error */
+            error?: string | null;
         };
         /** TrunkCreate */
         TrunkCreate: {
@@ -1608,6 +1851,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_network_config_api_network_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkConfigRead"];
+                };
+            };
+        };
+    };
+    update_network_config_api_network_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkConfigRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_network_config_api_network_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyResult"];
+                };
+            };
+        };
+    };
+    tailscale_down_api_network_tailscale_down_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyResult"];
+                };
+            };
+        };
+    };
+    tailscale_status_api_network_tailscale_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TailscaleStatusResult"];
+                };
+            };
+        };
+    };
+    tailscale_up_api_network_tailscale_up_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyResult"];
                 };
             };
         };
