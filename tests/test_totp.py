@@ -717,3 +717,44 @@ async def _new_client(app):
     c = AsyncClient(transport=transport, base_url="http://test")
     await c.__aenter__()
     return c
+
+
+# ---------------------------------------------------------------------------
+# H-1 回帰: 有効化済みアカウントの再セットアップにはステップアップが必要
+# ---------------------------------------------------------------------------
+
+
+async def test_resetup_enabled_without_code_denied(client, app, user_factory):
+    """TOTP 有効化済みで code 無しの再 setup は 400（セッションのみ攻撃者の 2FA 差し替え防止）。"""
+    username, password = await user_factory(username="rs1", password="Pass1234!")
+    await _setup_and_enable_totp(client, username, password)
+
+    # code 無しで再 setup → 拒否
+    resp = await client.post("/api/auth/totp/setup", json={})
+    assert resp.status_code == 400
+
+    # 2FA は依然有効・シークレット不変であること（無効化されていない）
+    async with app.state.sessionmaker() as s:
+        u = (await s.scalars(select(User).where(User.username == username))).one()
+        assert u.totp_enabled is True
+        assert u.totp_secret is not None
+
+
+async def test_resetup_enabled_wrong_code_denied(client, app, user_factory):
+    """有効化済みで誤った code の再 setup も 400。"""
+    username, password = await user_factory(username="rs2", password="Pass1234!")
+    await _setup_and_enable_totp(client, username, password)
+
+    resp = await client.post("/api/auth/totp/setup", json={"code": "000000"})
+    assert resp.status_code == 400
+
+
+async def test_resetup_enabled_with_valid_code_allowed(client, app, user_factory):
+    """有効化済みでも現行 TOTP コードを添えれば再 setup できる。"""
+    username, password = await user_factory(username="rs3", password="Pass1234!")
+    secret, _ = await _setup_and_enable_totp(client, username, password)
+
+    code = pyotp.TOTP(secret).now()
+    resp = await client.post("/api/auth/totp/setup", json={"code": code})
+    assert resp.status_code == 200
+    assert "secret" in resp.json()

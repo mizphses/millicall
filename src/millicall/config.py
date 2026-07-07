@@ -48,8 +48,9 @@ class Settings(BaseSettings):
     # True のとき UI は TOTP 登録を強制する（バックエンドはフラグを公開するのみ；
     # 強制の実施は T9 フロントエンド担当）。
     totp_required: bool = False
-    # TOTP チャレンジチケットの有効期間（秒）。デフォルト 5 分。
-    totp_ticket_max_age: int = 300
+    # TOTP チャレンジチケットの有効期間（秒）。ブルートフォース窓を狭めるため短めにする
+    # （レビュー M-1）。ステートレス署名チケットのため、この窓 = 総当たり可能時間。
+    totp_ticket_max_age: int = 120
 
     # --- MCP サーバー (Phase 4a) ---
     # /mcp を有効化するか（False で完全に非マウント）。

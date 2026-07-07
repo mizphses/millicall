@@ -170,7 +170,9 @@ async def login_totp(
         secrets.session_secret, body.ticket, settings.totp_ticket_max_age
     )
     if ticket_data is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired ticket")
+        # 他の失敗（ユーザー不在/無効/epoch/コード不一致）とメッセージを揃え、
+        # 「チケットのみ無効」を判別できるオラクルを与えない（レビュー N-3）。
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # ユーザー取得
     user = await session.get(User, ticket_data.uid)

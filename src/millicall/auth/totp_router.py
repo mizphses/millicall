@@ -17,7 +17,7 @@ import secrets as secrets_mod
 import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +44,17 @@ class TotpVerifyRequest(BaseModel):
     """TOTP 確認 / 無効化リクエスト。"""
 
     code: str
+
+
+class TotpSetupRequest(BaseModel):
+    """TOTP セットアップリクエスト。
+
+    すでに TOTP が有効なアカウントで再セットアップする場合は、現行の TOTP コード
+    またはリカバリコードを ``code`` に指定して本人性を再確認する必要がある
+    （セッションのみを奪った攻撃者による 2FA 差し替え/無効化を防ぐ）。初回登録時は不要。
+    """
+
+    code: str | None = None
 
 
 class TotpSetupResponse(BaseModel):
@@ -148,18 +159,35 @@ def _verify_totp_or_recovery(user: User, box: SecretBox, code: str) -> str | Non
 @router.post("/setup", response_model=TotpSetupResponse)
 async def totp_setup(
     request: Request,
+    body: TotpSetupRequest = Body(default_factory=TotpSetupRequest),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     box: SecretBox = Depends(get_secret_box),
 ) -> TotpSetupResponse:
     """TOTP シークレットを生成し DB に保存する（未確認状態）。
 
-    すでに TOTP が有効な場合は、有効な TOTP コードをリクエストボディで
-    要求する仕様もあり得るが、ここでは「いつでも上書き可能」とする。
-    理由: setup だけでは totp_enabled=True にならないため、誤ってコールしても
-    既存の有効 TOTP セッションが無効化されるリスクがない（verify するまで
-    新しいシークレットは有効にならない）。ただし古いシークレットは消える。
+    セキュリティ（レビュー H-1）: すでに TOTP が有効なアカウントの再セットアップは、
+    setup が totp_secret を上書きし totp_enabled を一旦 False にするため、セッションのみを
+    奪った攻撃者が 2FA を差し替え/無効化できてしまう。これを防ぐため、totp_enabled が
+    True の場合は現行 TOTP/リカバリコードによる本人再確認（ステップアップ）を必須とする。
+    初回登録（totp_enabled=False）はコード不要。
     """
+    if user.totp_enabled and (
+        not body.code or _verify_totp_or_recovery(user, box, body.code) is None
+    ):
+        await record_audit(
+            session,
+            actor_user_id=user.id,
+            actor_label=user.username,
+            action="totp.setup_denied",
+            ip_address=get_client_ip(request),
+        )
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="再セットアップには現行の TOTP/リカバリコードが必要です",
+        )
+
     plain_secret = pyotp.random_base32()
     encrypted = box.encrypt(plain_secret)
     user.totp_secret = encrypted
