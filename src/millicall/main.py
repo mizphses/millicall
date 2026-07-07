@@ -22,6 +22,7 @@ from millicall.extensions.router import router as extensions_router
 from millicall.mcp_server.ephemeral import EphemeralAgentStore
 from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
+from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
 from millicall.providers.router import router as providers_router
 from millicall.routes_config.router import router as routes_router
@@ -37,6 +38,7 @@ from millicall.trunks.router import router as trunks_router
 from millicall.tts_cache.router import router as tts_cache_router
 from millicall.workflows.errors import WorkflowValidationError
 from millicall.workflows.router import router as workflows_router
+from millicall.workflows.runner import WorkflowRunner
 from millicall.workflows.service import NoLlmProviderError
 
 logger = logging.getLogger("millicall")
@@ -99,6 +101,7 @@ async def lifespan(app: FastAPI):
     # ?agent=ephemeral のとき ephemeral_store を call_uuid で引いてセッションを組む。
     app.state.hangup_registry = HangupRegistry()
     app.state.ephemeral_store = EphemeralAgentStore()
+    app.state.dtmf_collector = DtmfCollector()
 
     # AI 再生制御用の共有 ESL コマンドクライアント（発着信制御と別接続）。
     # ESL 未到達（接続拒否・ハング）でも起動を止めない — timeout 付きで試行し warning のみ。
@@ -127,6 +130,17 @@ async def lifespan(app: FastAPI):
 
     app.state.esl_reconnect = _esl_reconnect
 
+    app.state.workflow_runner = WorkflowRunner(
+        sessionmaker=app.state.sessionmaker,
+        secrets=app.state.secrets,
+        esl=esl_command,
+        esl_lock=app.state.esl_command_lock,
+        esl_reconnect=_esl_reconnect,
+        session_registry=app.state.session_registry,
+        settings=settings,
+        dtmf_collector=app.state.dtmf_collector,
+    )
+
     # 着信 AI 応対では CHANNEL_ANSWER を受けた core が uuid_audio_stream を発行するため、
     # 共有 ESL コマンド接続・lock・reconnect と core への WS ベース URL を注入する。
     media_router = MediaEventRouter(
@@ -137,6 +151,8 @@ async def lifespan(app: FastAPI):
         reconnect=_esl_reconnect,
         answer_registry=app.state.answer_registry,
         hangup_registry=app.state.hangup_registry,
+        dtmf_collector=app.state.dtmf_collector,
+        workflow_runner=app.state.workflow_runner,
     )
 
     async def _compose_handler(event: dict) -> None:
@@ -150,7 +166,7 @@ async def lifespan(app: FastAPI):
 
     event_listener = EslEventListener(
         _make_event_client,
-        ["CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_HANGUP_COMPLETE", "PLAYBACK_STOP"],
+        ["CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_HANGUP_COMPLETE", "PLAYBACK_STOP", "DTMF"],
         _compose_handler,
     )
     await event_listener.start()

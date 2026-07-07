@@ -92,11 +92,13 @@ class MediaEventRouter:
         answer_registry: AnswerRegistry | None = None,
         hangup_registry: HangupRegistry | None = None,
         dtmf_collector: DtmfCollector | None = None,
+        workflow_runner=None,
     ) -> None:
         self._registry = registry
         self._answer_registry = answer_registry
         self._hangup_registry = hangup_registry
         self._dtmf_collector = dtmf_collector
+        self._workflow_runner = workflow_runner
         self._esl = esl
         # 末尾スラッシュを除去して URL 組み立てを决定論的にする
         self._ws_base_url = ws_base_url.rstrip("/") if ws_base_url else None
@@ -119,6 +121,7 @@ class MediaEventRouter:
                 if uuid:
                     self._answer_registry.resolve(uuid)
             await self._maybe_start_audio_stream(event)
+            await self._maybe_start_workflow(event)
         elif name == "DTMF":
             uuid = event.get("Unique-ID") or event.get("Channel-Call-UUID") or ""
             digit = event.get("DTMF-Digit") or ""
@@ -162,6 +165,25 @@ class MediaEventRouter:
                     raise
                 self._esl = await self._reconnect()
                 await self._esl.bgapi(command)
+
+    async def _maybe_start_workflow(self, event: dict) -> None:
+        """variable_millicall_workflow があればワークフロー実行をバックグラウンドタスクで起動する。"""
+        if self._workflow_runner is None:
+            return
+        workflow_value = event.get("variable_millicall_workflow")
+        if not workflow_value:
+            return
+        uuid = event.get("Unique-ID") or event.get("Channel-Call-UUID") or ""
+        if not uuid or uuid in self._started:
+            return
+        self._started.add(uuid)
+        try:
+            workflow_id = int(workflow_value)
+        except (ValueError, TypeError):
+            logger.warning("invalid millicall_workflow value %r for uuid=%s", workflow_value, uuid)
+            self._started.discard(uuid)
+            return
+        asyncio.create_task(self._workflow_runner.start(uuid, workflow_id))
 
 
 async def _build_ephemeral_session(state, call_uuid: str):

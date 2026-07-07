@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from millicall.media.audio_fork import MediaEventRouter
@@ -208,3 +210,94 @@ async def test_hangup_without_dtmf_collector_still_removes_session():
         {"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "u1"}
     )
     assert reg.get("u1") is None
+
+
+# --------------------------------------------------------------------------- #
+# Task 9: workflow 起動テスト
+# --------------------------------------------------------------------------- #
+
+
+class _FakeRunner:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    async def start(self, uuid: str, wf_id: int) -> None:
+        self.calls.append((uuid, wf_id))
+
+
+@pytest.mark.asyncio
+async def test_channel_answer_starts_workflow():
+    """variable_millicall_workflow があると workflow_runner.start が呼ばれる。"""
+    reg = SessionRegistry()
+    runner = _FakeRunner()
+    router = MediaEventRouter(reg, workflow_runner=runner)
+    await router.handle(
+        {
+            "Event-Name": "CHANNEL_ANSWER",
+            "Unique-ID": "wf-uuid",
+            "variable_millicall_workflow": "5",
+        }
+    )
+    await asyncio.sleep(0)  # create_task を走らせる
+    assert runner.calls == [("wf-uuid", 5)]
+
+
+@pytest.mark.asyncio
+async def test_channel_answer_workflow_no_double_dispatch():
+    """同じイベントを 2 回受けても runner.start は 1 回しか呼ばれない。"""
+    reg = SessionRegistry()
+    runner = _FakeRunner()
+    router = MediaEventRouter(reg, workflow_runner=runner)
+    ev = {
+        "Event-Name": "CHANNEL_ANSWER",
+        "Unique-ID": "wf-uuid-dup",
+        "variable_millicall_workflow": "5",
+    }
+    await router.handle(ev)
+    await router.handle(ev)
+    await asyncio.sleep(0)
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_channel_answer_workflow_and_agent_not_both():
+    """ai_agent と workflow 両方の変数があっても二重起動しない (audio_stream が先に _started に追加)。"""
+    reg = SessionRegistry()
+    esl = _FakeEsl()
+    runner = _FakeRunner()
+    router = MediaEventRouter(
+        reg,
+        esl=esl,
+        ws_base_url="ws://127.0.0.1:8000",
+        workflow_runner=runner,
+    )
+    await router.handle(
+        {
+            "Event-Name": "CHANNEL_ANSWER",
+            "Unique-ID": "both-uuid",
+            "variable_millicall_ai_agent": "3",
+            "variable_millicall_workflow": "7",
+        }
+    )
+    await asyncio.sleep(0)
+    # audio stream は起動されている
+    assert any("uuid_audio_stream both-uuid" in cmd for cmd in esl.commands)
+    # workflow は起動されていない（uuid が _started に追加済み）
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_channel_answer_invalid_workflow_id():
+    """variable_millicall_workflow が整数でない場合はクラッシュせず runner.start も呼ばれない。"""
+    reg = SessionRegistry()
+    runner = _FakeRunner()
+    router = MediaEventRouter(reg, workflow_runner=runner)
+    await router.handle(
+        {
+            "Event-Name": "CHANNEL_ANSWER",
+            "Unique-ID": "bad-uuid",
+            "variable_millicall_workflow": "not-an-int",
+        }
+    )
+    await asyncio.sleep(0)
+    assert runner.calls == []
