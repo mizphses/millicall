@@ -53,3 +53,24 @@ export const NETWORK_TAILSCALE_STATUS_KEY = ["network-tailscale-status"] as cons
 
 /** デバイス一覧取得 / sync / delete 後の invalidate に使う。 */
 export const DEVICES_KEY = ["devices"] as const;
+
+// ─────────────────────────────────────────────────────────
+// Phase 6 認証強化用キー（T9b）
+// トップレベルが既存と衝突しないよう "p6-" プレフィックスを使用する。
+// ─────────────────────────────────────────────────────────
+
+/** ユーザー一覧取得 / create / patch / delete 後の invalidate に使う。 */
+export const USERS_KEY = ["p6-users"] as const;
+
+/** 監査ログ（ページネーション付き）。offset を含む個別キー。 */
+export const auditKey = (limit: number, offset: number) =>
+  ["p6-audit", limit, offset] as const;
+
+/** システムコンテナ一覧。 */
+export const SYSTEM_CONTAINERS_KEY = ["p6-system-containers"] as const;
+
+/** システム情報（ホスト・バージョン等）。 */
+export const SYSTEM_INFO_KEY = ["p6-system-info"] as const;
+
+/** ログインユーザー自身の情報（2FA 状態確認で使う）。 */
+export const AUTH_ME_KEY = ["p6-auth-me"] as const;

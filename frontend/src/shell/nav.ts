@@ -11,6 +11,11 @@ import {
   GitBranch,
   Wifi,
   Smartphone,
+  Users,
+  ServerCog,
+  ScrollText,
+  KeyRound,
+  ShieldCheck,
 } from "lucide-react";
 
 /** サイドナビとヘッダ題で共有するルート定義。 */
@@ -34,6 +39,11 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/workflows",  label: "ワークフロー",     icon: React.createElement(GitBranch,       { size: ICON_SIZE }) },
   { path: "/network",   label: "ネットワーク",     icon: React.createElement(Wifi,            { size: ICON_SIZE }) },
   { path: "/devices",   label: "デバイス",         icon: React.createElement(Smartphone,       { size: ICON_SIZE }) },
+  { path: "/users",     label: "ユーザー管理",     icon: React.createElement(Users,           { size: ICON_SIZE }) },
+  { path: "/system",    label: "システム",         icon: React.createElement(ServerCog,       { size: ICON_SIZE }) },
+  { path: "/audit",     label: "監査ログ",         icon: React.createElement(ScrollText,      { size: ICON_SIZE }) },
+  { path: "/sso",       label: "SSO / SCIM",       icon: React.createElement(KeyRound,        { size: ICON_SIZE }) },
+  { path: "/settings/security", label: "セキュリティ", icon: React.createElement(ShieldCheck,  { size: ICON_SIZE }) },
 ];
 
 /** パスから画面題を引く（ヘッダ用）。 */

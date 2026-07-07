@@ -22,6 +22,11 @@ import { WorkflowsPage } from "../pages/WorkflowsPage";
 import { WorkflowEditorPage } from "../pages/WorkflowEditorPage";
 import { NetworkPage } from "../pages/NetworkPage";
 import { DevicesPage } from "../pages/DevicesPage";
+import { UsersPage } from "../pages/UsersPage";
+import { SecurityPage } from "../pages/SecurityPage";
+import { SystemPage } from "../pages/SystemPage";
+import { AuditPage } from "../pages/AuditPage";
+import { SsoPage } from "../pages/SsoPage";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -128,6 +133,38 @@ const devicesRoute = createRoute({
   component: DevicesPage,
 });
 
+// ─── Phase 6 認証強化ページ（T9b） ───
+
+const usersRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/users",
+  component: UsersPage,
+});
+
+const securityRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/settings/security",
+  component: SecurityPage,
+});
+
+const systemRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/system",
+  component: SystemPage,
+});
+
+const auditRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/audit",
+  component: AuditPage,
+});
+
+const ssoRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/sso",
+  component: SsoPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   authLayoutRoute.addChildren([
@@ -143,6 +180,11 @@ const routeTree = rootRoute.addChildren([
     workflowEditorRoute,
     networkRoute,
     devicesRoute,
+    usersRoute,
+    securityRoute,
+    systemRoute,
+    auditRoute,
+    ssoRoute,
   ]),
 ]);
 

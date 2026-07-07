@@ -15,8 +15,11 @@ import { useToast } from "../toast/ToastProvider";
 import {
   buildCreatePayload,
   buildUpdatePayload,
+  CALLING_PERMISSION_LABEL,
+  CALLING_PERMISSIONS,
   emptyForm,
   formFromExtension,
+  toCallingPermission,
   validateForm,
   type ExtensionFormValues,
   type ExtensionRead,
@@ -256,6 +259,22 @@ export function ExtensionsPage() {
               onChange={(e) => setForm((f) => ({ ...f, display_name: e.target.value }))}
               placeholder="営業部 田中"
             />
+          </Field>
+
+          <Field label="発信権限">
+            <select
+              className={input()}
+              value={form.calling_permission}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, calling_permission: toCallingPermission(e.target.value) }))
+              }
+            >
+              {CALLING_PERMISSIONS.map((p) => (
+                <option key={p} value={p}>
+                  {CALLING_PERMISSION_LABEL[p]}
+                </option>
+              ))}
+            </select>
           </Field>
 
           {editing ? (

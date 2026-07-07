@@ -41,6 +41,50 @@ export interface paths {
         patch: operations["update_agent_api_ai_agents__agent_id__patch"];
         trace?: never;
     };
+    "/api/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Audit Logs
+         * @description 監査ログ一覧を取得する（管理者専用、新しい順）。
+         */
+        get: operations["list_audit_logs_api_audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/csrf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Csrf Token
+         * @description CSRF トークンを返す SPA ブートストラップ用エンドポイント。
+         *
+         *     Cookie が既に存在する場合はその値を返す。
+         *     存在しない場合は新しいトークンを生成して Cookie にセットする。
+         *     JS はこのエンドポイントまたは cookie を直接読んで X-CSRF-Token ヘッダーに設定する。
+         */
+        get: operations["get_csrf_token_api_auth_csrf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/login": {
         parameters: {
             query?: never;
@@ -50,8 +94,39 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Login */
+        /**
+         * Login
+         * @description ログインエンドポイント。
+         *
+         *     TOTP が無効な場合は UserRead を直接返す。
+         *     TOTP が有効な場合は {totp_required: true, ticket: <signed>} を返す
+         *     （セッション Cookie はセットしない）。
+         */
         post: operations["login_api_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/login/totp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Login Totp
+         * @description TOTP 2 段階ログイン: チケット + TOTP コード / リカバリコードを検証する。
+         *
+         *     チケット検証 → ユーザー取得 → enabled / epoch 確認 → コード検証の順で行い、
+         *     いずれかが失敗しても同じ 401 を返す（情報漏洩を防ぐ）。
+         *     TOTP コードにもレート制限を適用する（H-2: /login/totp は別の攻撃面）。
+         */
+        post: operations["login_totp_api_auth_login_totp_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -75,6 +150,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/logout-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout All
+         * @description 全セッションを失効させてCookieを削除する。
+         */
+        post: operations["logout_all_api_auth_logout_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/me": {
         parameters: {
             query?: never;
@@ -86,6 +181,80 @@ export interface paths {
         get: operations["me_api_auth_me_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/totp/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Totp Disable
+         * @description TOTP を無効化する。有効な TOTP コードまたはリカバリコードが必要。
+         *
+         *     bump_session_epoch を呼んで既存セッションを全て失効させる。
+         *     セッション取得済みのエンドポイントでも TOTP コードを何度も試行できるため
+         *     レート制限を適用する（H-2）。
+         */
+        post: operations["totp_disable_api_auth_totp_disable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/totp/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Totp Setup
+         * @description TOTP シークレットを生成し DB に保存する（未確認状態）。
+         *
+         *     セキュリティ（レビュー H-1）: すでに TOTP が有効なアカウントの再セットアップは、
+         *     setup が totp_secret を上書きし totp_enabled を一旦 False にするため、セッションのみを
+         *     奪った攻撃者が 2FA を差し替え/無効化できてしまう。これを防ぐため、totp_enabled が
+         *     True の場合は現行 TOTP/リカバリコードによる本人再確認（ステップアップ）を必須とする。
+         *     初回登録（totp_enabled=False）はコード不要。
+         */
+        post: operations["totp_setup_api_auth_totp_setup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/totp/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Totp Verify
+         * @description TOTP コードを検証し、成功したら TOTP を有効化してリカバリコードを返す。
+         *
+         *     リカバリコードはここで一度だけ平文で返す。以降は取得不可。
+         *     セッション取得済みのエンドポイントでも TOTP コードを何度も試行できるため
+         *     レート制限を適用する（H-2）。
+         */
+        post: operations["totp_verify_api_auth_totp_verify_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -514,6 +683,122 @@ export interface paths {
         patch: operations["update_route_api_routes__route_id__patch"];
         trace?: never;
     };
+    "/api/scim/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Scim Token
+         * @description SCIM Bearer トークンを（再）生成する。
+         *
+         *     平文トークンはこのレスポンスで一度だけ返す。
+         *     DB には Argon2 ハッシュのみ保存する（平文は保存・ログ出力しない）。
+         *     監査: scim.token.rotate
+         */
+        post: operations["rotate_scim_token_api_scim_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/containers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Containers
+         * @description コンテナ一覧を返す。
+         *
+         *     Docker socket-proxy 経由で全コンテナを取得し、
+         *     {id, name, image, state, status, managed} の安全なビューで返す。
+         *     managed=True のコンテナのみ /restart で操作できる。
+         *
+         *     Returns:
+         *         コンテナ情報リスト。
+         *
+         *     Raises:
+         *         503: docker_proxy_url が未設定（システム管理機能 disabled）。
+         *         502: Docker proxy への通信失敗。
+         */
+        get: operations["list_containers_api_system_containers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/containers/{name}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restart Container
+         * @description 指定コンテナを再起動する。
+         *
+         *     allowlist（system_managed_containers 設定）に含まれるコンテナのみ操作可能。
+         *     操作は監査ログ（action="system.container.restart"）に記録される。
+         *
+         *     Args:
+         *         name: コンテナ名（compose サービス名）。
+         *
+         *     Raises:
+         *         403: name が allowlist に含まれない。
+         *         503: docker_proxy_url が未設定。
+         *         502: Docker proxy への通信失敗。
+         */
+        post: operations["restart_container_api_system_containers__name__restart_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * System Info
+         * @description Docker エンジン情報の安全なサブセットを返す。
+         *
+         *     GET /info と GET /version を呼び出して {info: {...}, version: {...}} 形式で返す。
+         *     機密ホスト情報（HostName・DockerRootDir 等）は除外済み。
+         *
+         *     Returns:
+         *         {info: {...}, version: {...}} の辞書。
+         *
+         *     Raises:
+         *         503: docker_proxy_url が未設定。
+         *         502: Docker proxy への通信失敗。
+         */
+        get: operations["system_info_api_system_info_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trunks": {
         parameters: {
             query?: never;
@@ -562,6 +847,59 @@ export interface paths {
         put?: never;
         /** Synthesize */
         post: operations["synthesize_api_tts_cache_synthesize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Users */
+        get: operations["list_users_api_users_get"];
+        put?: never;
+        /** Create User */
+        post: operations["create_user_api_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete User */
+        delete: operations["delete_user_api_users__user_id__delete"];
+        options?: never;
+        head?: never;
+        /** Patch User */
+        patch: operations["patch_user_api_users__user_id__patch"];
+        trace?: never;
+    };
+    "/api/users/{user_id}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Password */
+        post: operations["reset_password_api_users__user_id__reset_password_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -819,6 +1157,207 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/saml/acs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Saml Acs
+         * @description SAML Assertion Consumer Service（ACS）。
+         *
+         *     IdP が POST する SAMLResponse を受け取り、署名検証・条件検証・ユーザー upsert・
+         *     セッション発行を行う。
+         *
+         *     失敗時は必ず 400 を返し、セッションは発行しない。
+         *     アサーション内容はログ・監査に記録しない（理由コードのみ）。
+         */
+        post: operations["saml_acs_saml_acs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/saml/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Login
+         * @description SAML SP-initiated SSO を開始する。
+         *
+         *     SAML が無効・未設定の場合は 404 を返す。
+         *     AuthnRequest を deflate+base64 して IdP へリダイレクトする（HTTP-Redirect binding）。
+         */
+        get: operations["saml_login_saml_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/saml/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Metadata
+         * @description SP メタデータ XML を返す。SAML 無効時は 404（SP entity/ACS URL の露出を避ける、レビュー N-5）。
+         */
+        get: operations["saml_metadata_saml_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scim/v2/Groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Groups */
+        get: operations["list_groups_scim_v2_Groups_get"];
+        put?: never;
+        /** Create Group */
+        post: operations["create_group_scim_v2_Groups_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scim/v2/Groups/{group_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Group */
+        get: operations["get_group_scim_v2_Groups__group_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch Group */
+        patch: operations["patch_group_scim_v2_Groups__group_id__patch"];
+        trace?: never;
+    };
+    "/scim/v2/ResourceTypes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resource Types */
+        get: operations["resource_types_scim_v2_ResourceTypes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scim/v2/Schemas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Schemas */
+        get: operations["schemas_scim_v2_Schemas_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scim/v2/ServiceProviderConfig": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Service Provider Config */
+        get: operations["service_provider_config_scim_v2_ServiceProviderConfig_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scim/v2/Users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Users */
+        get: operations["list_users_scim_v2_Users_get"];
+        put?: never;
+        /** Create User */
+        post: operations["create_user_scim_v2_Users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scim/v2/Users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User */
+        get: operations["get_user_scim_v2_Users__user_id__get"];
+        /** Put User */
+        put: operations["put_user_scim_v2_Users__user_id__put"];
+        post?: never;
+        /**
+         * Delete User
+         * @description SCIM DELETE = deactivate（有効無効化 + セッション失効）。
+         *
+         *     SCIM DELETE はハード削除ではなく deactivate として実装する。
+         *     理由: 可逆性・監査ログ保全・FK 参照の安全性。
+         *     IdP 側の再プロビジョニングで再活性化したい場合は PUT/PATCH active:true で対応する。
+         */
+        delete: operations["delete_user_scim_v2_Users__user_id__delete"];
+        options?: never;
+        head?: never;
+        /** Patch User */
+        patch: operations["patch_user_scim_v2_Users__user_id__patch"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -907,6 +1446,40 @@ export interface components {
         ApplyResult: {
             /** Ok */
             ok: boolean;
+        };
+        /** AuditLogRead */
+        AuditLogRead: {
+            /** Action */
+            action: string;
+            /** Actor Label */
+            actor_label: string;
+            /** Actor User Id */
+            actor_user_id: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detail */
+            detail: string | null;
+            /** Id */
+            id: number;
+            /** Ip Address */
+            ip_address: string | null;
+            /** Target Id */
+            target_id: string | null;
+            /** Target Type */
+            target_type: string | null;
+        };
+        /** Body_saml_acs_saml_acs_post */
+        Body_saml_acs_saml_acs_post: {
+            /**
+             * Relaystate
+             * @default /
+             */
+            RelayState: string;
+            /** Samlresponse */
+            SAMLResponse: string;
         };
         /** CallCreate */
         CallCreate: {
@@ -1052,6 +1625,12 @@ export interface components {
         };
         /** ExtensionCreate */
         ExtensionCreate: {
+            /**
+             * Calling Permission
+             * @default domestic
+             * @enum {string}
+             */
+            calling_permission: "internal" | "domestic" | "international";
             /** Display Name */
             display_name: string;
             /** Number */
@@ -1059,6 +1638,8 @@ export interface components {
         };
         /** ExtensionRead */
         ExtensionRead: {
+            /** Calling Permission */
+            calling_permission: string;
             /** Display Name */
             display_name: string;
             /** Enabled */
@@ -1072,6 +1653,8 @@ export interface components {
         };
         /** ExtensionUpdate */
         ExtensionUpdate: {
+            /** Calling Permission */
+            calling_permission?: ("internal" | "domestic" | "international") | null;
             /** Display Name */
             display_name?: string | null;
             /** Enabled */
@@ -1088,6 +1671,16 @@ export interface components {
             password: string;
             /** Username */
             username: string;
+        };
+        /**
+         * LoginTotpRequest
+         * @description TOTP 2 段階ログインのリクエスト。
+         */
+        LoginTotpRequest: {
+            /** Code */
+            code: string;
+            /** Ticket */
+            ticket: string;
         };
         /**
          * NetworkConfigRead
@@ -1280,6 +1873,11 @@ export interface components {
             /** Extension Number */
             extension_number: string;
         };
+        /** ResetPasswordBody */
+        ResetPasswordBody: {
+            /** New Password */
+            new_password: string;
+        };
         /** RouteCreate */
         RouteCreate: {
             /**
@@ -1343,6 +1941,44 @@ export interface components {
             } | null;
             /** Error */
             error?: string | null;
+        };
+        /**
+         * TotpSetupRequest
+         * @description TOTP セットアップリクエスト。
+         *
+         *     すでに TOTP が有効なアカウントで再セットアップする場合は、現行の TOTP コード
+         *     またはリカバリコードを ``code`` に指定して本人性を再確認する必要がある
+         *     （セッションのみを奪った攻撃者による 2FA 差し替え/無効化を防ぐ）。初回登録時は不要。
+         */
+        TotpSetupRequest: {
+            /** Code */
+            code?: string | null;
+        };
+        /**
+         * TotpSetupResponse
+         * @description セットアップレスポンス。secret と provisioning_uri を一度だけ返す。
+         */
+        TotpSetupResponse: {
+            /** Provisioning Uri */
+            provisioning_uri: string;
+            /** Secret */
+            secret: string;
+        };
+        /**
+         * TotpVerifyRequest
+         * @description TOTP 確認 / 無効化リクエスト。
+         */
+        TotpVerifyRequest: {
+            /** Code */
+            code: string;
+        };
+        /**
+         * TotpVerifyResponse
+         * @description 確認成功レスポンス。リカバリコードをここでのみ返す。
+         */
+        TotpVerifyResponse: {
+            /** Recovery Codes */
+            recovery_codes: string[];
         };
         /** TrunkCreate */
         TrunkCreate: {
@@ -1410,14 +2046,62 @@ export interface components {
             /** Username */
             username?: string | null;
         };
-        /** UserRead */
+        /** UserCreate */
+        UserCreate: {
+            /** Display Name */
+            display_name: string;
+            /** Email */
+            email?: string | null;
+            /** Password */
+            password: string;
+            /** Role */
+            role: string;
+            /** Username */
+            username: string;
+        };
+        /** UserPatch */
+        UserPatch: {
+            /** Display Name */
+            display_name?: string | null;
+            /** Email */
+            email?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Role */
+            role?: string | null;
+        };
+        /**
+         * UserRead
+         * @description ユーザー情報のレスポンススキーマ。
+         *
+         *     機密フィールド（totp_secret / recovery_codes / hashed_password / session_epoch）は
+         *     決してここに含めない。
+         *     totp_enabled は migration 0015 以降 DB カラムから直接読む。
+         */
         UserRead: {
             /** Display Name */
             display_name: string;
+            /** Email */
+            email?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
             /** Id */
             id: number;
+            /**
+             * Origin
+             * @default local
+             */
+            origin: string;
             /** Role */
             role: string;
+            /**
+             * Totp Enabled
+             * @default false
+             */
+            totp_enabled: boolean;
             /** Username */
             username: string;
         };
@@ -1504,6 +2188,11 @@ export interface components {
             name: string;
             /** Number */
             number: string;
+        };
+        /** _TokenResponse */
+        _TokenResponse: {
+            /** Token */
+            token: string;
         };
     };
     responses: never;
@@ -1662,6 +2351,60 @@ export interface operations {
             };
         };
     };
+    list_audit_logs_api_audit_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditLogRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_csrf_token_api_auth_csrf_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+    };
     login_api_auth_login_post: {
         parameters: {
             query?: never;
@@ -1672,6 +2415,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_totp_api_auth_login_totp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginTotpRequest"];
             };
         };
         responses: {
@@ -1717,6 +2493,28 @@ export interface operations {
             };
         };
     };
+    logout_all_api_auth_logout_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+        };
+    };
     me_api_auth_me_get: {
         parameters: {
             query?: never;
@@ -1733,6 +2531,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserRead"];
+                };
+            };
+        };
+    };
+    totp_disable_api_auth_totp_disable_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    totp_setup_api_auth_totp_setup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TotpSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpSetupResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    totp_verify_api_auth_totp_verify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpVerifyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2663,6 +3562,99 @@ export interface operations {
             };
         };
     };
+    rotate_scim_token_api_scim_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["_TokenResponse"];
+                };
+            };
+        };
+    };
+    list_containers_api_system_containers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    restart_container_api_system_containers__name__restart_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    system_info_api_system_info_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     list_trunks_api_trunks_get: {
         parameters: {
             query?: never;
@@ -2831,6 +3823,158 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SynthesizeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_api_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRead"][];
+                };
+            };
+        };
+    };
+    create_user_api_users_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_user_api_users__user_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_user_api_users__user_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_password_api_users__user_id__reset_password_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetPasswordBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRead"];
                 };
             };
             /** @description Validation Error */
@@ -3253,6 +4397,475 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    saml_acs_saml_acs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_saml_acs_saml_acs_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    saml_login_saml_login_get: {
+        parameters: {
+            query?: {
+                next?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    saml_metadata_saml_metadata_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    list_groups_scim_v2_Groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    create_group_scim_v2_Groups_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_group_scim_v2_Groups__group_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_group_scim_v2_Groups__group_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resource_types_scim_v2_ResourceTypes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    schemas_scim_v2_Schemas_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    service_provider_config_scim_v2_ServiceProviderConfig_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_users_scim_v2_Users_get: {
+        parameters: {
+            query?: {
+                filter?: string | null;
+                startIndex?: number;
+                count?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_user_scim_v2_Users_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_scim_v2_Users__user_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_user_scim_v2_Users__user_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_user_scim_v2_Users__user_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_user_scim_v2_Users__user_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
