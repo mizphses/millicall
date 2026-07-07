@@ -227,9 +227,12 @@ class WorkflowExecutor:
         """Follow the edge whose sourceHandle matches the handler result.
 
         ``result=None`` defaults to the ``out`` handle. A non-None result that
-        is not a valid output handle, or a result with no matching edge, is an
-        explicit :class:`WorkflowExecutionError` (no silent fallback). A None
-        result with no ``out`` edge returns None (normal termination).
+        is not a valid output handle (i.e. not in the node's vocabulary) is an
+        explicit :class:`WorkflowExecutionError` — that signals a handler bug,
+        not an authoring gap. A *valid* handle with no wired edge terminates the
+        run normally: a caller who times out a ``menu``, or reaches an unwired
+        ``false``/``error``/``timeout``/fallback branch, must NOT have the live
+        call dropped (save-time warnings flag such unwired branches instead).
         """
         handles = output_handles(node)
         handle = result if result is not None else "out"
@@ -249,14 +252,9 @@ class WorkflowExecutor:
                     )
                 return target
 
-        if result is None:
-            # single-output node, no "out" edge wired -> terminate normally
-            return None
-
-        raise WorkflowExecutionError(
-            f"node {node.id!r} ({node.type}) has no outgoing edge for handle "
-            f"{handle!r}"
-        )
+        # No edge wired for this (valid) handle -> terminate the run normally
+        # rather than dropping the live call.
+        return None
 
     def _done(self, reached: list[str], terminal: str | None, steps: int) -> RunResult:
         return RunResult(

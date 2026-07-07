@@ -172,6 +172,13 @@ export function WorkflowEditorPage() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const initialized = useRef(false);
 
+  // workflowId が変わったら初期化フラグをリセットし、遷移先のワークフロー定義を
+  // 取り込み直す（別ワークフローへ移動しても前の graph が残らないように）。
+  // この effect は初期化 effect より前に宣言しているため同一コミットで先に走る。
+  useEffect(() => {
+    initialized.current = false;
+  }, [workflowId]);
+
   useEffect(() => {
     if (!workflowQuery.data || !nodeTypesQuery.data || initialized.current) return;
     const def = workflowQuery.data.definition as {
@@ -294,7 +301,17 @@ export function WorkflowEditorPage() {
       });
       if (response.status === 422) {
         const detail = (error as { detail?: unknown } | undefined)?.detail;
-        const msg = typeof detail === "string" ? detail : JSON.stringify(detail);
+        // FastAPI/pydantic の 422 detail は {msg,loc,...} の配列。人が読める msg を並べる。
+        let msg: string;
+        if (typeof detail === "string") {
+          msg = detail;
+        } else if (Array.isArray(detail)) {
+          msg = detail
+            .map((d) => (d && typeof d === "object" && "msg" in d ? String((d as { msg: unknown }).msg) : String(d)))
+            .join(" / ");
+        } else {
+          msg = JSON.stringify(detail);
+        }
         throw new Error(`定義が不正です: ${msg}`);
       }
       if (error || !data) throw new Error("保存に失敗しました");

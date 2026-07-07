@@ -72,6 +72,11 @@ class ChannelContext:
     default_tts_provider_id: int | None = None
     smtp: Any = None  # SmtpEmailSender — Task 8, wired by the runner factory in Task 9
 
+    # call_workflow のネスト実行で辿り中のワークフロー id 集合。cross-workflow の
+    # 循環（A→B→A）を実行時に検出して打ち切るために使う。runner は最上位の
+    # ワークフロー id をここへ入れてから実行する。
+    active_workflow_ids: set[int] = field(default_factory=set)
+
     # Lifecycle flag: set once the channel has been (or is being) hung up.
     hung_up: bool = False
 

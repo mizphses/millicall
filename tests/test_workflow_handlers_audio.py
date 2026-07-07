@@ -170,6 +170,31 @@ async def test_play_audio_file_path_calls_play_file_not_say() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "/audio/x.wav; uuid_kill uuid",  # ESL コマンド連結
+        "/audio/x.wav\nuuid_kill uuid",  # 改行注入
+        "/audio/x.wav && rm -rf /",       # シェルメタ
+        "/audio/`id`.wav",                # バッククォート
+        "/audio/x |tee.wav",              # 空白・パイプ
+    ],
+)
+async def test_play_audio_rejects_injection_file_path(bad_path: str) -> None:
+    """file_path が allowlist 外なら play_file を呼ばず再生をスキップする（ESL注入対策）。"""
+    ctx = make_ctx()
+    ctx.call_control = make_fake_call_control()
+    ctx.primitives = make_fake_primitives()
+    node = make_play_audio_node(tts_text="dummy", file_path=bad_path)
+
+    result = await handle_play_audio(node, ctx)
+
+    assert result is None
+    ctx.call_control.play_file.assert_not_called()
+    ctx.primitives.say.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_play_audio_no_primitives_no_crash() -> None:
     """ctx.primitives が None でもクラッシュしない（graceful skip）。"""
     ctx = make_ctx()  # primitives=None

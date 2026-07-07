@@ -189,12 +189,14 @@ async def test_branch_false_route(ctx: ChannelContext) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Executor: no matching edge -> explicit error (no silent fallback)
+# Executor: valid handle with no wired edge -> normal termination (H1 fix).
+# A caller who reaches an unwired 'true'/'timeout'/'error'/fallback branch must
+# NOT have the live call dropped; the run just ends at that node.
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
-async def test_no_matching_edge_is_error(ctx: ChannelContext) -> None:
+async def test_valid_handle_no_wired_edge_terminates_normally(ctx: ChannelContext) -> None:
     async def cond(node, c):
         return "true"
 
@@ -204,11 +206,13 @@ async def test_no_matching_edge_is_error(ctx: ChannelContext) -> None:
             {"id": "c", "type": "condition", "config": {"variable": "x", "operator": "eq", "value": "1"}},
             {"id": "f", "type": "end"},
         ],
-        # only the 'false' edge is wired; handler returns 'true'
+        # only the 'false' edge is wired; handler returns the valid 'true' handle
         [edge("e1", "s", "out", "c"), edge("e2", "c", "false", "f")],
     )
-    with pytest.raises(WorkflowExecutionError):
-        await WorkflowExecutor(defn, ctx, handlers={"condition": cond}).execute()
+    result = await WorkflowExecutor(defn, ctx, handlers={"condition": cond}).execute()
+    # run ends at the condition node, no error, call not dropped
+    assert result.reached_nodes == ["s", "c"]
+    assert result.terminal == "condition"
 
 
 @pytest.mark.asyncio

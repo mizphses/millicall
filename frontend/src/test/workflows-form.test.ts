@@ -18,6 +18,7 @@ import {
   CDR_KEY,
   CALL_MESSAGES_KEY,
 } from "../queryKeys";
+import { computeDtmfHandles, computeIntentHandles } from "../pages/workflows/handleVocab";
 
 // ─────────────────────────────────────────────────────────
 // クエリキー衝突テスト
@@ -264,5 +265,44 @@ describe("警告バッジ表示判定", () => {
 
   it("warnings に要素があれば true", () => {
     expect(hasWarnings(["node 'x' is unreachable from start"])).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────
+// 動的ハンドル計算 — バックエンド output_handles() との語彙一致（C1/C2 回帰）
+// ─────────────────────────────────────────────────────────
+
+describe("computeDtmfHandles — バックエンド語彙一致", () => {
+  it("max_digits==1 は 0..9 + timeout", () => {
+    expect(computeDtmfHandles({ max_digits: 1 })).toEqual([
+      "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "timeout",
+    ]);
+  });
+
+  it("max_digits>1 は done + timeout", () => {
+    expect(computeDtmfHandles({ max_digits: 4 })).toEqual(["done", "timeout"]);
+  });
+
+  it("max_digits 未指定は 1 桁扱い", () => {
+    expect(computeDtmfHandles({})).toContain("timeout");
+    expect(computeDtmfHandles({})).toContain("0");
+  });
+});
+
+describe("computeIntentHandles — fallback_intent を必ず含む", () => {
+  it("intents キー + fallback_intent", () => {
+    expect(
+      computeIntentHandles({ intents: { sales: "営業", support: "サポート" }, fallback_intent: "other" }),
+    ).toEqual(["sales", "support", "other"]);
+  });
+
+  it("fallback が intents に含まれる場合は重複させない", () => {
+    expect(
+      computeIntentHandles({ intents: { other: "その他", sales: "営業" }, fallback_intent: "other" }),
+    ).toEqual(["other", "sales"]);
+  });
+
+  it("fallback_intent 未指定は 'other' を補う", () => {
+    expect(computeIntentHandles({ intents: { a: "A" } })).toEqual(["a", "other"]);
   });
 });

@@ -28,6 +28,13 @@ def test_start_config_defaults_ring_count_zero() -> None:
     assert node.config.ring_count == 0
 
 
+def test_start_config_ring_count_upper_bound() -> None:
+    # le=20: 上限内は許可、超過は拒否（無制限 pre-answer sleep 防止）。
+    assert parse_node({"id": "s", "type": "start", "config": {"ring_count": 20}}).config.ring_count == 20
+    with pytest.raises(ValidationError):
+        parse_node({"id": "s", "type": "start", "config": {"ring_count": 21}})
+
+
 def test_play_audio_requires_tts_text() -> None:
     with pytest.raises(ValidationError):
         parse_node({"id": "p", "type": "play_audio", "config": {}})

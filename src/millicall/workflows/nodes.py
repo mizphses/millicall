@@ -46,9 +46,12 @@ class _Config(BaseModel):
 
 
 class StartConfig(_Config):
+    # le=20: dialplan の sleep(ring_count*6000ms) が無制限に伸びて DID を長時間
+    # 応答前で塞ぐのを防ぐ（20 コール ≒ 2 分が実用上の上限）。
     ring_count: int = Field(
         default=0,
         ge=0,
+        le=20,
         json_schema_extra=_ui("応答前コール数", "number", description="0=即応答"),
     )
 

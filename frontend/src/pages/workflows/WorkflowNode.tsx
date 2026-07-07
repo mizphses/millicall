@@ -8,6 +8,7 @@ import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 
 import type { WorkflowNodeData } from "./types";
+import { computeDtmfHandles, computeIntentHandles } from "./handleVocab";
 
 /** カテゴリ別アクセントカラー（PandaCSS トークンでなく CSS 変数として直接）。 */
 const CATEGORY_COLOR: Record<string, string> = {
@@ -24,19 +25,6 @@ function categoryFromType(nodeType: string): string {
   return "special";
 }
 
-/** dtmf_input: config.max_digits 分のハンドル名を返す。 */
-function computeDtmfHandles(config: Record<string, unknown>): string[] {
-  const n = Math.max(1, Math.min(Number(config.max_digits ?? 1), 9));
-  return Array.from({ length: n }, (_, i) => String(i + 1));
-}
-
-/** intent_detection: config.intents のキー一覧を返す。 */
-function computeIntentHandles(config: Record<string, unknown>): string[] {
-  const intents = config.intents as Record<string, string> | undefined;
-  if (!intents) return ["other"];
-  const keys = Object.keys(intents);
-  return keys.length > 0 ? keys : ["other"];
-}
 
 export const WorkflowNodeComponent = memo(function WorkflowNodeComponent({
   data,

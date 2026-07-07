@@ -30,6 +30,7 @@ ctx への要求:
 
 from __future__ import annotations
 
+import logging
 import re
 import tempfile
 import time
@@ -38,10 +39,18 @@ from typing import TYPE_CHECKING
 
 from millicall.workflows.executor import register_handler
 
+_logger = logging.getLogger(__name__)
+
 # mailbox はワークフロー作者が任意に設定できるため、録音パスに補間する前に
 # 安全な slug へ正規化する（英数・アンダースコア・ハイフン以外を "_" に置換）。
 # これにより ESL メタ文字・パス区切りの混入を防ぐ（record() 側でも二重に検証）。
 _MAILBOX_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+# play_audio の file_path は ESL コマンド (uuid_broadcast <uuid> <path> aleg) に
+# そのまま補間されるため、他の ESL シンク（record/transfer/send_dtmf）と同じく
+# 厳格 allowlist で検証する。空白/改行/ESL 区切り(&;|`)を排し、英数・ドット・
+# アンダースコア・ハイフン・スラッシュ・コロン（tone_stream:// 等）のみ許可。
+_VALID_AUDIO_PATH_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,512}$")
 
 
 def _safe_mailbox(mailbox: str) -> str:
@@ -82,8 +91,14 @@ async def handle_play_audio(node: object, ctx: ChannelContext) -> None:
     config = node.config  # type: ignore[attr-defined]
 
     if config.file_path:
-        # ファイル直接再生（TTS 不使用）
-        if ctx.call_control is not None:
+        # ファイル直接再生（TTS 不使用）。ESL インジェクション防止のため allowlist 検証し、
+        # 不正なら再生をスキップする（play_audio は "out" のみなので raise せず継続）。
+        if not _VALID_AUDIO_PATH_RE.match(config.file_path):
+            _logger.warning(
+                "play_audio: file_path を allowlist で拒否し再生をスキップ: %r",
+                config.file_path,
+            )
+        elif ctx.call_control is not None:
             await ctx.call_control.play_file(config.file_path)
     else:
         # TTS 合成→再生

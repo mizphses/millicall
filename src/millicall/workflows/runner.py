@@ -149,6 +149,9 @@ class WorkflowRunner:
                 agent_resolver=self._make_agent_resolver(),
                 default_tts_provider_id=workflow.default_tts_provider_id,
                 smtp=SmtpEmailSender.from_settings(self._settings),
+                # 最上位ワークフロー id を呼び出しスタックに入れ、call_workflow の
+                # cross-workflow 循環（A→B→A）を実行時に検出できるようにする。
+                active_workflow_ids={workflow_id},
             )
 
             # --- 実行 ----------------------------------------------------------- #
