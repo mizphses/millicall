@@ -48,6 +48,9 @@ from millicall.models import User
 
 router = APIRouter(prefix="/saml", tags=["saml"])
 
+# SAMLResponse（base64）の最大サイズ（レビュー N-4: 署名検証 DoS 防止）。1 MiB。
+_MAX_SAML_RESPONSE_B64 = 1024 * 1024
+
 # SAML 名前空間定数
 _SAMLP = "urn:oasis:names:tc:SAML:2.0:protocol"
 _SAML = "urn:oasis:names:tc:SAML:2.0:assertion"
@@ -160,9 +163,18 @@ def _validate_relay_state(relay_state: str | None) -> str:
     if not relay_state:
         return "/"
     s = relay_state.strip()
-    if s.startswith("/") and not s.startswith("//") and "://" not in s:
-        return s
-    return "/"
+    # 単一スラッシュ始まりのローカルパスのみ許可。以下は全て拒否（レビュー N-1 / 自動レビュー）:
+    #   //evil（protocol-relative）、/\evil（バックスラッシュ→一部ブラウザで // 扱い）、
+    #   バックスラッシュ全般、スキーム（://）、制御文字。
+    if (
+        not s.startswith("/")
+        or s.startswith(("//", "/\\"))
+        or "\\" in s
+        or "://" in s
+        or any(ord(c) < 0x20 for c in s)
+    ):
+        return "/"
+    return s
 
 
 def _build_metadata_xml(sp_entity_id: str, acs_url: str) -> str:
@@ -243,8 +255,10 @@ def _find_attribute(assertion: etree._Element, candidate_names: list[str]) -> st
 
 @router.get("/metadata", response_class=PlainTextResponse)
 async def saml_metadata(request: Request) -> PlainTextResponse:
-    """SP メタデータ XML を返す。SAML が無効でも常に返す。"""
+    """SP メタデータ XML を返す。SAML 無効時は 404（SP entity/ACS URL の露出を避ける、レビュー N-5）。"""
     settings = request.app.state.settings
+    if not settings.saml_enabled:
+        raise HTTPException(status_code=404)
     xml = _build_metadata_xml(settings.saml_sp_entity_id, settings.saml_sp_acs_url)
     return PlainTextResponse(content=xml, media_type="application/xml")
 
@@ -317,6 +331,12 @@ async def saml_acs(
                 ip_address=ip,
             )
             await audit_session.commit()
+
+    # サイズ上限（レビュー N-4）: 巨大 XML への署名検証(c14n)による CPU/メモリ DoS を防ぐ。
+    # 正常な SAMLResponse は数十 KB 程度なので 1 MiB を上限とする。
+    if len(SAMLResponse) > _MAX_SAML_RESPONSE_B64:
+        await _fail("response_too_large")
+        raise HTTPException(status_code=400, detail="SAMLResponse too large")
 
     # ---- Step 1: base64 デコード + defusedxml + lxml パース ----
     try:
@@ -493,7 +513,17 @@ async def saml_acs(
         )
 
         if existing_user is not None:
-            # 既存ユーザー: enabled 確認・display_name 更新（role は維持）
+            # セキュリティ（レビュー H-1）: SAML でローカル(または SCIM)由来アカウントへ
+            # ログインさせない。email 一致だけで origin="local" の（管理者含む）アカウントの
+            # セッションを発行できると、IdP が当該 email をアサートするだけで乗っ取りになる。
+            # 採用は origin="saml" のアカウントに限定する（明示リンク機構は将来対応）。
+            if existing_user.origin != "saml":
+                await _fail("origin_conflict", actor_label=email)
+                raise HTTPException(
+                    status_code=400,
+                    detail="この email は SSO 以外のアカウントに紐づいています",
+                )
+            # 既存 SAML ユーザー: enabled 確認・display_name 更新（role は維持）
             if not existing_user.enabled:
                 await _fail("user_disabled", actor_label=email)
                 raise HTTPException(status_code=400, detail="User account is disabled")

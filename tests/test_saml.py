@@ -653,6 +653,9 @@ async def test_acs_disabled_user_rejected(saml_client, idp_keypair) -> None:
         "https://evil.com",
         "http://evil.com",
         "javascript:alert(1)",
+        "/\\evil.com",       # バックスラッシュ（一部ブラウザで // 扱い、レビュー N-1）
+        "/path\\evil",       # 途中のバックスラッシュ
+        "/path\r\nSet-Cookie: x=1",  # 制御文字（改行）
     ],
 )
 async def test_acs_open_redirect_falls_back_to_root(saml_client, idp_keypair, relay_state: str) -> None:
@@ -703,3 +706,45 @@ async def test_acs_replay_rejected(saml_client, idp_keypair) -> None:
     resp2 = await _post_acs(saml_client, saml_b64)
     assert resp2.status_code == 400
     assert "millicall_session" not in resp2.cookies
+
+
+# ---------------------------------------------------------------------------
+# テスト: H-1 origin バインディング（既存ローカルアカウントへの SAML 乗っ取り防止）
+# ---------------------------------------------------------------------------
+
+
+async def test_acs_local_origin_account_rejected(saml_client, idp_keypair) -> None:
+    """email 一致でも origin='local' のアカウントには SAML ログインさせない（H-1）。"""
+    from millicall.auth.security import hash_password
+
+    email = "localadmin@example.com"
+    app = saml_client._transport.app
+    async with app.state.sessionmaker() as session:
+        session.add(
+            User(
+                username="localadmin",
+                hashed_password=hash_password("Admin1234!"),
+                display_name="Local Admin",
+                email=email,
+                role="admin",
+                origin="local",  # ローカルアカウント
+                enabled=True,
+            )
+        )
+        await session.commit()
+
+    saml_b64, _ = _build_saml_response(
+        idp_keypair["key_pem"],
+        idp_keypair["cert_pem"],
+        email=email,
+        assertion_id="_" + secrets.token_hex(16),
+    )
+    resp = await _post_acs(saml_client, saml_b64)
+    assert resp.status_code == 400
+    assert "millicall_session" not in resp.cookies
+
+
+async def test_metadata_disabled_returns_404(disabled_client) -> None:
+    """SAML 無効時は /saml/metadata が 404（SP entity/ACS URL を露出しない、N-5）。"""
+    resp = await disabled_client.get("/saml/metadata")
+    assert resp.status_code == 404
