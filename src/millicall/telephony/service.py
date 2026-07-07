@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Callable
@@ -104,7 +105,6 @@ class TelephonyChangeListener:
                 try:
                     wf = await session.get(Workflow, int(r.target_value))
                     if wf is not None:
-                        import json
                         defn = json.loads(wf.definition_json)
                         start_nodes = [n for n in defn.get("nodes", []) if n.get("type") == "start"]
                         if start_nodes:

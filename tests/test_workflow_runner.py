@@ -192,6 +192,42 @@ async def test_workflow_runner_handler_exception():
 
 
 # --------------------------------------------------------------------------- #
+# テスト 4b: ChannelContext 構築失敗でも finally が動作する (ctx=None パス)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_workflow_runner_ctx_construction_failure():
+    """ChannelContext 構築で例外が発生しても hangup・後片付けが行われる。
+
+    register() 後 try ブロック内で ChannelContext(...) が raise した場合、
+    ctx が None のまま finally へ到達する。このパスでは call_control 経由でハングアップし、
+    session_registry / dtmf_collector の後片付けも行われなければならない。
+    """
+    from unittest.mock import patch
+
+    wf = _simple_workflow()
+    esl = _FakeEsl()
+    rows = {(Workflow, 1): wf}
+    runner = _make_runner(rows, esl)
+    uuid = "test-uuid-ctx-fail"
+
+    # SmtpEmailSender.from_settings を raise させて ChannelContext 構築を失敗させる
+    with patch(
+        "millicall.workflows.runner.SmtpEmailSender.from_settings",
+        side_effect=RuntimeError("smtp init failure"),
+    ):
+        await runner.start(uuid, 1)  # 外に伝播しないこと
+
+    # ctx が None のパスでも hangup が発行されている
+    assert any(f"uuid_kill {uuid}" in cmd for cmd in esl.commands)
+    # レジストリ後片付け済み
+    assert runner._session_registry.get(uuid) is None
+    # DtmfCollector 後片付け済み
+    assert runner._dtmf_collector._queues.get(uuid) is None
+
+
+# --------------------------------------------------------------------------- #
 # テスト 5: provider_resolver が TTS を構築する
 # --------------------------------------------------------------------------- #
 

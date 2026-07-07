@@ -25,10 +25,6 @@ from millicall.workflows.schema import WorkflowDefinition
 
 logger = logging.getLogger("millicall.workflows.runner")
 
-# プロバイダ type -> builder
-_TTS_KINDS = {"voicevox", "openjtalk"}
-_STT_KINDS = {"whisper", "google_stt"}
-
 
 def _build_provider_from_row(p: Provider, key: str | None):
     """Provider ORM 行から適切なプロバイダオブジェクトを構築する。"""
@@ -136,24 +132,26 @@ class WorkflowRunner:
         self._session_registry.register(uuid, None, call_control)
         self._dtmf_collector.register(uuid)
 
-        # --- ChannelContext 組み立て ---------------------------------------- #
-        ctx = ChannelContext(
-            uuid=uuid,
-            call_control=call_control,
-            primitives=primitives,
-            tts_dir=self._settings.tts_cache_dir,
-            sessionmaker=self._sessionmaker,
-            secrets=self._secrets,
-            esl=self._esl,
-            dtmf=self._dtmf_collector.bind(uuid),
-            provider_resolver=self._make_provider_resolver(box),
-            agent_resolver=self._make_agent_resolver(),
-            default_tts_provider_id=workflow.default_tts_provider_id,
-            smtp=SmtpEmailSender.from_settings(self._settings),
-        )
-
-        # --- 実行 ----------------------------------------------------------- #
+        # ChannelContext 構築前に例外が発生した場合も finally で後片付けできるよう sentinel を置く。
+        ctx = None
         try:
+            # --- ChannelContext 組み立て ---------------------------------------- #
+            ctx = ChannelContext(
+                uuid=uuid,
+                call_control=call_control,
+                primitives=primitives,
+                tts_dir=self._settings.tts_cache_dir,
+                sessionmaker=self._sessionmaker,
+                secrets=self._secrets,
+                esl=self._esl,
+                dtmf=self._dtmf_collector.bind(uuid),
+                provider_resolver=self._make_provider_resolver(box),
+                agent_resolver=self._make_agent_resolver(),
+                default_tts_provider_id=workflow.default_tts_provider_id,
+                smtp=SmtpEmailSender.from_settings(self._settings),
+            )
+
+            # --- 実行 ----------------------------------------------------------- #
             defn = WorkflowDefinition.model_validate(json.loads(workflow.definition_json))
             await WorkflowExecutor(defn, ctx).execute()
         except Exception:
@@ -163,8 +161,12 @@ class WorkflowRunner:
             )
         finally:
             # ハングアップが済んでいなければ切断する（正常終了・例外どちらでも）。
-            if not ctx.hung_up:
-                await self._safe_hangup_ctx(ctx)
+            # ctx が None の場合は ChannelContext 構築前に例外が発生したケース。
+            if not (ctx is not None and ctx.hung_up):
+                if ctx is not None:
+                    await self._safe_hangup_ctx(ctx)
+                else:
+                    await self._safe_hangup(uuid)
             self._session_registry.pop(uuid)
             self._dtmf_collector.unregister(uuid)
 

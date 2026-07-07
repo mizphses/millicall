@@ -106,6 +106,8 @@ class MediaEventRouter:
         self._reconnect = reconnect
         # CHANNEL_ANSWER の重複や再発火で二重起動しないよう、起動済み uuid を記録する
         self._started: set[str] = set()
+        # バックグラウンドタスクへの強参照を保持し GC による途中破棄を防ぐ。
+        self._bg_tasks: set[asyncio.Task] = set()
 
     async def handle(self, event: dict) -> None:
         name = event.get("Event-Name")
@@ -183,7 +185,9 @@ class MediaEventRouter:
             logger.warning("invalid millicall_workflow value %r for uuid=%s", workflow_value, uuid)
             self._started.discard(uuid)
             return
-        asyncio.create_task(self._workflow_runner.start(uuid, workflow_id))
+        task = asyncio.create_task(self._workflow_runner.start(uuid, workflow_id))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
 
 async def _build_ephemeral_session(state, call_uuid: str):
