@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     dnsmasq_leases_path: str = "/var/lib/misc/dnsmasq.leases"
     # nftables テーブル名（millicall NAT ルールを格納するテーブル）。
     nftables_table: str = "millicall_nat"
+    # 電話機の Web 管理者資格情報（HTTP resync 用）。既定は機種の工場出荷値（公開情報）。
+    # 実サイトでは env MILLICALL_PHONE_ADMIN_USERNAME/PASSWORD で上書きすること。
+    phone_admin_username: str = "admin"
+    phone_admin_password: str = "adminpass"
 
     @field_validator("mcp_allowed_hosts", mode="before")
     @classmethod

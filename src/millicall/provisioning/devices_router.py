@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from millicall.config import get_settings
 from millicall.deps import get_change_listener, get_netd_client, get_session, require_admin
 from millicall.models import Device, Extension
 from millicall.network.client import NetdClient, NetdError
@@ -158,9 +159,15 @@ async def quick_provision_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    # best-effort resync（失敗しても 200 を返す）
+    # best-effort resync（失敗しても 200 を返す）。管理者資格情報は Settings 由来
+    # （env で上書き可能。コードに定数を持たない）。
+    settings = get_settings()
     try:
-        await resync_phone(device)
+        await resync_phone(
+            device,
+            admin_username=settings.phone_admin_username,
+            admin_password=settings.phone_admin_password,
+        )
     except Exception:  # noqa: BLE001
         logger.warning("quick_provision: resync_phone 失敗 device_id=%s", device_id)
 

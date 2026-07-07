@@ -164,7 +164,12 @@ async def quick_provision(
     return device
 
 
-async def resync_phone(device: Device) -> bool:
+async def resync_phone(
+    device: Device,
+    *,
+    admin_username: str,
+    admin_password: str,
+) -> bool:
     """電話機の IP アドレスへ HTTP resync リクエストを送る（ベストエフォート）。
 
     Panasonic KX-HDV → /admin/resync → /cgi-bin/api-provision の順で試行し、
@@ -175,6 +180,8 @@ async def resync_phone(device: Device) -> bool:
 
     Args:
         device: IP アドレスを持つ Device オブジェクト。
+        admin_username: 電話機 Web 管理者ユーザ名（Settings 由来。コードに定数を持たない）。
+        admin_password: 電話機 Web 管理者パスワード（Settings 由来）。
 
     Returns:
         resync リクエストが 1 つ以上成功したか否か。
@@ -183,7 +190,7 @@ async def resync_phone(device: Device) -> bool:
         return False
 
     ip = device.ip_address
-    creds = base64.b64encode(b"admin:adminpass").decode()
+    creds = base64.b64encode(f"{admin_username}:{admin_password}".encode()).decode()
     auth_headers = {"Authorization": f"Basic {creds}"}
 
     async with httpx.AsyncClient() as client:
