@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import false as sa_false
 from sqlalchemy import true as sa_true
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -242,3 +243,93 @@ class CallMessage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+
+class NetworkConfig(Base):
+    """ネットワーク設定（単一行テーブル; 常に id=1 を使用）。tailscale_auth_key_encrypted は repr/ログに出力しない。"""
+
+    __tablename__ = "network_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lan_interface: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="enp3s0", server_default="enp3s0"
+    )
+    lan_ip: Mapped[str] = mapped_column(
+        String(45), nullable=False, default="172.20.0.1", server_default="172.20.0.1"
+    )
+    lan_prefix: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=16, server_default="16"
+    )
+    dhcp_range_start: Mapped[str] = mapped_column(
+        String(45), nullable=False, default="172.20.1.1", server_default="172.20.1.1"
+    )
+    dhcp_range_end: Mapped[str] = mapped_column(
+        String(45), nullable=False, default="172.20.254.254", server_default="172.20.254.254"
+    )
+    dhcp_lease_hours: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=12, server_default="12"
+    )
+    provisioning_base_url: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    nat_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    wan_interface: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="", server_default=""
+    )
+    tailscale_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    # Fernet トークン。Tailscale 無効時は NULL。NEVER store plaintext, NEVER log。
+    tailscale_auth_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:
+        attrs = [
+            f"{k}={v!r}"
+            for k, v in self.__dict__.items()
+            if not k.startswith("_") and k != "tailscale_auth_key_encrypted"
+        ]
+        return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class Device(Base):
+    """物理電話機（IP電話端末）。provision_token は repr/ログに出力しない。"""
+
+    __tablename__ = "devices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 正規化形式: 大文字コロン区切り（AA:BB:CC:DD:EE:FF）
+    mac_address: Mapped[str] = mapped_column(String(17), unique=True, nullable=False)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    hostname: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    extension_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("extensions.id", ondelete="SET NULL"), nullable=True
+    )
+    provisioned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    # ワンタイムプロビジョニングトークン。使用後に NULL 化する。NEVER log。
+    provision_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        attrs = [
+            f"{k}={v!r}"
+            for k, v in self.__dict__.items()
+            if not k.startswith("_") and k != "provision_token"
+        ]
+        return f"<{self.__class__.__name__}({', '.join(attrs)})>"
