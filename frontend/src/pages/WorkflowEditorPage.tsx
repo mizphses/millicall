@@ -402,7 +402,8 @@ export function WorkflowEditorPage() {
         display: "flex",
         flexDirection: "column",
         margin: "-24px",
-        height: "calc(100vh - 64px)",
+        // AppShell ヘッダ高さトークン（panda.config: sizes.header = 56px）と一致させる。
+        height: "calc(100vh - 56px)",
         overflow: "hidden",
       }}
     >
