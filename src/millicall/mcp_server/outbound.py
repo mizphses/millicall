@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from millicall.ai import registry as ai_registry
 from millicall.ai.llm.base import ChatMessage
+from millicall.config import get_settings
 from millicall.crypto import SecretBox
 from millicall.mcp_server.ephemeral import EphemeralAgentSpec, EphemeralAgentStore
 from millicall.media.service import AnswerRegistry, HangupRegistry, locked_bgapi
@@ -43,6 +44,11 @@ _EXTERNAL_PREFIXES = ("0", "184", "186")
 # 電話番号 / 発信者番号の許可文字: 数字・* # +（186/184 前置や内線番号を含む）。
 # originate コマンドへの補間前に検証し、空白・改行・区切り文字による注入を防ぐ。
 _VALID_NUMBER_RE = re.compile(r"^[0-9*#+]{1,32}$")
+
+# C3 修正: 国際番号パターン（dialplan_default.xml.j2 の outbound_intl_block と同じ分類）。
+# 010\d+  : 国際電話（NTT ひかり電話/固定網の国際プレフィクス）
+# 00[1-9]\d+: IP 電話・各キャリアの国際プレフィクス（001/0033 等）
+_INTL_RE = re.compile(r"^(010\d+|00[1-9]\d+)$")
 
 # converse システムプロンプト（[END_CALL] 版、旧 verbatim を [DONE]→[END_CALL] に置換）。
 _CONVERSE_PROMPT_TEMPLATE = """あなたは電話で会話をしているAIアシスタントです。
@@ -214,6 +220,7 @@ class OutboundCallService:
         run_conversation: Callable[..., Awaitable[None]] | None = None,
         lock: asyncio.Lock | None = None,
         reconnect: Callable[[], Awaitable[_EslLike]] | None = None,
+        international_allow_prefixes: list[str] | None = None,
     ) -> None:
         self._esl = esl
         self._answer_registry = answer_registry
@@ -231,6 +238,10 @@ class OutboundCallService:
         # フォールバックする（後方互換。接続断は呼び出し元へ伝播）。
         self._lock = lock if lock is not None else asyncio.Lock()
         self._reconnect = reconnect
+        # C3 修正: 国際発信 allowlist。
+        # None の場合は Settings から動的に読む（実運用経路; tools.py は渡さない）。
+        # テスト・DI では直接 list を渡して Settings 依存を切る。
+        self._international_allow_prefixes = international_allow_prefixes
 
     async def _bgapi(self, command: str) -> None:
         """共有 ESL 接続を lock で直列化し、接続断時は reconnect で張り直して再送する。"""
@@ -238,16 +249,60 @@ class OutboundCallService:
             self._esl, command, lock=self._lock, reconnect=self._reconnect
         )
 
+    def _get_intl_allow_prefixes(self) -> list[str]:
+        """国際発信 allowlist を返す。コンストラクタで注入済みならそれを、なければ Settings から読む。"""
+        if self._international_allow_prefixes is not None:
+            return self._international_allow_prefixes
+        raw = get_settings().outbound_international_allow
+        return [p.strip() for p in raw.split(",") if p.strip()]
+
+    def _check_intl_policy(self, phone_number: str) -> None:
+        """C3 修正: 国際発信ポリシーを適用する。
+
+        dialplan_default.xml.j2 の outbound_intl_block / outbound_intl_allow_<prefix> と
+        同一の分類規則を使い、サーバー起点発信でも国際デフォルト拒否を強制する。
+
+        国際番号（_INTL_RE マッチ）かつ、その番号が allowlist の各プレフィックスのいずれでも
+        始まっていない場合は ValueError を送出する。allowlist が空（デフォルト）なら
+        国際発信は一切許可されない（dialplan と同じデフォルト拒否）。
+
+        server-originated 発信には originating extension が存在しないため、
+        per-extension calling_permission チェックは行わない。
+        グローバル allowlist が唯一の制御境界であり、dialplan の outbound_intl_block と
+        セマンティクスを揃える。
+        """
+        if not _INTL_RE.match(phone_number):
+            return  # 国内/内線 → ポリシー適用不要
+        allow_prefixes = self._get_intl_allow_prefixes()
+        if any(phone_number.startswith(p) for p in allow_prefixes):
+            return  # allowlist 一致 → 許可
+        raise ValueError(
+            f"international dialing not permitted: {phone_number!r} — "
+            "set MILLICALL_OUTBOUND_INTERNATIONAL_ALLOW to allow specific prefixes"
+        )
+
     async def _resolve_target(
         self, phone_number: str, caller_id: str, trunk: str
     ) -> tuple[str, str]:
-        """(dest, caller_id) を解決する（旧 _resolve_endpoint 相当）。
+        """(dest, effective_caller_id) を解決する（旧 _resolve_endpoint 相当）。
 
         トランクが必要な外線で enabled トランクが無い場合は ValueError。
 
         セキュリティ: phone_number / caller_id / trunk は originate コマンド文字列に
         補間されるため、ここで一括して allowlist 検証する（ESL コマンドインジェクション
         対策）。空白・改行・`,{}'"` 等の区切り文字を含む値は fail-closed で拒否する。
+
+        C3 修正 — caller-ID ロックダウン:
+            外線発信の effective caller-id はトランクの caller_id（サーバー管理値）を
+            採用する。呼び出し側が渡した caller_id 引数は _VALID_NUMBER_RE で形式検証
+            するが、トランク caller_id が存在する場合はそちらを優先する。
+            これにより、プロンプトインジェクション等で caller_id を偽装しても
+            実際に発信に使われる番号はトランク設定値に固定される（spoofing 不可）。
+            dialplan_default.xml.j2 の `effective_caller_id_number={{ outbound_trunk.caller_id }}`
+            と同じセマンティクス。
+
+        C3 修正 — 国際発信デフォルト拒否:
+            _check_intl_policy を呼び、allowlist 外の国際番号は ValueError で拒否する。
         """
         if not phone_number or not _VALID_NUMBER_RE.match(phone_number):
             raise ValueError(f"invalid phone_number: {phone_number!r}")
@@ -260,16 +315,24 @@ class OutboundCallService:
             match = next((t for t in trunks if t.name == trunk), None)
             if match is None:
                 raise ValueError(f"unknown trunk: {trunk!r}")
-            resolved_cid = caller_id or getattr(match, "caller_id", "") or ""
-            return f"sofia/gateway/{trunk}/{phone_number}", resolved_cid
+            # C3: 国際発信ポリシーチェック（トランク解決後、gateway dest 構築前）。
+            self._check_intl_policy(phone_number)
+            # C3: caller-ID ロックダウン — トランクの caller_id を優先し spoofing を防ぐ。
+            trunk_cid = getattr(match, "caller_id", "") or ""
+            effective_cid = trunk_cid or caller_id  # trunk値が無い場合のみ caller-supplied を使う
+            return f"sofia/gateway/{trunk}/{phone_number}", effective_cid
 
         if phone_number.startswith(_EXTERNAL_PREFIXES):
             trunks = await self._fetch_enabled_trunks()
             if not trunks:
                 raise ValueError("利用可能なトランクがありません")
             selected = trunks[0]
-            resolved_cid = caller_id or getattr(selected, "caller_id", "") or ""
-            return f"sofia/gateway/{selected.name}/{phone_number}", resolved_cid
+            # C3: 国際発信ポリシーチェック（トランク選択後、gateway dest 構築前）。
+            self._check_intl_policy(phone_number)
+            # C3: caller-ID ロックダウン — トランクの caller_id を優先し spoofing を防ぐ。
+            trunk_cid = getattr(selected, "caller_id", "") or ""
+            effective_cid = trunk_cid or caller_id  # trunk値が無い場合のみ caller-supplied を使う
+            return f"sofia/gateway/{selected.name}/{phone_number}", effective_cid
 
         # 内線宛。
         return f"user/{phone_number}@{self._sip_domain}", caller_id

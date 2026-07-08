@@ -126,7 +126,14 @@ class _FakeTrunk:
         self.id = 1
 
 
-def _make_service(esl, trunks, *, sip_domain="millicall.local", answer_reg=None):
+def _make_service(
+    esl,
+    trunks,
+    *,
+    sip_domain="millicall.local",
+    answer_reg=None,
+    international_allow_prefixes=None,
+):
     from millicall.mcp_server.outbound import OutboundCallService
 
     ans = answer_reg or AnswerRegistry()
@@ -140,6 +147,7 @@ def _make_service(esl, trunks, *, sip_domain="millicall.local", answer_reg=None)
         sip_domain=sip_domain,
         fetch_enabled_trunks=_fetch_enabled_trunks,
         uuid_factory=lambda: "fixed-uuid",
+        international_allow_prefixes=international_allow_prefixes if international_allow_prefixes is not None else [],
     ), ans
 
 
@@ -154,12 +162,23 @@ async def test_resolve_target_external_uses_first_enabled_trunk():
 
 
 @pytest.mark.asyncio
-async def test_resolve_target_explicit_trunk_and_caller_id():
+async def test_resolve_target_explicit_trunk_caller_id_uses_trunk_value():
+    # C3 修正: trunk に caller_id が設定されている場合はトランク値を優先（spoofing 防止）。
     esl = _FakeEsl()
     svc, _ = _make_service(esl, [_FakeTrunk("main", caller_id="0311111111")])
     dest, cid = await svc._resolve_target("0901234567", "0399999999", "main")
     assert dest == "sofia/gateway/main/0901234567"
-    assert cid == "0399999999"  # 明示 caller_id 優先
+    assert cid == "0311111111"  # C3: トランク caller_id が優先（caller-supplied は無視）
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_explicit_trunk_no_trunk_cid_falls_back_to_supplied():
+    # trunk に caller_id が無い場合のみ caller-supplied を使う。
+    esl = _FakeEsl()
+    svc, _ = _make_service(esl, [_FakeTrunk("main", caller_id="")])
+    dest, cid = await svc._resolve_target("0901234567", "0399999999", "main")
+    assert dest == "sofia/gateway/main/0901234567"
+    assert cid == "0399999999"  # trunk caller_id が空なので caller-supplied にフォールバック
 
 
 @pytest.mark.asyncio
@@ -259,17 +278,143 @@ async def test_dial_timeout_raises_dial_timeout_with_uuid():
 
 
 @pytest.mark.asyncio
-async def test_dial_explicit_caller_id_reflected_in_origination_var():
+async def test_dial_caller_id_uses_trunk_value_not_supplied():
+    # C3 修正: trunk caller_id が設定されている場合、供給された caller_id は無視される。
     esl = _FakeEsl()
     svc, ans = _make_service(esl, [_FakeTrunk("main", caller_id="0311111111")])
     asyncio.get_running_loop().create_task(_delayed_resolve(ans, "fixed-uuid"))
     await svc.dial("0901234567", "0399999999", "", timeout=1)
-    assert "origination_caller_id_number=0399999999" in esl.cmds[-1]
+    # C3: trunk caller_id (0311111111) が使われ、caller-supplied (0399999999) は使われない。
+    assert "origination_caller_id_number=0311111111" in esl.cmds[-1]
+    assert "origination_caller_id_number=0399999999" not in esl.cmds[-1]
 
 
 async def _delayed_resolve(ans, uuid):
     await asyncio.sleep(0)
     ans.resolve(uuid)
+
+
+# ===========================================================================
+# C3 修正: 国際発信デフォルト拒否 / caller-ID ロックダウン
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_c3_intl_rejected_when_allow_list_empty_010():
+    """010 始まり国際番号は allow-list 空のとき拒否される（ValueError, originate 未発行）。"""
+    esl = _FakeEsl()
+    svc, _ = _make_service(
+        esl, [_FakeTrunk("main", caller_id="0312345678")], international_allow_prefixes=[]
+    )
+    with pytest.raises(ValueError, match="international dialing not permitted"):
+        await svc._resolve_target("01012345678", "", "")
+    assert not esl.cmds  # originate 未発行
+
+
+@pytest.mark.asyncio
+async def test_c3_intl_rejected_when_allow_list_empty_001():
+    """001 始まり国際番号は allow-list 空のとき拒否される。"""
+    esl = _FakeEsl()
+    svc, _ = _make_service(
+        esl, [_FakeTrunk("main", caller_id="0312345678")], international_allow_prefixes=[]
+    )
+    with pytest.raises(ValueError, match="international dialing not permitted"):
+        await svc._resolve_target("0011900123456", "", "")
+    assert not esl.cmds
+
+
+@pytest.mark.asyncio
+async def test_c3_intl_rejected_dial_does_not_call_originate():
+    """dial() で国際番号を拒否したとき bgapi originate が一切発行されない。"""
+    esl = _FakeEsl()
+    svc, _ = _make_service(
+        esl, [_FakeTrunk("main", caller_id="0312345678")], international_allow_prefixes=[]
+    )
+    with pytest.raises(ValueError, match="international dialing not permitted"):
+        await svc.dial("01012345678", "", "", timeout=1)
+    assert not esl.cmds  # originate 未発行 = 課金ゼロ
+
+
+@pytest.mark.asyncio
+async def test_c3_intl_allowed_when_prefix_in_allow_list():
+    """prefix が allow-list に含まれる国際番号は許可される。"""
+    esl = _FakeEsl()
+    svc, ans = _make_service(
+        esl,
+        [_FakeTrunk("main", caller_id="0312345678")],
+        international_allow_prefixes=["010"],
+    )
+    # _resolve_target が ValueError を上げないことを確認。
+    dest, cid = await svc._resolve_target("01012345678", "", "")
+    assert dest == "sofia/gateway/main/01012345678"
+    assert cid == "0312345678"
+
+
+@pytest.mark.asyncio
+async def test_c3_intl_allowed_001_with_matching_prefix():
+    """001 番号も allowlist に 001 があれば通過する。"""
+    esl = _FakeEsl()
+    svc, _ = _make_service(
+        esl,
+        [_FakeTrunk("main", caller_id="0312345678")],
+        international_allow_prefixes=["001"],
+    )
+    dest, _ = await svc._resolve_target("0011234567890", "", "")
+    assert dest == "sofia/gateway/main/0011234567890"
+
+
+@pytest.mark.asyncio
+async def test_c3_domestic_always_permitted():
+    """国内 PSTN (03始まり等) は allow-list が空でも常に許可される。"""
+    esl = _FakeEsl()
+    svc, _ = _make_service(
+        esl, [_FakeTrunk("main", caller_id="0312345678")], international_allow_prefixes=[]
+    )
+    dest, _ = await svc._resolve_target("0312345678", "", "")
+    assert dest == "sofia/gateway/main/0312345678"
+
+
+@pytest.mark.asyncio
+async def test_c3_internal_extension_always_permitted():
+    """内線番号 (短縮) は allow-list が空でも常に許可される。"""
+    esl = _FakeEsl()
+    svc, _ = _make_service(
+        esl, [_FakeTrunk("main")], international_allow_prefixes=[]
+    )
+    dest, _ = await svc._resolve_target("800", "", "")
+    assert dest == "user/800@millicall.local"
+
+
+@pytest.mark.asyncio
+async def test_c3_caller_id_locked_to_trunk_not_caller_supplied():
+    """外線発信の effective caller-id はトランク値固定（caller-supplied は上書き不可）。"""
+    esl = _FakeEsl()
+    trunk = _FakeTrunk("main", caller_id="0312345678")
+    svc, ans = _make_service(
+        esl, [trunk], international_allow_prefixes=[]
+    )
+    asyncio.get_running_loop().create_task(_delayed_resolve(ans, "fixed-uuid"))
+    # caller_id="0399999999" (spoofed) を渡す。
+    await svc.dial("0901234567", "0399999999", "", timeout=1)
+    cmd = esl.cmds[-1]
+    # originate にはトランクの caller_id が使われる。
+    assert "origination_caller_id_number=0312345678" in cmd
+    # spoofed な番号は使われない。
+    assert "origination_caller_id_number=0399999999" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_c3_caller_id_explicit_trunk_locked_to_trunk():
+    """明示トランク指定時も effective caller-id はトランク値固定。"""
+    esl = _FakeEsl()
+    svc, ans = _make_service(
+        esl, [_FakeTrunk("main", caller_id="0311111111")], international_allow_prefixes=[]
+    )
+    asyncio.get_running_loop().create_task(_delayed_resolve(ans, "fixed-uuid"))
+    await svc.dial("0901234567", "0399999999", "main", timeout=1)
+    cmd = esl.cmds[-1]
+    assert "origination_caller_id_number=0311111111" in cmd
+    assert "origination_caller_id_number=0399999999" not in cmd
 
 
 # ===========================================================================
