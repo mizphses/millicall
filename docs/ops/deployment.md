@@ -64,7 +64,7 @@ MILLICALL_MCP_ALLOWED_HOSTS=millicall.your-tailnet-name.ts.net,localhost,127.0.0
 GHCR パッケージを無認証 pull できるよう public 公開する:
 
 1. 初回リリース後、`https://github.com/users/mizphses/packages` で
-   `millicall-core` / `millicall-freeswitch` を開く。
+   `millicall-core` / `millicall-freeswitch` / `millicall-netd` を開く。
 2. Package settings → Danger Zone → **Change visibility → Public**。
 
 これにより `install.sh` の `docker compose pull` が `docker login` なしで成功する。

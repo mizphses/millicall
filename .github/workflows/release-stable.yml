@@ -9,6 +9,11 @@ permissions:
 
 jobs:
   prepare:
+    # v* タグの正式リリースのみ stable ビルドを実行する。
+    # dev プレリリースが誤って released 化されると、release イベントは
+    # dev タグのコミット時点のワークフロー定義で実行されるため、
+    # 古いビルド定義 (例: netd ステップ追加前) で :latest が push されてしまう。
+    if: startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-24.04
     outputs:
       sha_tag: ${{ steps.v.outputs.sha_tag }}
