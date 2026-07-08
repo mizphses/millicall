@@ -20,7 +20,11 @@ class VoicevoxTTS:
 
     async def synthesize(self, text: str) -> bytes:
         params = {"text": text, "speaker": str(self._speaker)}
-        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+        async with httpx.AsyncClient(
+            timeout=self._timeout,
+            transport=self._transport,
+            follow_redirects=False,
+        ) as client:
             q = await client.post(f"{self._base}/audio_query", params=params)
             q.raise_for_status()
             syn = await client.post(

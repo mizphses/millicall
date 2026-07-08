@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.gen import generate_sip_password
 from millicall.models import Device, Extension
+from millicall.net_guard import _check_device_ip, _PinnedTransport
 from millicall.network.client import NetdClient
 from millicall.network.validation import is_valid_hostname, normalize_mac, validate_ipv4
 
@@ -174,6 +175,15 @@ async def resync_phone(
 
     エラーは飲み込み、例外を呼び出し元に伝播させない。
 
+    セキュリティ: SSRF ガード (M4)
+      * ``_check_device_ip`` でデバイス IP をループバック/リンクローカル/マルチキャスト/
+        予約済み/未指定アドレスから拒否する（169.254.169.254 メタデータアドレスを含む）。
+        電話機は RFC1918 LAN 上にあるためプライベート IP は許可する。
+      * ``_PinnedTransport`` で IP リテラルに接続を固定し、リダイレクトは辿らない。
+        これにより認証情報付きリクエストがリダイレクト先へ漏洩するのを防ぐ。
+      * 残存リスク: 同一 LAN 上で ARP スプーフィング等が行われた場合、同セグメントの
+        任意ホストへ認証情報が届く可能性はある。LAN 物理セキュリティが前提。
+
     Args:
         device: IP アドレスを持つ Device オブジェクト。
         admin_username: 電話機 Web 管理者ユーザ名（Settings 由来。コードに定数を持たない）。
@@ -186,10 +196,23 @@ async def resync_phone(
         return False
 
     ip = device.ip_address
+
+    # --- SSRF ガード: デバイス IP の分類チェック ---
+    try:
+        _check_device_ip(ip)
+    except ValueError:
+        logger.warning(
+            "resync_phone: デバイス IP %r はブロック対象アドレスのため中断", ip
+        )
+        return False
+
     creds = base64.b64encode(f"{admin_username}:{admin_password}".encode()).decode()
     auth_headers = {"Authorization": f"Basic {creds}"}
 
-    async with httpx.AsyncClient() as client:
+    # IP リテラルを直接使うため DNS 再解決なし; _PinnedTransport で再接続も同 IP に固定。
+    transport = _PinnedTransport(ip, ip)
+
+    async with httpx.AsyncClient(transport=transport, follow_redirects=False) as client:
         # Panasonic resync (1): admin エンドポイント
         try:
             r = await client.get(
@@ -203,7 +226,7 @@ async def resync_phone(
         except Exception:
             logger.debug("resync_phone: Panasonic /admin/resync 失敗 ip=%s", ip)
 
-        # Panasonic resync (2): CGI フォールバック
+        # Panasonic resync (2): CGI フォールバック（認証なし）
         try:
             r = await client.get(
                 f"http://{ip}/cgi-bin/api-provision?event=resync",
