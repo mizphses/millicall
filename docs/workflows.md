@@ -2,7 +2,7 @@
 
 ワークフロー機能を使うと、着信をノードベースのフローで処理できます。IVR メニュー、AI 会話、時間帯分岐、メール通知など 19 種のノードを組み合わせます。エディタは `/workflows` の xyflow ベースの GUI で操作します。
 
-詳細な実機確認手順は [RUNBOOK-phase4b-workflow.md](RUNBOOK-phase4b-workflow.md) を参照してください。
+詳細な実機確認手順は RUNBOOK-phase4b-workflow.md（リポジトリ runbooks/ 参照） を参照してください。
 
 ## 前提
 
@@ -131,18 +131,18 @@ MILLICALL_SMTP_TIMEOUT=15
 
 ```bash
 # ノード種別カタログを取得
-curl -b cookie.txt http://192.168.1.10:8000/api/workflows/node-types | jq '.[].type'
+curl -b cookie.txt http://192.168.1.10/api/workflows/node-types | jq '.[].type'
 
 # ワークフロー一覧
-curl -b cookie.txt http://192.168.1.10:8000/api/workflows
+curl -b cookie.txt http://192.168.1.10/api/workflows
 
 # ワークフロー作成
-curl -X POST -b cookie.txt http://192.168.1.10:8000/api/workflows \
+curl -X POST -b cookie.txt http://192.168.1.10/api/workflows \
   -H 'Content-Type: application/json' \
   -d '{"name":"受付IVR","number":"30","definition":{"nodes":[...],"edges":[...]}}'
 
 # ワークフロー削除（Route も自動削除）
-curl -X DELETE -b cookie.txt http://192.168.1.10:8000/api/workflows/<id>
+curl -X DELETE -b cookie.txt http://192.168.1.10/api/workflows/<id>
 ```
 
 ---
@@ -157,4 +157,4 @@ curl -X DELETE -b cookie.txt http://192.168.1.10:8000/api/workflows/<id>
 | api_call が常に error | SSRF ガードで内部アドレスが拒否されている可能性。外部到達可能な URL か確認 |
 | フロー途中で停止 | 実行ステップ上限は 500。`goto` ループや過大なフローを見直す |
 
-詳細: [RUNBOOK-phase4b-workflow.md](RUNBOOK-phase4b-workflow.md)
+詳細: RUNBOOK-phase4b-workflow.md（リポジトリ runbooks/ 参照）

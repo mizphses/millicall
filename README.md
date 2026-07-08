@@ -1,4 +1,4 @@
-# millicall v2
+# millicall
 
 [![CI](https://github.com/mizphses/millicall/actions/workflows/ci.yml/badge.svg)](https://github.com/mizphses/millicall/actions/workflows/ci.yml)
 [![Release (stable)](https://github.com/mizphses/millicall/actions/workflows/release-stable.yml/badge.svg)](https://github.com/mizphses/millicall/actions/workflows/release-stable.yml)
@@ -6,12 +6,14 @@
 
 ## 概要
 
-フレッツ光回線の HGW（ホームゲートウェイ）に特化したローカル PBX システム。コアは **FastAPI**（ESL 制御・音声 AI・MCP サーバ）と **FreeSWITCH**（SIP/RTP 処理）で構成され、**React SPA** が管理 UI を担う。本番スタックは役割別 4 コンテナ（`core` / `freeswitch` / `netd` / `docker-proxy`）で動作し、GHCR のプリビルドイメージ（amd64）を `install.sh` ワンライナーで導入できる。
+フレッツ光回線の HGW（ホームゲートウェイ）に対応したローカル PBX システム。
+
+コアは FastAPI（ESL 制御・音声 AI・MCP サーバ）と FreeSWITCH（SIP/RTP 処理）で構成され、React SPAが管理 UI を担う。本番スタックは役割別 4 コンテナ（`core` / `freeswitch` / `netd` / `docker-proxy`）で動作し、GHCR のプリビルドイメージ（amd64）を `install.sh` ワンライナーで導入できる。
 
 ## 主な機能
 
 - **内線・外線・ルーティング**: SIP 内線管理、外線トランク（SIP trunk）設定、着信ルーティング、CDR（通話明細）、電話帳、オンデマンド発信
-- **音声 AI パイプライン**: WebRTC VAD + ストリーミング STT（Google Speech-to-Text）+ 文分割 TTS（VoiceVox / OpenJTalk）+ バージイン（再生中の割り込み検知）。LLM は Anthropic / OpenAI / Gemini / Vertex AI に対応。TTS は VoiceVox / OpenJTalk 対応。STT は Google Cloud Speech-to-Text / Whisper 対応。プロバイダカタログは管理画面から切り替え可能
+- **音声 AI パイプライン**: WebRTC VAD + ストリーミング STT（Google Speech-to-Text）+ 文分割 TTS（VoiceVox または OpenJTalk）+ バージイン（再生中の割り込み検知）。LLM は Anthropic / OpenAI / Gemini / Vertex AI に対応。TTS は VoiceVox / OpenJTalk 対応。STT は Google Cloud Speech-to-Text / Whisper 対応。プロバイダカタログは管理画面から切り替え可能
 - **MCPエージェント**: MCP over HTTP サーバ（`converse` を含む 15 ツール）を標準搭載。`dial` / `say` / `listen` / `hangup` 等の電話プリミティブと、`converse`（自律会話）、電話帳 CRUD、内線・トランク一覧など。OAuth2.1 による認証済み外部エージェント連携対応
 - **ワークフロー（IVR + AI ノード）**: xyflow ベースのビジュアルエディタで IVR フロー・AI 分岐ノードを構築。React SPA から設定・プレビューが可能
 - **ゼロタッチプロビジョニング + netd**: SIP 電話機向け自動設定配布（ZTP）。`netd` コンテナが dnsmasq（DHCP/DNS）・nftables NAT・Tailscale を管理し、フレッツ環境の NW 設定をコアから API 経由で制御
@@ -57,7 +59,9 @@ millicallctl update
 
 ## ドキュメント
 
-以下のドキュメントは [GitHub Wiki](https://github.com/mizphses/millicall/wiki) にも同期される。
+`/docs` 以下のドキュメントは [GitHub Wiki](https://github.com/mizphses/millicall/wiki) にも同期される。
+
+### 主要ドキュメントのご紹介
 
 | ドキュメント | 内容 |
 |---|---|
@@ -72,42 +76,26 @@ millicallctl update
 
 ## アーキテクチャ
 
-```
-フレッツ HGW
-    │  SIP/RTP (NAT 越え)
-    ▼
-┌─────────────┐       ESL       ┌────────────────────────────────┐
-│ freeswitch  │ ◄────────────► │  core (FastAPI)                │
-│  SIP / RTP  │                 │  ├─ ESL 制御 / ルーティング    │
-└─────────────┘                 │  ├─ 音声 AI (VAD/STT/TTS/LLM) │
-                                │  ├─ MCP サーバ (15 tools)      │
-                                │  ├─ ワークフローランナー        │
-                                │  ├─ REST API / SPA サーバ      │
-                                │  └─ 認証 (TOTP/SAML/SCIM)     │
-                                └───────────┬────────────────────┘
-                                            │ UNIX ソケット (/run/millicall)
-                                ┌───────────▼────────┐
-                                │  netd              │
-                                │  dnsmasq / nftables│
-                                │  NAT / Tailscale   │
-                                └────────────────────┘
-                                            │ HTTP (127.0.0.1:2375)
-                                ┌───────────▼────────┐
-                                │  docker-proxy      │
-                                │  socket-proxy      │
-                                │  (read-only 仲介)  │
-                                └────────────────────┘
-                                            │ ブラウザ
-                                ┌───────────▼────────┐
-                                │  React SPA         │
-                                │  管理画面 / ワーク  │
-                                │  フローエディタ     │
-                                └────────────────────┘
-```
-
 全コンテナは `network_mode: host`（docker-proxy を除く）。`core` と `netd` は名前付き volume（`millicall-run`）で UNIX ソケットを共有する。
 
+```mermaid
+graph TD
+    Flets["フレッツ HGW"]
+    FS["freeswitch<br>SIP / RTP"]
+    Core["core (FastAPI)<br>├─ ESL 制御 / ルーティング<br>├─ 音声 AI (VAD/STT/TTS/LLM)<br>├─ MCP サーバ (15 tools)<br>├─ ワークフローランナー<br>├─ REST API / SPA サーバ<br>└─ 認証 (TOTP/SAML/SCIM)"]
+    Netd["netd<br>dnsmasq / nftables<br>NAT / Tailscale"]
+    DockerProxy["docker-proxy<br>socket-proxy<br>(read-only 仲介)"]
+    SPA["React SPA<br>管理画面 / ワーク<br>フローエディタ"]
+
+    Flets -->|"<a href='https://flets.com/denwa/hikaridenwa/smartphone/' target='_blank'>スマホ内線</a>の機能でSIP収容"| FS
+    FS <-->|"ESL"| Core
+    Core -->|"UNIX ソケット (/run/millicall)"| Netd
+    Netd -->|"HTTP (127.0.0.1:2375)"| DockerProxy
+    DockerProxy -->|"ブラウザ"| SPA
+```
+
 ## 開発
+以下のコマンド・ツールを使用している（察してください）
 
 ### バックエンド（Python / uv）
 
@@ -121,9 +109,9 @@ uv run ruff check .
 
 ```bash
 cd frontend
-npm install
-npm run build    # 本番ビルド
-npm run test     # vitest
+pnpm install
+pnpm run build    # 本番ビルド
+pnpm run test     # vitest
 ```
 
 ### ローカル起動（スタック全体）
@@ -131,9 +119,3 @@ npm run test     # vitest
 ```bash
 docker compose up -d --build
 ```
-
-> `docs/superpowers/`・`.claude/`・`.superpowers/` は AI 補助ツールの作業ファイルであり gitignore 対象。
-
-## ライセンス
-
-準備中（LICENSE ファイル未設定）。

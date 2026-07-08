@@ -17,8 +17,7 @@ from typing import Any
 _SENTINEL = object()
 
 _MISSING_MESSAGE = (
-    "google-cloud-speech が未インストールです。"
-    "`uv sync --extra stt-google` を実行してください。"
+    "google-cloud-speech が未インストールです。`uv sync --extra stt-google` を実行してください。"
 )
 
 
@@ -181,9 +180,7 @@ class _GoogleSession:
 
     def _run(self, client: Any, make_config, make_audio) -> None:
         try:
-            responses = client.streaming_recognize(
-                requests=self._requests(make_config, make_audio)
-            )
+            responses = client.streaming_recognize(requests=self._requests(make_config, make_audio))
             for response in responses:
                 for result in getattr(response, "results", []):
                     if getattr(result, "is_final", False) and result.alternatives:

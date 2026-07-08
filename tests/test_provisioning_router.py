@@ -249,6 +249,7 @@ async def test_panasonic_device_with_token_correct(app) -> None:
     sm = app.state.sessionmaker
     async with sm() as session:
         from sqlalchemy import select
+
         device = await session.scalar(
             select(Device).where(Device.mac_address == "AA:BB:CC:DD:EE:FF")
         )
@@ -376,6 +377,7 @@ async def test_yealink_device_token_consumed(app) -> None:
     sm = app.state.sessionmaker
     async with sm() as session:
         from sqlalchemy import select
+
         device = await session.scalar(
             select(Device).where(Device.mac_address == "11:22:33:44:55:77")
         )

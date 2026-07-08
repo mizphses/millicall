@@ -2,7 +2,7 @@
 
 millicall は MCP サーバーを内蔵しており、claude.ai のカスタムコネクタや任意の MCP クライアントから PBX を操作できます。Streamable HTTP + OAuth 2.1 で認証します。
 
-詳細な実機確認手順は [RUNBOOK-phase4a-mcp.md](RUNBOOK-phase4a-mcp.md) を参照してください。
+詳細な実機確認手順は RUNBOOK-phase4a-mcp.md（リポジトリ runbooks/ 参照） を参照してください。
 
 ## 前提条件
 
@@ -178,4 +178,4 @@ dial で 18609000000000 に電話をかけてください
 | `dial` で「利用可能なトランクがありません」 | `GET /api/trunks` で `enabled=true` のトランクが存在するか確認 |
 | `dial` が 30 秒でタイムアウト | 正常動作（応答なし）。FreeSWITCH と ESL の接続（`127.0.0.1:8021`）を確認 |
 
-詳細: [RUNBOOK-phase4a-mcp.md](RUNBOOK-phase4a-mcp.md)
+詳細: RUNBOOK-phase4a-mcp.md（リポジトリ runbooks/ 参照）

@@ -7,6 +7,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 from millicall.ai_agents.router import router as ai_agents_router
 from millicall.audit_router import router as audit_router
@@ -38,7 +41,6 @@ from millicall.scim.router import api_router as scim_api_router
 from millicall.scim.router import scim_router
 from millicall.secrets_store import load_or_create_secrets
 from millicall.system.router import router as system_router
-from millicall.users.router import router as users_router
 from millicall.telephony.esl import ESLClient
 from millicall.telephony.events import CdrRecorder, EslEventListener
 from millicall.telephony.service import (
@@ -48,12 +50,51 @@ from millicall.telephony.service import (
 )
 from millicall.trunks.router import router as trunks_router
 from millicall.tts_cache.router import router as tts_cache_router
+from millicall.users.router import router as users_router
 from millicall.workflows.errors import WorkflowValidationError
 from millicall.workflows.router import router as workflows_router
 from millicall.workflows.runner import WorkflowRunner
 from millicall.workflows.service import NoLlmProviderError
 
 logger = logging.getLogger("millicall")
+
+# CSP ポリシー選定の根拠:
+#   - SPA は Vite ビルド済みバンドル（/assets/*.js, /assets/*.css）のみを使用し、
+#     インラインスクリプトは一切含まない（frontend/dist/index.html で確認済み）。
+#     そのため script-src に 'unsafe-inline' は不要。
+#   - PandaCSS は CSS ファイルとして出力されるため style-src は 'self' で足りるが、
+#     ランタイムに css-in-js 風の style 属性を使うコンポーネントがある可能性を考慮し
+#     'unsafe-inline' を style-src に限り許容する（スクリプト実行ではなく見た目のみ）。
+#   - img-src に data: を許可するのは UI でのアバター/QR コード等の data URI 表示のため。
+#   - HSTS は設定しない。TLS は front（nginx 等）が担当し、
+#     core は HTTP で動作するため plain-HTTP origin から HSTS を発行するのは誤り。
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "img-src 'self' data:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self'; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """全レスポンスにセキュリティヘッダーを付与するミドルウェア。
+
+    ヘッダーは additive（既存レスポンスに追加）なので、SAML/MCP/provisioning
+    レスポンスの機能には影響しない。
+    HSTS は設定しない（TLS は front 側の責務）。
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = _CSP_POLICY
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
 
 @asynccontextmanager
@@ -81,6 +122,10 @@ async def lifespan(app: FastAPI):
     engine = create_db_engine(settings.database_url)
     app.state.engine = engine
     app.state.sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    # MCP OAuth の Bearer 面にも Cookie 面と同等の失効契約（enabled/session_epoch 照合）を
+    # 持たせるため sessionmaker を注入する（監査 C1）。
+    if _mcp_provider is not None:
+        _mcp_provider.set_sessionmaker(app.state.sessionmaker)
     writer = build_config_writer(settings, app.state.secrets)
     esl_factory = build_esl_factory(settings, app.state.secrets)
     app.state.esl_factory = esl_factory
@@ -201,7 +246,18 @@ async def lifespan(app: FastAPI):
 # SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。
 # これらに該当する未定義 GET は 404 を返し、API のセマンティクスを保つ。
 _SPA_EXCLUDED_PREFIXES = frozenset(
-    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known", "provisioning", "scim"}
+    {
+        "api",
+        "media",
+        "healthz",
+        "openapi.json",
+        "docs",
+        "redoc",
+        "mcp",
+        ".well-known",
+        "provisioning",
+        "scim",
+    }
 )
 
 
@@ -228,6 +284,10 @@ def _mount_spa(app: FastAPI, static_dir: Path) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="millicall v2 core", lifespan=lifespan)
     app.state.settings = settings or get_settings()
+    # セキュリティヘッダーミドルウェア（最外層）。
+    # CSP / X-Content-Type-Options / X-Frame-Options / Referrer-Policy を全レスポンスに付与。
+    # HSTS は設定しない（TLS は front の責務; core は HTTP で動作）。
+    app.add_middleware(SecurityHeadersMiddleware)
     # CSRF 保護ミドルウェア（double-submit cookie パターン）。
     # ルーター登録より前に追加することで全ルートに適用される。
     app.add_middleware(CsrfMiddleware)

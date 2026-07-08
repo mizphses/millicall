@@ -2,6 +2,7 @@
 
 すべてフェイク/インメモリオブジェクトを使用 — ソケット・ネットワーク・ESL は使わない。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -255,6 +256,7 @@ async def test_workflow_runner_provider_resolver_loads_tts():
             return _FakeSessionCtx(_SessionWithProvider({}))
 
     from millicall.crypto import SecretBox
+
     box = SecretBox("a" * 32)
 
     runner = WorkflowRunner(

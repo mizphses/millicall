@@ -111,6 +111,7 @@ async def test_listener_records_cdr_from_live_event(app):
 
 async def test_clean_stop():
     """Listener should stop cleanly when started against unreachable ESL."""
+
     def make_client(handler):
         # Unreachable port (127.0.0.1:1) should cause immediate connection failure
         return ESLClient("127.0.0.1", 1, "s3cret", on_event=handler)

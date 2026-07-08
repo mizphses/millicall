@@ -51,7 +51,7 @@ docker compose exec freeswitch fs_cli -x "load mod_audio_stream"
 まずログインしてセッション Cookie を取得する:
 
 ```bash
-BASE=http://127.0.0.1:8000
+BASE=http://127.0.0.1
 curl -c cj.txt -X POST $BASE/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"<初期パスワード>"}'
@@ -185,7 +185,7 @@ curl -b cj.txt -X POST $BASE/api/routes \
 ```
 
 着信時、core は `CHANNEL_ANSWER` イベントの `variable_millicall_ai_agent` を読み取り、  
-`uuid_audio_stream <uuid> start ws://127.0.0.1:8000/media/audio-fork/<uuid>?agent=1 mono 8k`  
+`uuid_audio_stream <uuid> start ws://127.0.0.1:80/media/audio-fork/<uuid>?agent=1 mono 8k`  
 を ESL bgapi で自動発行する（手動設定は不要）。
 
 ## 6. 要実機確認項目（実装時に E2E テストでカバーできなかった点）
@@ -233,7 +233,7 @@ docker compose exec core sh -c \
 
 | 症状 | 確認 | 対処 |
 |---|---|---|
-| WS が繋がらない | `docker compose logs core \| grep audio-fork` | `MILLICALL_MEDIA_WS_BASE_URL` が `ws://127.0.0.1:8000` で core に到達できるか確認（host ネットワーク前提） |
+| WS が繋がらない | `docker compose logs core \| grep audio-fork` | `MILLICALL_MEDIA_WS_BASE_URL` が `ws://127.0.0.1:80`（既定: http_port から自動導出）で core に到達できるか確認（host ネットワーク前提） |
 | `?agent=` が届かない / `agent_id=0` になる | core の `audio_fork` ログで `agent_id` を確認 | FS の `mod_audio_stream` が query string を保持しているか確認。保持しない場合はパス側に agent を埋め込む方式を検討 |
 | 音声が再生されない | `ls data/freeswitch/tts/` に wav が生成されるか確認 | TTS 共有ボリューム（`./data/freeswitch/tts:/app/data/freeswitch/tts`）が正しくマウントされ、`MILLICALL_TTS_CACHE_DIR=/app/data/freeswitch/tts` が一致しているか確認 |
 | PLAYBACK_STOP が来ない / 応答が止まる | `docker compose logs core \| grep PLAYBACK_STOP` | ESL イベント購読が PLAYBACK_STOP を含むか確認。`aleg` 指定の uuid が一致しているか確認 |

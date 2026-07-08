@@ -121,21 +121,26 @@ async def apply_nat(
     ops: SystemOps,
     settings: Any,
 ) -> dict:
-    """NAT マスカレード設定を適用する。
+    """NAT マスカレード設定 + HTTP INPUT フィルタを適用する。
 
     nftables ルールセットを生成して ``nft -f -`` に渡す。
     enabled=True の場合は ip_forward も有効化する。
+    INPUT フィルタ（millicall_filter テーブル）は enabled 値にかかわらず常に適用する。
 
     ペイロードフィールド:
-        enabled (bool): True で NAT 有効、False で無効（テーブル削除）。
+        enabled (bool): True で NAT 有効、False で無効（NAT テーブル削除）。
         lan_ip (str): LAN IP アドレス。
         lan_prefix (int): LAN CIDR プレフィックス長。
         wan_interface (str): WAN インターフェイス名。
+        http_port (int): core の HTTP ポート番号（省略時: 80）。
+                        INPUT フィルタの LAN 許可 / WAN DROP に使用する。
     """
     enabled = payload.get("enabled", True)
     lan_ip = payload.get("lan_ip", "")
     lan_prefix = payload.get("lan_prefix", 16)
     wan_interface = payload.get("wan_interface", "")
+    # http_port は省略可能（後方互換性のため既定値 80 にフォールバック）
+    http_port = payload.get("http_port", 80)
 
     # --- 入力再検証 ---
     try:
@@ -151,11 +156,19 @@ async def apply_nat(
         return _err(f"enabled は bool でなければなりません: {enabled!r}")
 
     try:
+        http_port_int = int(http_port)
+    except (TypeError, ValueError):
+        return _err(f"http_port は整数でなければなりません: {http_port!r}")
+    if not (1 <= http_port_int <= 65535):
+        return _err(f"http_port は 1–65535 の範囲でなければなりません: {http_port_int!r}")
+
+    try:
         ruleset = render_nftables_ruleset(
             enabled=bool(enabled),
             lan_ip=str(lan_ip),
             lan_prefix=int(lan_prefix),
             wan_interface=str(wan_interface),
+            http_port=http_port_int,
             table_name=settings.nftables_table,
         )
     except ValueError as exc:
@@ -163,15 +176,11 @@ async def apply_nat(
 
     # NAT 有効時は ip_forward を先に有効化する
     if enabled:
-        rc_fwd, _out, _err_str = await ops.run(
-            ["sysctl", "-w", "net.ipv4.ip_forward=1"]
-        )
+        rc_fwd, _out, _err_str = await ops.run(["sysctl", "-w", "net.ipv4.ip_forward=1"])
         if rc_fwd != 0:
             logger.warning("ip_forward の有効化に失敗しました (rc=%d)", rc_fwd)
 
-    rc, _stdout, stderr = await ops.run(
-        ["nft", "-f", "-"], input_text=ruleset
-    )
+    rc, _stdout, stderr = await ops.run(["nft", "-f", "-"], input_text=ruleset)
     if rc != 0:
         return _err(f"nft 適用失敗 (rc={rc}): {stderr[:200]}")
 
@@ -207,6 +216,17 @@ async def tailscale_up(
         redacted = _TSKEY_REDACT_RE.sub("(redacted)", stderr or "")
         safe_stderr = redacted[:200]
         return _err(f"tailscale up 失敗 (rc={rc}): {safe_stderr}")
+
+    # tailscale_serve_enabled のとき、up 成功後に tailnet 上で HTTPS を張り
+    # http://localhost:<http_port> を公開する（管理画面/MCP のリモート公開）。
+    # serve の失敗は up 自体の成功を覆さない（警告のみ。auth key は serve コマンドに渡さない）。
+    if getattr(settings, "tailscale_serve_enabled", False):
+        port = getattr(settings, "http_port", 80)
+        s_rc, _s_out, s_err = await ops.run(
+            ["tailscale", "serve", "--bg", "--https=443", f"http://localhost:{port}"]
+        )
+        if s_rc != 0:
+            logger.warning("tailscale serve 失敗 (rc=%d): %s", s_rc, (s_err or "")[:200])
 
     return _ok()
 
@@ -361,9 +381,7 @@ async def get_nat_status(
     レスポンス:
         enabled (bool): マスカレードが有効かどうか。
     """
-    rc, stdout, _stderr = await ops.run(
-        ["nft", "list", "table", "ip", settings.nftables_table]
-    )
+    rc, stdout, _stderr = await ops.run(["nft", "list", "table", "ip", settings.nftables_table])
 
     if rc != 0:
         # テーブルが存在しない場合は NAT 無効とみなす

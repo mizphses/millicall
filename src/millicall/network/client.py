@@ -69,9 +69,7 @@ class NetdClient:
                 timeout=self._timeout,
             )
         except FileNotFoundError:
-            raise NetdError(
-                f"netd ソケットが見つかりません: {self._socket_path!r}"
-            ) from None
+            raise NetdError(f"netd ソケットが見つかりません: {self._socket_path!r}") from None
         except ConnectionRefusedError:
             raise NetdError(
                 f"netd ソケットへの接続が拒否されました: {self._socket_path!r}"
@@ -161,14 +159,18 @@ class NetdClient:
         lan_ip: str,
         lan_prefix: int,
         wan_interface: str,
+        http_port: int = 80,
     ) -> None:
-        """NAT（マスカレード）設定を netd 経由で適用する。
+        """NAT（マスカレード）設定 + HTTP INPUT フィルタを netd 経由で適用する。
 
         Args:
             enabled: NAT を有効にするか否か。
             lan_ip: LAN 側 IP アドレス。
             lan_prefix: CIDR プレフィックス長。
             wan_interface: WAN 側ネットワークインタフェース名。
+            http_port: core の HTTP ポート番号（デフォルト: 80）。
+                      nftables INPUT フィルタで LAN CIDR からのみ許可し WAN から DROP する。
+                      省略時は 80 にフォールバック（後方互換性）。
 
         Raises:
             NetdError: 通信失敗またはサーバー側エラーの場合。
@@ -180,6 +182,7 @@ class NetdClient:
                 "lan_ip": lan_ip,
                 "lan_prefix": lan_prefix,
                 "wan_interface": wan_interface,
+                "http_port": http_port,
             }
         )
         if not resp.get("ok"):

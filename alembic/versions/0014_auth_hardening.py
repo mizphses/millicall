@@ -4,6 +4,7 @@ Revision ID: 0014
 Revises: 0013
 Create Date: 2026-07-08
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -31,9 +32,7 @@ def upgrade() -> None:
     # totp_secret を String(64) → String(255) に拡張。
     # SQLite は ALTER COLUMN TYPE を持たないため batch モード（テーブル再作成）で行う。
     with op.batch_alter_table("users") as batch_op:
-        batch_op.alter_column(
-            "totp_secret", existing_type=sa.String(64), type_=sa.String(255)
-        )
+        batch_op.alter_column("totp_secret", existing_type=sa.String(64), type_=sa.String(255))
 
     # audit_logs テーブル作成。
     op.create_table(
@@ -47,9 +46,7 @@ def upgrade() -> None:
         sa.Column("detail", sa.Text(), nullable=True),
         sa.Column("ip_address", sa.String(45), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
-        sa.ForeignKeyConstraint(
-            ["actor_user_id"], ["users.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["actor_user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_audit_logs_action", "audit_logs", ["action"], unique=False)
@@ -66,9 +63,7 @@ def downgrade() -> None:
     # SQLite 互換のため batch モード（テーブル再作成）で行う。
     op.drop_index("ix_users_email", table_name="users")
     with op.batch_alter_table("users") as batch_op:
-        batch_op.alter_column(
-            "totp_secret", existing_type=sa.String(255), type_=sa.String(64)
-        )
+        batch_op.alter_column("totp_secret", existing_type=sa.String(255), type_=sa.String(64))
         batch_op.drop_column("session_epoch")
         batch_op.drop_column("external_id")
         batch_op.drop_column("enabled")

@@ -7,6 +7,7 @@
   - 存在しない uuid → get_status が None を返す。
   - list_active が SessionRegistry の全 UUID を返す。
 """
+
 import asyncio
 from datetime import datetime
 

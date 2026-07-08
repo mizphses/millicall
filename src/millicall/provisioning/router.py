@@ -92,9 +92,7 @@ async def _get_provisioned_device(
     Raises:
         HTTPException(404): デバイス未発見、未プロビジョニング、またはトークン不一致。
     """
-    device = await session.scalar(
-        select(Device).where(Device.mac_address == mac_normalized)
-    )
+    device = await session.scalar(select(Device).where(Device.mac_address == mac_normalized))
     if device is None:
         raise HTTPException(status_code=404)
     if not device.provisioned or device.extension_id is None:
@@ -154,9 +152,7 @@ async def panasonic_device_config(
     if ext is None:
         raise HTTPException(status_code=404)
 
-    content = render_panasonic_config(
-        extension=ext, network_config=nc, settings=settings
-    )
+    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
     return PlainTextResponse(content, media_type="text/plain")
 
 
@@ -209,9 +205,7 @@ async def yealink_device_config(
     if ext is None:
         raise HTTPException(status_code=404)
 
-    content = render_yealink_config(
-        extension=ext, network_config=nc, settings=settings
-    )
+    content = render_yealink_config(extension=ext, network_config=nc, settings=settings)
     return PlainTextResponse(content, media_type="text/plain")
 
 

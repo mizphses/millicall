@@ -18,6 +18,8 @@ fi
 
 log "インストール先: ${MILLICALL_HOME}"
 mkdir -p "${MILLICALL_HOME}/data"
+# data/ ディレクトリのパーミッションを 700 に制限する（M7: 他ユーザーからの読み取り防止）
+chmod 700 "${MILLICALL_HOME}/data"
 cd "${MILLICALL_HOME}"
 
 # --- compose と .env.example を取得 (compose は常に最新へ) ---
@@ -45,6 +47,8 @@ if [ ! -f .env ]; then
   else
     printf 'MILLICALL_VERSION=%s\n' "${ver}" >> .env
   fi
+  # .env にはシークレット・認証情報が含まれるため 600 に制限する（M7）
+  chmod 600 .env
   log ".env を生成しました。"
 else
   log ".env は既存のものを使用します (上書きしません)。"

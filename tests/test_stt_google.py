@@ -93,9 +93,7 @@ async def test_google_streams_each_chunk_incrementally():
 @pytest.mark.asyncio
 async def test_config_request_carries_recognizer_and_config():
     fake = _FakeClient(_final_responses())
-    stt = GoogleStreamingSTT(
-        project="proj-x", location="global", language="ja-JP", client=fake
-    )
+    stt = GoogleStreamingSTT(project="proj-x", location="global", language="ja-JP", client=fake)
     sess = stt.open_session()
     await sess.feed(b"\x01\x00" * 800)
     await sess.finish()

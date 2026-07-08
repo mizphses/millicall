@@ -2,7 +2,7 @@ import asyncio
 import socket
 
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 
 from millicall.auth.security import hash_password
 from millicall.config import Settings
@@ -61,8 +61,15 @@ async def call_env(tmp_path):
     async with application.router.lifespan_context(application):
         sm = application.state.sessionmaker
         async with sm() as s:
-            s.add(User(username="caller", hashed_password=hash_password("Passw0rd1"),
-                       display_name="caller", role="admin", origin="local"))
+            s.add(
+                User(
+                    username="caller",
+                    hashed_password=hash_password("Passw0rd1"),
+                    display_name="caller",
+                    role="admin",
+                    origin="local",
+                )
+            )
             await s.commit()
         transport = ASGITransport(app=application)
         async with CsrfAwareClient(transport=transport, base_url="http://test") as c:
@@ -93,13 +100,17 @@ async def test_originate_unknown_extension_400(call_env):
 
 
 async def test_calls_require_auth(client):
-    assert (await client.post("/api/calls", json={"from_extension": "1001", "to": "1002"})).status_code == 401
+    assert (
+        await client.post("/api/calls", json={"from_extension": "1001", "to": "1002"})
+    ).status_code == 401
 
 
 async def test_originate_rejects_injection_in_to(call_env):
     c, _ = call_env
     # Test injection attempt with braces
-    resp = await c.post("/api/calls", json={"from_extension": "1001", "to": "0312345678} {origination_uuid=evil"})
+    resp = await c.post(
+        "/api/calls", json={"from_extension": "1001", "to": "0312345678} {origination_uuid=evil"}
+    )
     assert resp.status_code == 422, resp.text
 
     # Test injection attempt with spaces (should be rejected by pattern)
@@ -126,8 +137,15 @@ async def test_originate_esl_down_returns_503(tmp_path):
     async with application.router.lifespan_context(application):
         sm = application.state.sessionmaker
         async with sm() as s:
-            s.add(User(username="caller", hashed_password=hash_password("Passw0rd1"),
-                       display_name="caller", role="admin", origin="local"))
+            s.add(
+                User(
+                    username="caller",
+                    hashed_password=hash_password("Passw0rd1"),
+                    display_name="caller",
+                    role="admin",
+                    origin="local",
+                )
+            )
             await s.commit()
         transport = ASGITransport(app=application)
         async with CsrfAwareClient(transport=transport, base_url="http://test") as c:

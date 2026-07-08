@@ -1,4 +1,5 @@
 """監査ログ記録ユーティリティ。"""
+
 import json
 from typing import Any
 

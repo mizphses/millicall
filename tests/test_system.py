@@ -158,7 +158,9 @@ async def disabled_client(disabled_app):
         yield c
 
 
-async def _create_admin(app, username: str = "sysadmin", password: str = "Admin123!") -> tuple[str, str]:
+async def _create_admin(
+    app, username: str = "sysadmin", password: str = "Admin123!"
+) -> tuple[str, str]:
     sm = app.state.sessionmaker
     async with sm() as session:
         session.add(
@@ -174,7 +176,9 @@ async def _create_admin(app, username: str = "sysadmin", password: str = "Admin1
     return username, password
 
 
-async def _create_user(app, username: str = "regular", password: str = "User123!") -> tuple[str, str]:
+async def _create_user(
+    app, username: str = "regular", password: str = "User123!"
+) -> tuple[str, str]:
     sm = app.state.sessionmaker
     async with sm() as session:
         session.add(
@@ -332,9 +336,9 @@ async def test_system_info_returns_safe_subset(tmp_path):
     assert version["ApiVersion"] == "1.43"
 
     # 機密フィールドが含まれない
-    assert "Name" not in info           # ホスト名
+    assert "Name" not in info  # ホスト名
     assert "DockerRootDir" not in info  # ファイルシステムパス
-    assert "ID" not in info             # Docker デーモン ID
+    assert "ID" not in info  # Docker デーモン ID
     assert "KernelVersion" not in version
 
 
@@ -386,9 +390,7 @@ async def test_restart_allowlisted_returns_204(proxy_app, proxy_client):
     await _create_admin(proxy_app)
     await _login(proxy_client, "sysadmin", "Admin123!")
     csrf = _csrf_headers(proxy_client)
-    resp = await proxy_client.post(
-        "/api/system/containers/core/restart", headers=csrf
-    )
+    resp = await proxy_client.post("/api/system/containers/core/restart", headers=csrf)
     assert resp.status_code == 204
 
 
@@ -398,9 +400,7 @@ async def test_restart_non_allowlisted_returns_403(proxy_app, proxy_client):
     await _create_admin(proxy_app)
     await _login(proxy_client, "sysadmin", "Admin123!")
     csrf = _csrf_headers(proxy_client)
-    resp = await proxy_client.post(
-        "/api/system/containers/evil-container/restart", headers=csrf
-    )
+    resp = await proxy_client.post("/api/system/containers/evil-container/restart", headers=csrf)
     assert resp.status_code == 403
 
 
@@ -410,9 +410,7 @@ async def test_restart_disabled_returns_503(disabled_app, disabled_client):
     await _create_admin(disabled_app)
     await _login(disabled_client, "sysadmin", "Admin123!")
     csrf = _csrf_headers(disabled_client)
-    resp = await disabled_client.post(
-        "/api/system/containers/core/restart", headers=csrf
-    )
+    resp = await disabled_client.post("/api/system/containers/core/restart", headers=csrf)
     assert resp.status_code == 503
 
 
@@ -422,9 +420,7 @@ async def test_restart_non_admin_returns_403(proxy_app, proxy_client):
     await _create_user(proxy_app)
     await _login(proxy_client, "regular", "User123!")
     csrf = _csrf_headers(proxy_client)
-    resp = await proxy_client.post(
-        "/api/system/containers/core/restart", headers=csrf
-    )
+    resp = await proxy_client.post("/api/system/containers/core/restart", headers=csrf)
     assert resp.status_code == 403
 
 
@@ -464,9 +460,7 @@ async def test_restart_records_audit(proxy_app, proxy_client):
     await _create_admin(proxy_app)
     await _login(proxy_client, "sysadmin", "Admin123!")
     csrf = _csrf_headers(proxy_client)
-    resp = await proxy_client.post(
-        "/api/system/containers/freeswitch/restart", headers=csrf
-    )
+    resp = await proxy_client.post("/api/system/containers/freeswitch/restart", headers=csrf)
     assert resp.status_code == 204
 
     sm = proxy_app.state.sessionmaker
@@ -525,7 +519,9 @@ def test_no_raw_docker_sock_in_service_code():
     code_only = _non_comment_lines(source)
 
     # シェルアウトの禁止: 実行コード内に subprocess・os.system・os.popen が含まれてはならない
-    assert "import subprocess" not in code_only, "service.py に subprocess インポートが見つかりました"
+    assert "import subprocess" not in code_only, (
+        "service.py に subprocess インポートが見つかりました"
+    )
     assert "subprocess." not in code_only, "service.py に subprocess 呼び出しが見つかりました"
     assert "os.system" not in code_only, "service.py に os.system が見つかりました"
     assert "os.popen" not in code_only, "service.py に os.popen が見つかりました"
@@ -541,7 +537,9 @@ def test_no_raw_docker_sock_in_router_code():
     source = router_path.read_text(encoding="utf-8")
     code_only = _non_comment_lines(source)
 
-    assert "import subprocess" not in code_only, "router.py に subprocess インポートが見つかりました"
+    assert "import subprocess" not in code_only, (
+        "router.py に subprocess インポートが見つかりました"
+    )
     assert "subprocess." not in code_only, "router.py に subprocess 呼び出しが見つかりました"
     assert "os.system" not in code_only, "router.py に os.system が見つかりました"
     assert "/var/run/docker.sock" not in code_only, (

@@ -2,7 +2,7 @@
 
 millicall の netd コンテナが LAN ルーター機能（DHCP / DNS / NAT / Tailscale）を提供します。管理 GUI の `/network` ページから設定します。
 
-詳細な実機確認手順は [RUNBOOK-phase5-netd.md](RUNBOOK-phase5-netd.md) を参照してください。
+詳細な実機確認手順は RUNBOOK-phase5-netd.md（リポジトリ runbooks/ 参照） を参照してください。
 
 ## netd の役割とアーキテクチャ
 
@@ -36,7 +36,7 @@ millicall の netd コンテナが LAN ルーター機能（DHCP / DNS / NAT / T
 | DHCP レンジ（開始） | `172.20.1.1` | 電話機への払い出し開始 |
 | DHCP レンジ（終了） | `172.20.1.254` | 電話機への払い出し終了 |
 | リース時間 | `12h` | DHCP リース有効期間 |
-| プロビジョニング URL | （空白推奨） | 空白の場合 `http://<lan_ip>:8000/provisioning/` が自動生成 |
+| プロビジョニング URL | （空白推奨） | 空白の場合 `http://<lan_ip>/provisioning/` が自動生成（ポート 80 の場合は省略） |
 
 ### 2. NAT 設定
 
@@ -56,7 +56,7 @@ millicall の netd コンテナが LAN ルーター機能（DHCP / DNS / NAT / T
 
 1. 電話機を LAN ポートに接続
 2. dnsmasq が IP + DHCP option 66（プロビジョニング URL）を配布
-3. 電話機が `http://<lan_ip>:8000/provisioning/<機種>/...` を自動取得
+3. 電話機が `http://<lan_ip>/provisioning/<機種>/...` を自動取得（ポート 80 の場合は省略）
 4. **未登録 MAC の場合は 404** が返ります。`/devices` ページに「未割当」として表示されます
 5. `/devices` で「リース同期」→「内線割当」（内線番号 + 表示名）→「クイックプロビジョン」
 6. 電話機が設定を再取得して SIP REGISTER → 内線化完了
@@ -69,15 +69,15 @@ millicall の netd コンテナが LAN ルーター機能（DHCP / DNS / NAT / T
 
 ```bash
 # 現在のネットワーク設定を取得（auth key はマスク）
-curl -b cookie.txt http://192.168.1.10:8000/api/network
+curl -b cookie.txt http://192.168.1.10/api/network
 
 # 設定を更新
-curl -X PUT -b cookie.txt http://192.168.1.10:8000/api/network \
+curl -X PUT -b cookie.txt http://192.168.1.10/api/network \
   -H 'Content-Type: application/json' \
   -d '{"lan_interface":"enp3s0","lan_ip":"172.20.0.1","prefix_len":16,...}'
 
 # netd へ適用
-curl -X POST -b cookie.txt http://192.168.1.10:8000/api/network/apply
+curl -X POST -b cookie.txt http://192.168.1.10/api/network/apply
 ```
 
 ## トラブルシュート
@@ -89,4 +89,4 @@ curl -X POST -b cookie.txt http://192.168.1.10:8000/api/network/apply
 | リース同期が 502 | netd 未起動、または電話機未接続で dnsmasq リースファイルが未生成 |
 | NAT が効かない | WAN インターフェース名が正しいか確認。「設定を適用」を実行済みか確認 |
 
-詳細: [RUNBOOK-phase5-netd.md § 5. トラブルシュート](RUNBOOK-phase5-netd.md)
+詳細: RUNBOOK-phase5-netd.md § 5. トラブルシュート（リポジトリ runbooks/ 参照）

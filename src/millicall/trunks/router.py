@@ -19,7 +19,9 @@ async def create_trunk(
 ) -> TrunkRead:
     existing = await session.scalar(select(Trunk).where(Trunk.name == body.name))
     if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Trunk name already exists")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Trunk name already exists"
+        )
     trunk = Trunk(
         name=body.name,
         display_name=body.display_name,
@@ -67,7 +69,15 @@ async def update_trunk(
     trunk = await session.get(Trunk, trunk_id)
     if trunk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    for fld in ("display_name", "host", "username", "password", "did_number", "caller_id", "enabled"):
+    for fld in (
+        "display_name",
+        "host",
+        "username",
+        "password",
+        "did_number",
+        "caller_id",
+        "enabled",
+    ):
         val = getattr(body, fld)
         if val is not None:
             setattr(trunk, fld, val)

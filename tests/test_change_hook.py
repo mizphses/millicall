@@ -4,7 +4,7 @@ import asyncio
 import socket
 from contextlib import asynccontextmanager
 
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 
 from millicall.auth.security import hash_password
 from millicall.config import Settings

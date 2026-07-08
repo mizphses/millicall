@@ -15,6 +15,17 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("data")
     database_url: str = "sqlite+aiosqlite:///data/millicall.db"
+    # core が待受ける HTTP ポート。本番 compose は 80。dev で変える場合は MILLICALL_HTTP_PORT。
+    # プロビジョニング URL(option 66)・media_ws・healthcheck の既定はこのポートから導出する。
+    # TLS/443 はフロント(Cloudflare Tunnel / Tailscale Serve)に委譲し core は平文のみ配信する。
+    http_port: int = 80
+    # core が HTTP を待受けるバインドアドレス（デフォルト: 0.0.0.0）。
+    # nftables INPUT フィルタ（C2a）が LAN CIDR 限定の第一防衛ラインとなるため、
+    # 既定は 0.0.0.0 のまま閉域 LAN からの到達性を維持する。
+    # Cloudflare Tunnel / Tailscale Serve 専用デプロイでは 127.0.0.1 に設定すること:
+    #   MILLICALL_HTTP_BIND=127.0.0.1
+    # これにより LAN/WAN への HTTP 露出を完全に排除し、フロントのみが localhost 経由でアクセスする。
+    http_bind: str = "0.0.0.0"
     # SPA（管理 GUI）の配信元。存在するときのみ StaticFiles + SPA fallback を有効化する。
     # core イメージでは Dockerfile が /app/static にビルド済み dist を配置する。
     # 開発時は既定パスが存在しないため無効化され、Vite dev server + proxy を使う。
@@ -23,8 +34,9 @@ class Settings(BaseSettings):
     # TTS 音声を書き出す共有ディレクトリ（FreeSWITCH コンテナにも同一パスで bind mount）
     tts_cache_dir: Path = Path("data/freeswitch/tts")
     # FreeSWITCH の mod_audio_stream が core の音声受け WS へ接続するベース URL。
-    # host ネットワーキング前提のため既定は 127.0.0.1:8000（パス /media/audio-fork/<uuid> が付与される）。
-    media_ws_base_url: str = "ws://127.0.0.1:8000"
+    # host ネットワーキング前提。未設定(空文字)なら http_port から ws://127.0.0.1:<port> を導出する。
+    # 明示的に値を設定した場合はそれを優先する（パス /media/audio-fork/<uuid> が付与される）。
+    media_ws_base_url: str = ""
 
     sip_domain: str = "millicall.local"
     sip_port: int = 5060
@@ -32,7 +44,9 @@ class Settings(BaseSettings):
     sip_ip: str = "auto"
     rtp_ip: str = "auto"
     sip_bind_ip: str | None = None  # env MILLICALL_SIP_BIND_IP; overrides sip_ip/rtp_ip when set
-    outbound_international_allow: str = ""  # env MILLICALL_OUTBOUND_INTERNATIONAL_ALLOW; comma-separated prefixes
+    outbound_international_allow: str = (
+        ""  # env MILLICALL_OUTBOUND_INTERNATIONAL_ALLOW; comma-separated prefixes
+    )
 
     esl_host: str = "127.0.0.1"
     esl_port: int = 8021
@@ -171,10 +185,27 @@ class Settings(BaseSettings):
     dnsmasq_leases_path: str = "/var/lib/misc/dnsmasq.leases"
     # nftables テーブル名（millicall NAT ルールを格納するテーブル）。
     nftables_table: str = "millicall_nat"
-    # 電話機の Web 管理者資格情報（HTTP resync 用）。既定は機種の工場出荷値（公開情報）。
-    # 実サイトでは env MILLICALL_PHONE_ADMIN_USERNAME/PASSWORD で上書きすること。
-    phone_admin_username: str = "admin"
-    phone_admin_password: str = "adminpass"
+    # 電話機の Web 管理者資格情報（HTTP resync 用）。
+    # デフォルトは空文字 — 未設定時は resync を実行しないこと。
+    # 実サイトでは env MILLICALL_PHONE_ADMIN_USERNAME/PASSWORD で電話機ごとの値を設定する。
+    # resync スキップ判定は provisioning/service.py の resync_phone で行う（M4 エージェント担当）。
+    phone_admin_username: str = ""
+    phone_admin_password: str = ""
+
+    # --- TLS フロント (任意) ---
+    # True のとき netd は tailscale up 成功後に `tailscale serve` を張り、tailnet 上で
+    # http://localhost:<http_port> を HTTPS 公開する（管理画面/MCP のリモート公開）。
+    # 閉域運用ではインターネット非接続のため無効のまま(平文 LAN のみ)。
+    tailscale_serve_enabled: bool = False
+
+    @field_validator("media_ws_base_url", mode="after")
+    @classmethod
+    def _derive_media_ws(cls, v: str, info) -> str:
+        # 空文字なら http_port から ws://127.0.0.1:<port> を導出する。明示値はそのまま使う。
+        if v:
+            return v
+        port = info.data.get("http_port", 80)
+        return f"ws://127.0.0.1:{port}"
 
     @field_validator("mcp_allowed_hosts", mode="before")
     @classmethod
@@ -191,6 +222,14 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [c.strip() for c in v.split(",") if c.strip()]
         return v
+
+
+def http_port_suffix(port: int) -> str:
+    """HTTP ポートを URL に付与する接尾辞を返す。標準ポート 80 は省略する。
+
+    例: 80 -> ""（`http://host/...`）、8000 -> ":8000"（`http://host:8000/...`）
+    """
+    return "" if port == 80 else f":{port}"
 
 
 @lru_cache

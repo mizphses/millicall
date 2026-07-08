@@ -24,7 +24,7 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="admin", server_default="admin"
+        String(20), nullable=False, default="user", server_default="user"
     )
     origin: Mapped[str] = mapped_column(
         String(20), nullable=False, default="local", server_default="local"
@@ -55,7 +55,8 @@ class User(Base):
         """秘密フィールド(totp_secret/recovery_codes/hashed_password)を除外したrepr。"""
         hidden = frozenset({"totp_secret", "recovery_codes", "hashed_password"})
         attrs = [
-            f"{k}={v!r}" for k, v in self.__dict__.items()
+            f"{k}={v!r}"
+            for k, v in self.__dict__.items()
             if not k.startswith("_") and k not in hidden
         ]
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
@@ -127,7 +128,8 @@ class Trunk(Base):
     def __repr__(self) -> str:
         """Custom repr that excludes the password field."""
         attrs = [
-            f"{k}={v!r}" for k, v in self.__dict__.items()
+            f"{k}={v!r}"
+            for k, v in self.__dict__.items()
             if not k.startswith("_") and k != "password"
         ]
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
@@ -210,7 +212,9 @@ class Provider(Base):
     # 'openai_compatible'|'anthropic'|'gemini'|'voicevox'|'openjtalk'|'whisper'|'google_stt'
     kind: Mapped[str] = mapped_column(String(30), nullable=False)
     # 非機密設定（base_url/model/voice/engine_url 等）の JSON 文字列
-    config_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    config_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}", server_default="{}"
+    )
     # Fernet トークン。APIキー不要な kind では NULL。
     api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(
@@ -265,7 +269,9 @@ class Workflow(Base):
     default_tts_provider_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # WorkflowDefinition({nodes, edges}) の JSON 文字列。GUI メタ含む生 JSON を保持。
     definition_json: Mapped[str] = mapped_column(
-        Text, nullable=False, default='{"nodes": [], "edges": []}',
+        Text,
+        nullable=False,
+        default='{"nodes": [], "edges": []}',
         server_default='{"nodes": [], "edges": []}',
     )
     enabled: Mapped[bool] = mapped_column(
@@ -355,9 +361,7 @@ class LoginAttempt(Base):
     """
 
     __tablename__ = "login_attempts"
-    __table_args__ = (
-        Index("ix_login_attempts_key_created_at", "key", "created_at"),
-    )
+    __table_args__ = (Index("ix_login_attempts_key_created_at", "key", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # レート制限キー: IP アドレスまたはユーザー名の値

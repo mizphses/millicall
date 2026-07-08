@@ -9,6 +9,7 @@
   - ログアウト時に csrf Cookie が削除される
   - GET /api/auth/csrf でトークンを取得できる
 """
+
 import pyotp
 
 from millicall.auth.security import hash_password
@@ -94,9 +95,7 @@ async def test_post_with_correct_csrf_token_allowed(tmp_path):
             assert csrf_token, "ログイン成功時に CSRF Cookie がセットされていない"
 
             # 正しいトークンを付けて POST → 成功
-            resp = await c.post(
-                "/api/auth/logout", headers={"X-CSRF-Token": csrf_token}
-            )
+            resp = await c.post("/api/auth/logout", headers={"X-CSRF-Token": csrf_token})
             assert resp.status_code == 200
 
 
@@ -109,9 +108,7 @@ async def test_get_without_csrf_token_allowed(tmp_path):
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
-            await c.post(
-                "/api/auth/login", json={"username": "csrfuser", "password": "Passw0rd1"}
-            )
+            await c.post("/api/auth/login", json={"username": "csrfuser", "password": "Passw0rd1"})
             # GET /api/auth/me はトークンなしでも OK
             resp = await c.get("/api/auth/me")
             assert resp.status_code == 200
@@ -132,9 +129,7 @@ async def test_token_mismatch_rejected(tmp_path):
             assert resp.status_code == 200
 
             # 別の（ランダムな）トークンを付ける
-            resp = await c.post(
-                "/api/auth/logout", headers={"X-CSRF-Token": "wrong-token-xyz"}
-            )
+            resp = await c.post("/api/auth/logout", headers={"X-CSRF-Token": "wrong-token-xyz"})
             assert resp.status_code == 403
 
 
@@ -147,9 +142,7 @@ async def test_request_without_session_cookie_exempt(tmp_path):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
             # 未認証で POST /api/auth/login → CSRF 免除パスなので 401 または 422 のみ（403 ではない）
-            resp = await c.post(
-                "/api/auth/login", json={"username": "nobody", "password": "nope"}
-            )
+            resp = await c.post("/api/auth/login", json={"username": "nobody", "password": "nope"})
             assert resp.status_code != 403
 
 
@@ -169,9 +162,7 @@ async def test_login_path_exempt_from_csrf(tmp_path):
             # セッション Cookie があっても /api/auth/login は免除
             # まず何らかのセッション Cookie を強制セット（CSRF チェックが走るか確認）
             c.cookies.set("millicall_session", "fake-session-value")
-            resp = await c.post(
-                "/api/auth/login", json={"username": "ghost", "password": "nope"}
-            )
+            resp = await c.post("/api/auth/login", json={"username": "ghost", "password": "nope"})
             # CSRF エラーではなく認証エラー（401）を返す
             assert resp.status_code != 403
 
@@ -241,15 +232,11 @@ async def test_csrf_cookie_cleared_on_logout(tmp_path):
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
-            await c.post(
-                "/api/auth/login", json={"username": "csrfuser", "password": "Passw0rd1"}
-            )
+            await c.post("/api/auth/login", json={"username": "csrfuser", "password": "Passw0rd1"})
             csrf_token = c.cookies.get("millicall_csrf")
             assert csrf_token
 
-            resp = await c.post(
-                "/api/auth/logout", headers={"X-CSRF-Token": csrf_token}
-            )
+            resp = await c.post("/api/auth/logout", headers={"X-CSRF-Token": csrf_token})
             assert resp.status_code == 200
             # httpx では delete_cookie は max-age=0 で上書き; cookie jar から消えているか確認
             assert c.cookies.get("millicall_csrf") is None or c.cookies.get("millicall_csrf") == ""
@@ -312,6 +299,7 @@ async def test_csrf_cookie_set_on_totp_login(tmp_path):
 # ---------------------------------------------------------------------------
 # 除外パスの境界一致（レビュー M-1/M-2 回帰）
 # ---------------------------------------------------------------------------
+
 
 def test_csrf_exempt_boundary_matching():
     """startswith の過剰マッチを防ぎ、境界一致のみ除外する。"""

@@ -150,7 +150,11 @@ async def test_branch_true_route(ctx: ChannelContext) -> None:
     defn = make_def(
         [
             {"id": "s", "type": "start"},
-            {"id": "c", "type": "condition", "config": {"variable": "x", "operator": "eq", "value": "1"}},
+            {
+                "id": "c",
+                "type": "condition",
+                "config": {"variable": "x", "operator": "eq", "value": "1"},
+            },
             {"id": "t", "type": "end"},
             {"id": "f", "type": "hangup"},
         ],
@@ -173,7 +177,11 @@ async def test_branch_false_route(ctx: ChannelContext) -> None:
     defn = make_def(
         [
             {"id": "s", "type": "start"},
-            {"id": "c", "type": "condition", "config": {"variable": "x", "operator": "eq", "value": "1"}},
+            {
+                "id": "c",
+                "type": "condition",
+                "config": {"variable": "x", "operator": "eq", "value": "1"},
+            },
             {"id": "t", "type": "end"},
             {"id": "f", "type": "hangup"},
         ],
@@ -203,7 +211,11 @@ async def test_valid_handle_no_wired_edge_terminates_normally(ctx: ChannelContex
     defn = make_def(
         [
             {"id": "s", "type": "start"},
-            {"id": "c", "type": "condition", "config": {"variable": "x", "operator": "eq", "value": "1"}},
+            {
+                "id": "c",
+                "type": "condition",
+                "config": {"variable": "x", "operator": "eq", "value": "1"},
+            },
             {"id": "f", "type": "end"},
         ],
         # only the 'false' edge is wired; handler returns the valid 'true' handle
@@ -223,7 +235,11 @@ async def test_handler_returns_unknown_handle_is_error(ctx: ChannelContext) -> N
     defn = make_def(
         [
             {"id": "s", "type": "start"},
-            {"id": "c", "type": "condition", "config": {"variable": "x", "operator": "eq", "value": "1"}},
+            {
+                "id": "c",
+                "type": "condition",
+                "config": {"variable": "x", "operator": "eq", "value": "1"},
+            },
             {"id": "t", "type": "end"},
         ],
         [edge("e1", "s", "out", "c"), edge("e2", "c", "true", "t")],
@@ -269,9 +285,7 @@ async def test_step_limit_stops_self_loop(ctx: ChannelContext) -> None:
         [edge("e1", "s", "out", "a"), edge("e2", "a", "out", "a")],  # a -> a
     )
     with pytest.raises(WorkflowExecutionError):
-        await WorkflowExecutor(
-            defn, ctx, handlers={"set_variable": loop}, step_limit=10
-        ).execute()
+        await WorkflowExecutor(defn, ctx, handlers={"set_variable": loop}, step_limit=10).execute()
 
 
 # --------------------------------------------------------------------------- #

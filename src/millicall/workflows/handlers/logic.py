@@ -15,8 +15,6 @@
 
 from __future__ import annotations
 
-import ipaddress
-import socket
 from datetime import datetime, time
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -24,113 +22,16 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from millicall.net_guard import (  # noqa: F401 — 後方互換のため re-export
+    _is_blocked_ip,
+    _normalize_ip,
+    _PinnedTransport,
+    _resolve_and_check_ssrf,
+)
 from millicall.workflows.executor import register_handler
 
 if TYPE_CHECKING:
     from millicall.workflows.context import ChannelContext
-
-# --------------------------------------------------------------------------- #
-# SSRF ガード — ブロック対象 IP ネットワーク
-# --------------------------------------------------------------------------- #
-
-def _normalize_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> (
-    ipaddress.IPv4Address | ipaddress.IPv6Address
-):
-    """IPv4-mapped / IPv4-compatible IPv6 を素の IPv4 に畳み込む。
-
-    ``::ffff:127.0.0.1`` のような IPv4-mapped IPv6 は、IPv6 として見ると
-    ``is_loopback`` 等のフラグが立たず判定をすり抜ける。素の IPv4 に正規化して
-    から分類フラグを見ることでこのバイパスを塞ぐ。
-    """
-    if isinstance(ip, ipaddress.IPv6Address):
-        mapped = getattr(ip, "ipv4_mapped", None)
-        if mapped is not None:
-            return mapped
-        # ::a.b.c.d 形式（IPv4-compatible、廃止済みだが安全側で畳み込む）
-        if int(ip) != 0 and int(ip) <= 0xFFFFFFFF:
-            return ipaddress.IPv4Address(int(ip))
-    return ip
-
-
-def _is_blocked_ip(ip_str: str) -> bool:
-    """指定された IP 文字列がブロック対象（内部到達可能）かどうかを返す。
-
-    手書きの CIDR 表ではなく標準ライブラリの分類フラグを使う。これにより
-    CGNAT (100.64.0.0/10)、0.0.0.0/8、ベンチマーク帯などの穴を一括で塞ぐ。
-    """
-    try:
-        ip = _normalize_ip(ipaddress.ip_address(ip_str))
-    except ValueError:
-        return True  # パース不能 → 安全側でブロック
-    return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
-
-
-def _resolve_and_check_ssrf(url: str) -> str:
-    """URL を解決・検証し、接続に固定すべき検証済み IP を返す。
-
-    ホスト名を ``socket.getaddrinfo`` で一度だけ解決し、全ての解決済み IP を
-    :func:`_is_blocked_ip` で検査する。いずれかが内部到達可能なら ``ValueError``。
-    返した IP を実際の接続先に固定する（呼び出し側の pinned transport）ことで、
-    検証後に再解決される DNS リバインディング (TOCTOU) を防ぐ。
-    DNS 解決失敗も ValueError として扱う（フロー側は "error" に落ちる）。
-    """
-    parsed = urlparse(url)
-    host = parsed.hostname
-    if not host:
-        raise ValueError(f"URL からホスト名を解析できません: {url!r}")
-
-    # URL に直接 IP リテラルが書かれている場合も同じ経路で検査する。
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    try:
-        results = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise ValueError(f"DNS 解決失敗 ({host!r}): {exc}") from exc
-
-    resolved_ips = [sockaddr[0] for *_rest, sockaddr in results]
-    if not resolved_ips:
-        raise ValueError(f"DNS 解決結果が空です ({host!r})")
-
-    for ip_str in resolved_ips:
-        if _is_blocked_ip(ip_str):
-            raise ValueError(
-                f"SSRF ブロック: {host!r} が {ip_str!r} に解決され、"
-                "プライベート/ループバック/リンクローカル等の内部アドレスへの"
-                "アクセスは拒否されます"
-            )
-
-    # 全 IP が検証を通過。接続はこの検証済み IP に固定する。
-    return resolved_ips[0]
-
-
-class _PinnedTransport(httpx.AsyncHTTPTransport):
-    """検証済み IP に接続先を固定する httpx トランスポート。
-
-    ``_resolve_and_check_ssrf`` が返した IP に接続を固定し、httpx 側の再解決を
-    封じる（TOCTOU/DNS リバインディング対策）。Host ヘッダと TLS SNI/証明書検証は
-    元のホスト名を保持するため、正当な仮想ホスト/証明書もそのまま機能する。
-    """
-
-    def __init__(self, pinned_host: str, pinned_ip: str, **kwargs: object) -> None:
-        super().__init__(**kwargs)  # type: ignore[arg-type]
-        self._pinned_host = pinned_host
-        self._pinned_ip = pinned_ip
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        if request.url.host == self._pinned_host:
-            # SNI と証明書検証は元ホストで行い、接続先だけ検証済み IP に差し替える。
-            request.extensions = {
-                **request.extensions,
-                "sni_hostname": self._pinned_host,
-            }
-            request.url = request.url.copy_with(host=self._pinned_ip)
-        return await super().handle_async_request(request)
 
 
 # --------------------------------------------------------------------------- #
@@ -289,7 +190,11 @@ async def handle_api_call(node: object, ctx: ChannelContext) -> str:
         headers = {k: ctx.render(v) for k, v in config.headers.items()}
 
         # Content-Type ヘッダの自動付与（既に指定がない場合）
-        if body_str and "Content-Type" not in headers and "content-type" not in {k.lower() for k in headers}:
+        if (
+            body_str
+            and "Content-Type" not in headers
+            and "content-type" not in {k.lower() for k in headers}
+        ):
             if config.content_type == "json":
                 headers["Content-Type"] = "application/json"
             elif config.content_type == "form":

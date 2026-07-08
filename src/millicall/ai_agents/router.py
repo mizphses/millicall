@@ -49,9 +49,7 @@ async def create_agent(
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="name exists"
-        ) from None
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="name exists") from None
     await session.refresh(agent)
     return agent
 
@@ -63,9 +61,7 @@ async def list_agents(session: AsyncSession = Depends(get_session)) -> list[AiAg
 
 
 @router.get("/{agent_id}", response_model=AiAgentRead)
-async def get_agent(
-    agent_id: int, session: AsyncSession = Depends(get_session)
-) -> AiAgent:
+async def get_agent(agent_id: int, session: AsyncSession = Depends(get_session)) -> AiAgent:
     agent = await session.get(AiAgent, agent_id)
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -103,17 +99,13 @@ async def update_agent(
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="name exists"
-        ) from None
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="name exists") from None
     await session.refresh(agent)
     return agent
 
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent(
-    agent_id: int, session: AsyncSession = Depends(get_session)
-) -> None:
+async def delete_agent(agent_id: int, session: AsyncSession = Depends(get_session)) -> None:
     agent = await session.get(AiAgent, agent_id)
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")

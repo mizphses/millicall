@@ -42,8 +42,9 @@ class _MockNetworkConfig:
 class _MockSettings:
     """Settings のモック。"""
 
-    def __init__(self, sip_domain: str = "millicall.local") -> None:
+    def __init__(self, sip_domain: str = "millicall.local", http_port: int = 80) -> None:
         self.sip_domain = sip_domain
+        self.http_port = http_port
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +75,20 @@ def test_panasonic_common_contains_provisioning_base_url() -> None:
 
 
 def test_panasonic_common_fallback_base_url() -> None:
-    """provisioning_base_url が空の場合、LAN IP:8000 にフォールバックする。"""
+    """provisioning_base_url が空の場合、LAN IP + core の HTTP ポートにフォールバックする。
+
+    既定 http_port=80 はポートを省略する。カスタムポートは :port を付与する。
+    """
     from millicall.provisioning.templates import render_panasonic_common
 
     nc = _MockNetworkConfig(lan_ip="10.0.0.1", provisioning_base_url="")
-    settings = _MockSettings()
-    content = render_panasonic_common(network_config=nc, settings=settings)
-
-    assert "10.0.0.1:8000" in content
+    # 既定ポート 80 → ポート省略
+    content80 = render_panasonic_common(network_config=nc, settings=_MockSettings())
+    assert "http://10.0.0.1/provisioning" in content80
+    assert "10.0.0.1:8000" not in content80
+    # カスタムポート → :port 付与
+    content8000 = render_panasonic_common(network_config=nc, settings=_MockSettings(http_port=8000))
+    assert "http://10.0.0.1:8000/provisioning" in content8000
 
 
 def test_panasonic_common_uses_crlf() -> None:
@@ -105,6 +112,7 @@ def test_panasonic_common_no_mac_or_hostname() -> None:
 
     # MAC アドレス形式（XX:XX:XX:XX:XX:XX）が含まれないことを確認
     import re
+
     assert not re.search(r"[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}", content)
 
 

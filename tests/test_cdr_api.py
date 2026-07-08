@@ -6,12 +6,30 @@ from millicall.models import Cdr
 async def test_list_cdr_returns_recent_first(auth_client_with_telephony, app):
     sm = app.state.sessionmaker
     async with sm() as s:
-        s.add(Cdr(call_uuid="u1", direction="outbound", src_number="1001",
-                  dst_number="0312345678", started_at=datetime(2026, 7, 5, 10, 0, 0),
-                  duration_seconds=30, billsec_seconds=25, hangup_cause="NORMAL_CLEARING"))
-        s.add(Cdr(call_uuid="u2", direction="inbound", src_number="0398765432",
-                  dst_number="1001", started_at=datetime(2026, 7, 5, 11, 0, 0),
-                  duration_seconds=10, billsec_seconds=0, hangup_cause="NO_ANSWER"))
+        s.add(
+            Cdr(
+                call_uuid="u1",
+                direction="outbound",
+                src_number="1001",
+                dst_number="0312345678",
+                started_at=datetime(2026, 7, 5, 10, 0, 0),
+                duration_seconds=30,
+                billsec_seconds=25,
+                hangup_cause="NORMAL_CLEARING",
+            )
+        )
+        s.add(
+            Cdr(
+                call_uuid="u2",
+                direction="inbound",
+                src_number="0398765432",
+                dst_number="1001",
+                started_at=datetime(2026, 7, 5, 11, 0, 0),
+                duration_seconds=10,
+                billsec_seconds=0,
+                hangup_cause="NO_ANSWER",
+            )
+        )
         await s.commit()
     resp = await auth_client_with_telephony.get("/api/cdr")
     assert resp.status_code == 200
@@ -27,12 +45,30 @@ async def test_cdr_requires_auth(client):
 async def test_list_cdr_direction_filter(auth_client_with_telephony, app):
     sm = app.state.sessionmaker
     async with sm() as s:
-        s.add(Cdr(call_uuid="u1", direction="outbound", src_number="1001",
-                  dst_number="0312345678", started_at=datetime(2026, 7, 5, 10, 0, 0),
-                  duration_seconds=30, billsec_seconds=25, hangup_cause="NORMAL_CLEARING"))
-        s.add(Cdr(call_uuid="u2", direction="inbound", src_number="0398765432",
-                  dst_number="1001", started_at=datetime(2026, 7, 5, 11, 0, 0),
-                  duration_seconds=10, billsec_seconds=0, hangup_cause="NO_ANSWER"))
+        s.add(
+            Cdr(
+                call_uuid="u1",
+                direction="outbound",
+                src_number="1001",
+                dst_number="0312345678",
+                started_at=datetime(2026, 7, 5, 10, 0, 0),
+                duration_seconds=30,
+                billsec_seconds=25,
+                hangup_cause="NORMAL_CLEARING",
+            )
+        )
+        s.add(
+            Cdr(
+                call_uuid="u2",
+                direction="inbound",
+                src_number="0398765432",
+                dst_number="1001",
+                started_at=datetime(2026, 7, 5, 11, 0, 0),
+                duration_seconds=10,
+                billsec_seconds=0,
+                hangup_cause="NO_ANSWER",
+            )
+        )
         await s.commit()
     resp = await auth_client_with_telephony.get("/api/cdr?direction=inbound")
     assert resp.status_code == 200
@@ -46,9 +82,18 @@ async def test_list_cdr_offset_pagination(auth_client_with_telephony, app):
     sm = app.state.sessionmaker
     async with sm() as s:
         for i in range(3):
-            s.add(Cdr(call_uuid=f"u{i}", direction="outbound", src_number="1001",
-                      dst_number=f"030{i}345678", started_at=datetime(2026, 7, 5, 10, i, 0),
-                      duration_seconds=30, billsec_seconds=25, hangup_cause="NORMAL_CLEARING"))
+            s.add(
+                Cdr(
+                    call_uuid=f"u{i}",
+                    direction="outbound",
+                    src_number="1001",
+                    dst_number=f"030{i}345678",
+                    started_at=datetime(2026, 7, 5, 10, i, 0),
+                    duration_seconds=30,
+                    billsec_seconds=25,
+                    hangup_cause="NORMAL_CLEARING",
+                )
+            )
         await s.commit()
     resp1 = await auth_client_with_telephony.get("/api/cdr?limit=2")
     assert resp1.status_code == 200

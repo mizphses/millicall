@@ -168,8 +168,7 @@ class WorkflowExecutor:
             handler = self._handlers.get(current.type)
             if handler is None:
                 raise WorkflowExecutionError(
-                    f"no handler registered for node type {current.type!r} "
-                    f"(node {current.id!r})"
+                    f"no handler registered for node type {current.type!r} (node {current.id!r})"
                 )
 
             result = await handler(current, self._ctx)
@@ -210,9 +209,7 @@ class WorkflowExecutor:
         cur = node
         while cur is not None and cur.type == "goto":
             if cur.id in seen:
-                raise WorkflowExecutionError(
-                    f"goto cycle detected at node {cur.id!r}"
-                )
+                raise WorkflowExecutionError(f"goto cycle detected at node {cur.id!r}")
             seen.add(cur.id)
             target_id = cur.config.target_node_id
             nxt = self._node_map.get(target_id)

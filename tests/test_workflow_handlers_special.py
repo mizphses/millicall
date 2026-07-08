@@ -97,7 +97,9 @@ async def test_call_workflow_cycle_is_skipped() -> None:
 @pytest.mark.asyncio
 async def test_call_workflow_missing_or_disabled_skips() -> None:
     """対象不在/無効はスキップして親フロー継続。"""
-    ctx = ChannelContext(uuid="u1", sessionmaker=_sessionmaker({9: _FakeWorkflowRow(_SUBFLOW, enabled=False)}))
+    ctx = ChannelContext(
+        uuid="u1", sessionmaker=_sessionmaker({9: _FakeWorkflowRow(_SUBFLOW, enabled=False)})
+    )
 
     # 不在
     assert await handle_call_workflow(make_call_workflow_node(404), ctx) is None
@@ -115,5 +117,7 @@ async def test_call_workflow_no_sessionmaker_skips() -> None:
 @pytest.mark.asyncio
 async def test_call_workflow_bad_definition_skips() -> None:
     """不正な定義 JSON はスキップして親フロー継続（通話を落とさない）。"""
-    ctx = ChannelContext(uuid="u1", sessionmaker=_sessionmaker({7: _FakeWorkflowRow({"nodes": "broken"})}))
+    ctx = ChannelContext(
+        uuid="u1", sessionmaker=_sessionmaker({7: _FakeWorkflowRow({"nodes": "broken"})})
+    )
     assert await handle_call_workflow(make_call_workflow_node(7), ctx) is None

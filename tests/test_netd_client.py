@@ -160,9 +160,7 @@ async def test_tailscale_down_sends_correct_payload(short_tmp):
 async def test_tailscale_status_returns_status_dict(short_tmp):
     """tailscale_status がレスポンスの status 辞書を返すことを確認する。"""
     status_data = {"BackendState": "Running", "TailscaleIPs": ["100.64.0.1"]}
-    sock_path, handler, received = _make_server(
-        short_tmp, {"ok": True, "status": status_data}
-    )
+    sock_path, handler, received = _make_server(short_tmp, {"ok": True, "status": status_data})
     server = await asyncio.start_unix_server(handler, path=sock_path)
     async with server:
         client = NetdClient(sock_path, timeout=2.0)
@@ -180,9 +178,7 @@ async def test_get_dhcp_leases_returns_leases_list(short_tmp):
         {"mac": "AA:BB:CC:DD:EE:FF", "ip": "192.168.100.101", "hostname": "phone-1"},
         {"mac": "11:22:33:44:55:66", "ip": "192.168.100.102", "hostname": "phone-2"},
     ]
-    sock_path, handler, received = _make_server(
-        short_tmp, {"ok": True, "leases": leases}
-    )
+    sock_path, handler, received = _make_server(short_tmp, {"ok": True, "leases": leases})
     server = await asyncio.start_unix_server(handler, path=sock_path)
     async with server:
         client = NetdClient(sock_path, timeout=2.0)
@@ -196,9 +192,7 @@ async def test_get_dhcp_leases_returns_leases_list(short_tmp):
 @pytest.mark.asyncio
 async def test_get_nat_status_returns_bool(short_tmp):
     """get_nat_status が enabled フラグの bool 値を返すことを確認する。"""
-    sock_path, handler, received = _make_server(
-        short_tmp, {"ok": True, "enabled": True}
-    )
+    sock_path, handler, received = _make_server(short_tmp, {"ok": True, "enabled": True})
     server = await asyncio.start_unix_server(handler, path=sock_path)
     async with server:
         client = NetdClient(sock_path, timeout=2.0)
@@ -229,9 +223,7 @@ async def test_get_nat_status_false(short_tmp):
 @pytest.mark.asyncio
 async def test_ok_false_raises_netd_error(short_tmp):
     """ok:false レスポンスを受け取ったとき NetdError を送出することを確認する。"""
-    sock_path, handler, _ = _make_server(
-        short_tmp, {"ok": False, "error": "設定書き込み失敗"}
-    )
+    sock_path, handler, _ = _make_server(short_tmp, {"ok": False, "error": "設定書き込み失敗"})
     server = await asyncio.start_unix_server(handler, path=sock_path)
     async with server:
         client = NetdClient(sock_path, timeout=2.0)
@@ -250,9 +242,7 @@ async def test_ok_false_raises_netd_error(short_tmp):
 @pytest.mark.asyncio
 async def test_nat_ok_false_raises_netd_error(short_tmp):
     """apply_nat での ok:false が NetdError を送出することを確認する。"""
-    sock_path, handler, _ = _make_server(
-        short_tmp, {"ok": False, "error": "nftables エラー"}
-    )
+    sock_path, handler, _ = _make_server(short_tmp, {"ok": False, "error": "nftables エラー"})
     server = await asyncio.start_unix_server(handler, path=sock_path)
     async with server:
         client = NetdClient(sock_path, timeout=2.0)
@@ -274,9 +264,7 @@ async def test_nat_ok_false_raises_netd_error(short_tmp):
 async def test_tailscale_up_error_does_not_leak_auth_key(short_tmp):
     """tailscale_up が ok:false のとき、送出した NetdError に auth_key が含まれないことを確認する。"""
     secret_key = "tskey-auth-supersecretvalue9999"
-    sock_path, handler, _ = _make_server(
-        short_tmp, {"ok": False, "error": "認証失敗"}
-    )
+    sock_path, handler, _ = _make_server(short_tmp, {"ok": False, "error": "認証失敗"})
     server = await asyncio.start_unix_server(handler, path=sock_path)
     async with server:
         client = NetdClient(sock_path, timeout=2.0)

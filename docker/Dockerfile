@@ -45,6 +45,11 @@ RUN uv sync --no-dev --frozen
 # 存在すると main.py が StaticFiles + SPA fallback を自動で有効化する。
 COPY --from=webbuilder /web/dist /app/static
 
-EXPOSE 8000
+# core は平文 HTTP を待受ける。既定 80。TLS/443 はフロント(Cloudflare Tunnel /
+# Tailscale Serve)に委譲する。ポートは MILLICALL_HTTP_PORT で上書き可。
+EXPOSE 80
 
-CMD ["uv", "run", "--no-dev", "uvicorn", "millicall.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# shell 形式で MILLICALL_HTTP_PORT / MILLICALL_HTTP_BIND を uvicorn に渡す。
+# MILLICALL_HTTP_BIND デフォルト: 0.0.0.0（nftables INPUT フィルタが LAN 限定ゲートになる）。
+# CF-Tunnel / Tailscale 専用デプロイでは 127.0.0.1 に設定し LAN/WAN 露出を完全排除できる。
+CMD ["sh", "-c", "uv run --no-dev uvicorn millicall.main:app --host ${MILLICALL_HTTP_BIND:-0.0.0.0} --port ${MILLICALL_HTTP_PORT:-80}"]

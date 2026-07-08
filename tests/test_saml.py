@@ -370,6 +370,7 @@ async def test_acs_happy_path_creates_user_and_session(saml_client, idp_keypair)
     app = saml_client._transport.app
     async with app.state.sessionmaker() as session:
         from sqlalchemy import select as sa_select
+
         user = await session.scalar(sa_select(User).where(User.email == "alice@example.com"))
         assert user is not None
         assert user.origin == "saml"
@@ -412,6 +413,7 @@ async def test_acs_happy_path_updates_existing_user(saml_client, idp_keypair) ->
     # display_name が更新され role="admin" が維持されていること
     async with app.state.sessionmaker() as session:
         from sqlalchemy import select as sa_select
+
         user = await session.scalar(sa_select(User).where(User.email == email))
         assert user is not None
         assert user.display_name == "Bob Smith"
@@ -510,6 +512,7 @@ async def test_acs_signature_wrapping_rejected(saml_client, idp_keypair) -> None
         app = saml_client._transport.app
         async with app.state.sessionmaker() as session:
             from sqlalchemy import select as sa_select
+
             legit_user = await session.scalar(
                 sa_select(User).where(User.email == "legit@example.com")
             )
@@ -653,12 +656,14 @@ async def test_acs_disabled_user_rejected(saml_client, idp_keypair) -> None:
         "https://evil.com",
         "http://evil.com",
         "javascript:alert(1)",
-        "/\\evil.com",       # バックスラッシュ（一部ブラウザで // 扱い、レビュー N-1）
-        "/path\\evil",       # 途中のバックスラッシュ
+        "/\\evil.com",  # バックスラッシュ（一部ブラウザで // 扱い、レビュー N-1）
+        "/path\\evil",  # 途中のバックスラッシュ
         "/path\r\nSet-Cookie: x=1",  # 制御文字（改行）
     ],
 )
-async def test_acs_open_redirect_falls_back_to_root(saml_client, idp_keypair, relay_state: str) -> None:
+async def test_acs_open_redirect_falls_back_to_root(
+    saml_client, idp_keypair, relay_state: str
+) -> None:
     """非ローカルな RelayState は "/" にフォールバックする。"""
     saml_b64, _ = _build_saml_response(
         idp_keypair["key_pem"],

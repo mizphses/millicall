@@ -79,7 +79,9 @@ async def _make_user(app, username="mcpadmin", password="Passw0rd1", role="admin
 
 def _pkce():
     verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    )
     return verifier, challenge
 
 
@@ -181,7 +183,9 @@ async def test_login_callback_rejects_disallowed_role(mcp_app, mcp_client):
 
 async def test_login_callback_rejects_disabled_user(mcp_app, mcp_client):
     """無効化されたユーザーは MCP OAuth ログインを 403 で拒否される（全体レビュー minor #1）。"""
-    await _make_user(mcp_app, username="disabled1", password="DisPass1", role="admin", enabled=False)
+    await _make_user(
+        mcp_app, username="disabled1", password="DisPass1", role="admin", enabled=False
+    )
     r = await mcp_client.post(
         "/mcp-login/callback",
         data={"ticket": _ticket(mcp_app), "username": "disabled1", "password": "DisPass1"},
@@ -394,3 +398,194 @@ async def test_mcp_disabled(tmp_path):
             r = await c.get("/.well-known/oauth-authorization-server")
             assert r.status_code == 404
             assert not hasattr(app.state, "mcp_session_manager")
+
+
+# --------------------------------------------------------------------------
+# 監査 C1: MCP Bearer の失効契約（enabled / session_epoch 照合）
+# --------------------------------------------------------------------------
+async def test_access_token_revoked_when_user_disabled(mcp_app):
+    """発行後にユーザーを無効化すると load_access_token が拒否する。"""
+    from mcp.server.auth.provider import AccessToken
+    from sqlalchemy import select
+
+    from millicall.models import User
+
+    await _make_user(mcp_app, username="c1disable", password="Pass1234x", role="admin")
+    provider = mcp_app.state.mcp_oauth_provider
+
+    # トークンを手動登録し、発行時 epoch を記録する（exchange 経路の内部状態を再現）。
+    provider._access_tokens["tok-c1a"] = AccessToken(
+        token="tok-c1a", client_id="c", scopes=[], expires_at=None, subject="c1disable"
+    )
+    await provider._record_token_epoch("c1disable", "tok-c1a", "ref-c1a")
+
+    # 有効なうちは通る
+    assert await provider.load_access_token("tok-c1a") is not None
+
+    # 無効化 → 拒否
+    async with mcp_app.state.sessionmaker() as s:
+        u = await s.scalar(select(User).where(User.username == "c1disable"))
+        u.enabled = False
+        await s.commit()
+    assert await provider.load_access_token("tok-c1a") is None
+
+
+async def test_access_token_revoked_when_epoch_bumped(mcp_app):
+    """session_epoch を bump すると発行済みトークンが失効する（パスワード変更/logout-all 等）。"""
+    from mcp.server.auth.provider import AccessToken
+    from sqlalchemy import select
+
+    from millicall.models import User
+
+    await _make_user(mcp_app, username="c1epoch", password="Pass1234x", role="admin")
+    provider = mcp_app.state.mcp_oauth_provider
+    provider._access_tokens["tok-c1e"] = AccessToken(
+        token="tok-c1e", client_id="c", scopes=[], expires_at=None, subject="c1epoch"
+    )
+    await provider._record_token_epoch("c1epoch", "tok-c1e", "ref-c1e")
+
+    assert await provider.load_access_token("tok-c1e") is not None
+
+    async with mcp_app.state.sessionmaker() as s:
+        u = await s.scalar(select(User).where(User.username == "c1epoch"))
+        u.session_epoch = (u.session_epoch or 0) + 1
+        await s.commit()
+    assert await provider.load_access_token("tok-c1e") is None
+
+
+# --------------------------------------------------------------------------
+# H2: /mcp-login/callback レート制限（ブルートフォース対策）
+# --------------------------------------------------------------------------
+
+
+def _mcp_settings_with_throttle(tmp_path, max_attempts: int = 3, lockout_seconds: int = 60):
+    """レート制限を小さい値に設定した MCP 用 Settings を生成する。"""
+    return Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
+        fs_config_dir=tmp_path / "fs",
+        cookie_secure=False,
+        esl_timeout_seconds=1.0,
+        mcp_issuer_url="http://localhost",
+        mcp_allowed_hosts=["localhost", "127.0.0.1"],
+        static_dir=tmp_path / "no-static",
+        login_max_attempts=max_attempts,
+        login_lockout_seconds=lockout_seconds,
+    )
+
+
+async def test_mcp_callback_throttle_username_lockout(tmp_path):
+    """同一ユーザー名で連続失敗すると /mcp-login/callback が 429 を返す（H2）。"""
+    app = create_app(_mcp_settings_with_throttle(tmp_path, max_attempts=3))
+    async with app.router.lifespan_context(app):
+        await _make_user(app, username="th1", password="Passw0rd1", role="admin")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://localhost") as c:
+            ticket = _ticket(app, client_id="cli")
+            # 3 回失敗
+            for _ in range(3):
+                r = await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket, "username": "th1", "password": "WrongPass"},
+                )
+                assert r.status_code == 401
+            # 4 回目は 429
+            r = await c.post(
+                "/mcp-login/callback",
+                data={"ticket": ticket, "username": "th1", "password": "WrongPass"},
+            )
+            assert r.status_code == 429
+
+
+async def test_mcp_callback_throttle_retry_after_header(tmp_path):
+    """429 レスポンスに Retry-After ヘッダーが含まれる（H2）。"""
+    app = create_app(_mcp_settings_with_throttle(tmp_path, max_attempts=2, lockout_seconds=120))
+    async with app.router.lifespan_context(app):
+        await _make_user(app, username="th2", password="Passw0rd1", role="admin")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://localhost") as c:
+            ticket = _ticket(app, client_id="cli")
+            for _ in range(2):
+                await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket, "username": "th2", "password": "WrongPass"},
+                )
+            r = await c.post(
+                "/mcp-login/callback",
+                data={"ticket": ticket, "username": "th2", "password": "WrongPass"},
+            )
+            assert r.status_code == 429
+            assert r.headers.get("Retry-After") == "120"
+
+
+async def test_mcp_callback_success_clears_counter(tmp_path):
+    """ログイン成功でカウンタがリセットされ、再び試行できる（H2）。"""
+    app = create_app(_mcp_settings_with_throttle(tmp_path, max_attempts=3))
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        await _make_user(app, username="th3", password="Passw0rd1", role="admin")
+        async with AsyncClient(transport=transport, base_url="http://localhost") as c:
+            # DCR でクライアント登録
+            client_id = await _register_client(c)
+            verifier, challenge = _pkce()
+
+            # 2 回失敗（上限未満）
+            ticket = _ticket(app, client_id="cli")
+            for _ in range(2):
+                r = await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket, "username": "th3", "password": "WrongPass"},
+                )
+                assert r.status_code == 401
+
+            # 成功でリセット（登録済みクライアント経由）
+            ticket2 = _ticket(app, client_id=client_id, code_challenge=challenge, state="ok")
+            r = await c.post(
+                "/mcp-login/callback",
+                data={"ticket": ticket2, "username": "th3", "password": "Passw0rd1"},
+            )
+            assert r.status_code == 302
+
+            # 再び 2 回失敗しても 429 にならない（カウンタがリセット済み）
+            ticket3 = _ticket(app, client_id="cli")
+            for _ in range(2):
+                r = await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket3, "username": "th3", "password": "WrongPass"},
+                )
+                assert r.status_code == 401
+
+
+async def test_mcp_callback_disabled_user_records_failure(tmp_path):
+    """無効化ユーザー認証試行も失敗として記録され、ロックアウトが発動する（H2）。"""
+    from sqlalchemy import func
+    from sqlalchemy import select as sa_select
+
+    from millicall.models import LoginAttempt
+
+    app = create_app(_mcp_settings_with_throttle(tmp_path, max_attempts=3))
+    async with app.router.lifespan_context(app):
+        await _make_user(app, username="th4", password="Passw0rd1", role="admin", enabled=False)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://localhost") as c:
+            ticket = _ticket(app, client_id="cli")
+            for _ in range(3):
+                await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket, "username": "th4", "password": "Passw0rd1"},
+                )
+            # 4 回目は 429（失敗記録が蓄積されロックアウト）
+            r = await c.post(
+                "/mcp-login/callback",
+                data={"ticket": ticket, "username": "th4", "password": "Passw0rd1"},
+            )
+            assert r.status_code == 429
+
+        sm = app.state.sessionmaker
+        async with sm() as s:
+            count = await s.scalar(
+                sa_select(func.count())
+                .select_from(LoginAttempt)
+                .where(LoginAttempt.username == "th4")
+            )
+        assert count and count >= 3

@@ -22,16 +22,28 @@ async def test_create_extension_generates_sip_password(auth_client) -> None:
     assert body["number"] == "1001"
     assert body["display_name"] == "Alice"
     assert body["enabled"] is True
-    assert len(body["sip_password"]) >= 16  # 自動生成
+    # M3: sip_password は API レスポンスに含まれてはならない（資格情報露出防止）
+    assert "sip_password" not in body
 
 
-async def test_sip_password_not_client_settable(auth_client) -> None:
+async def test_sip_password_not_in_create_response(auth_client) -> None:
+    """M3: POST /api/extensions レスポンスに sip_password が含まれないことを確認。"""
     resp = await auth_client.post(
         "/api/extensions",
         json={"number": "1002", "display_name": "Bob", "sip_password": "hacked"},
     )
     assert resp.status_code == 201
-    assert resp.json()["sip_password"] != "hacked"
+    body = resp.json()
+    assert "sip_password" not in body
+
+
+async def test_sip_password_not_in_list_response(auth_client) -> None:
+    """M3: GET /api/extensions リストレスポンスに sip_password が含まれないことを確認。"""
+    await auth_client.post("/api/extensions", json={"number": "1009", "display_name": "ListTest"})
+    resp = await auth_client.get("/api/extensions")
+    assert resp.status_code == 200
+    for ext in resp.json():
+        assert "sip_password" not in ext
 
 
 async def test_invalid_number_rejected(auth_client) -> None:

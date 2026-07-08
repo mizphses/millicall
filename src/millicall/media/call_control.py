@@ -24,20 +24,16 @@ _VALID_UUID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 
 
 class CallControl(Protocol):
-    async def play_file(self, path: str) -> None:
-        ...
+    async def play_file(self, path: str) -> None: ...
 
-    async def stop_playback(self) -> None:
-        ...
+    async def stop_playback(self) -> None: ...
 
-    async def hangup(self) -> None:
-        ...
+    async def hangup(self) -> None: ...
 
 
 # ESL クライアントに要求する最小インターフェース（`bgapi` のみ）。
 class _EslLike(Protocol):
-    async def bgapi(self, command: str) -> str:
-        ...
+    async def bgapi(self, command: str) -> str: ...
 
 
 class EslCallControl:
@@ -102,8 +98,7 @@ class EslCallControl:
         """
         if not digits or not _VALID_DTMF_RE.match(digits):
             raise ValueError(
-                f"Invalid DTMF digits: {digits!r}. "
-                "Only 0-9, *, #, A, B, C, D, w are allowed."
+                f"Invalid DTMF digits: {digits!r}. Only 0-9, *, #, A, B, C, D, w are allowed."
             )
         await self._bgapi(f"uuid_send_dtmf {self._uuid} {digits}")
 

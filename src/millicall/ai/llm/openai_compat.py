@@ -50,7 +50,11 @@ class OpenAICompatibleLLM:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         async with (
-            httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client,
+            httpx.AsyncClient(
+                timeout=self._timeout,
+                transport=self._transport,
+                follow_redirects=False,
+            ) as client,
             client.stream(
                 "POST",
                 f"{self._base_url}/chat/completions",

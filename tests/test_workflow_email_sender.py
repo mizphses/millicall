@@ -87,9 +87,9 @@ async def test_header_injection_in_to_or_subject_raises(to: str, subject: str) -
 @pytest.mark.parametrize(
     "invalid_to",
     [
-        "notanemail",        # "@" なし
+        "notanemail",  # "@" なし
         "has space@ex.com",  # スペースあり
-        "no at sign here",   # スペースあり + "@" なし
+        "no at sign here",  # スペースあり + "@" なし
     ],
 )
 async def test_invalid_to_address_raises(invalid_to: str) -> None:
@@ -117,7 +117,9 @@ async def test_happy_path_calls_aiosmtplib_send() -> None:
         timeout=10,
     )
 
-    with patch("millicall.workflows.email_sender.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+    with patch(
+        "millicall.workflows.email_sender.aiosmtplib.send", new_callable=AsyncMock
+    ) as mock_send:
         await sender.send(to="dest@example.com", subject="テスト件名", body="テスト本文")
 
     mock_send.assert_awaited_once()
@@ -147,7 +149,9 @@ async def test_from_addr_falls_back_to_username() -> None:
         from_addr="",  # 空 → username へフォールバック
     )
 
-    with patch("millicall.workflows.email_sender.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+    with patch(
+        "millicall.workflows.email_sender.aiosmtplib.send", new_callable=AsyncMock
+    ) as mock_send:
         await sender.send(to="to@example.com", subject="件名", body="本文")
 
     msg: EmailMessage = mock_send.call_args.args[0]
@@ -163,7 +167,9 @@ async def test_starttls_and_auth_forwarded() -> None:
         password="pw",
     )
 
-    with patch("millicall.workflows.email_sender.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+    with patch(
+        "millicall.workflows.email_sender.aiosmtplib.send", new_callable=AsyncMock
+    ) as mock_send:
         await sender.send(to="to@example.com", subject="件名", body="本文")
 
     kwargs = mock_send.call_args.kwargs

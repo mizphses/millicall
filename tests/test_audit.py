@@ -24,9 +24,7 @@ async def test_login_success_creates_audit(client, app, user_factory):
     from millicall.models import AuditLog
 
     username, password = await user_factory(username="audituser", password="Audit123!")
-    resp = await client.post(
-        "/api/auth/login", json={"username": username, "password": password}
-    )
+    resp = await client.post("/api/auth/login", json={"username": username, "password": password})
     assert resp.status_code == 200
     sm = app.state.sessionmaker
     async with sm() as s:
@@ -45,9 +43,7 @@ async def test_login_failure_creates_audit(client, app):
 
     from millicall.models import AuditLog
 
-    resp = await client.post(
-        "/api/auth/login", json={"username": "nouser", "password": "wrongpw"}
-    )
+    resp = await client.post("/api/auth/login", json={"username": "nouser", "password": "wrongpw"})
     assert resp.status_code == 401
     sm = app.state.sessionmaker
     async with sm() as s:
@@ -80,9 +76,7 @@ async def test_logout_creates_audit(client, app, user_factory):
 
 async def test_audit_list_admin_only(client, user_factory):
     """GET /api/audit は管理者専用（非管理者は403）。"""
-    username, password = await user_factory(
-        username="regular", password="User123!", role="user"
-    )
+    username, password = await user_factory(username="regular", password="User123!", role="user")
     await client.post("/api/auth/login", json={"username": username, "password": password})
     resp = await client.get("/api/audit")
     assert resp.status_code == 403

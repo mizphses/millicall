@@ -13,6 +13,7 @@
   - max_turns 相当の上限時間超過時のフォールバック終話。
   - 実 FS 不要・実時間 sleep 回避（injectable clock/event）。
 """
+
 import asyncio
 
 import pytest
@@ -69,9 +70,7 @@ async def test_router_resolves_hangup_registry_on_hangup_complete():
     hangup_reg = HangupRegistry()
     fut = hangup_reg.register("u-hangup")
     router = MediaEventRouter(SessionRegistry(), hangup_registry=hangup_reg)
-    await router.handle(
-        {"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "u-hangup"}
-    )
+    await router.handle({"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "u-hangup"})
     assert await asyncio.wait_for(fut, timeout=1) is True
 
 
@@ -81,9 +80,7 @@ async def test_router_hangup_without_registry_is_backward_compatible():
     reg = SessionRegistry()
     reg.register("x", object(), object())
     router = MediaEventRouter(reg)
-    await router.handle(
-        {"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "x"}
-    )
+    await router.handle({"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "x"})
     # 従来どおり registry から pop されている。
     assert reg.get("x") is None
 
@@ -381,7 +378,9 @@ async def test_converse_full_flow_returns_transcript_and_summary(tmp_path):
     async def _run_session(*, call_uuid, transcript):
         transcript.append(("assistant", "もしもし、注文をお願いします。", 100))
         transcript.append(("user", "はい、どうぞ。", 0))
-        transcript.append(("assistant", "味噌ラーメンを1杯お願いします。ありがとうございました。", 120))
+        transcript.append(
+            ("assistant", "味噌ラーメンを1杯お願いします。ありがとうございました。", 120)
+        )
         # 終話は相手切断 or [END_CALL]→hangup。ここでは hangup_registry を解決。
         hangup_reg.resolve(call_uuid)
 

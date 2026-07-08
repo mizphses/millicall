@@ -150,7 +150,7 @@ async def test_feed_empty_digit_is_noop() -> None:
     """空文字列の digit は無視される。"""
     collector = DtmfCollector()
     collector.register("u6")
-    collector.feed("u6", "")   # no-op
+    collector.feed("u6", "")  # no-op
     collector.feed("u6", "3")
     bound = collector.bind("u6")
     result = await bound.collect(max_digits=1, timeout=0.1, terminator="")

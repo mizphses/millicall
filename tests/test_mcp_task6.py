@@ -15,13 +15,26 @@ import hashlib
 import json
 import secrets
 import urllib.parse
+from unittest.mock import MagicMock, patch
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from millicall.config import Settings
 from millicall.main import create_app
 from millicall.models import Contact, Extension, Trunk
+
+
+@pytest.fixture(autouse=True)
+def _admin_auth_context():
+    """H1 で mutating ツールが admin ゲートされたため、本番 middleware 相当の
+    admin AccessToken を注入する（lifespan が作る username=admin, role=admin を subject に）。
+    直接 call_tool するテストは auth context を経ないため、ここで補う。"""
+    tok = MagicMock()
+    tok.subject = "admin"
+    with patch("millicall.mcp_server.tools.get_access_token", return_value=tok):
+        yield
 
 # 契約 §1–§15 の 15 ツール名。
 EXPECTED_TOOLS = {
@@ -105,7 +118,16 @@ async def test_converse_signature_verbatim(mcp_app):
     converse = next(t for t in tools if t.name == "converse")
     props = converse.inputSchema["properties"]
     # 契約 §6 の引数名。
-    for arg in ("phone_number", "purpose", "key_points", "your_name", "max_turns", "caller_id", "trunk", "voice"):
+    for arg in (
+        "phone_number",
+        "purpose",
+        "key_points",
+        "your_name",
+        "max_turns",
+        "caller_id",
+        "trunk",
+        "voice",
+    ):
         assert arg in props, f"converse に引数 {arg} が無い"
 
 
@@ -243,7 +265,8 @@ async def test_dial_tool_timeout_shape(mcp_app):
     """応答が来ない → §1 タイムアウト JSON（channel_id 付き error）。"""
     mcp_app.state.esl_command = _FakeEsl()
     result = await mcp_app.state.mcp.call_tool(
-        "dial", {"phone_number": "800"}  # 内線（トランク不要）
+        "dial",
+        {"phone_number": "800"},  # 内線（トランク不要）
     )
     data = json.loads(_tool_text(result))
     assert data["error"] == "30秒以内に応答がありませんでした"
@@ -261,15 +284,17 @@ async def test_dial_tool_answered_shape(mcp_app):
     # dial 呼び出しと並行して、originate 後に登録された uuid を answer する。
     async def _resolve_soon():
         for _ in range(200):
-            uuids = [c.split("origination_uuid=")[1].split(",")[0] for c in fake.cmds if "origination_uuid=" in c]
+            uuids = [
+                c.split("origination_uuid=")[1].split(",")[0]
+                for c in fake.cmds
+                if "origination_uuid=" in c
+            ]
             if uuids:
                 reg.resolve(uuids[0])
                 return
             await asyncio.sleep(0.005)
 
-    call = asyncio.ensure_future(
-        mcp_app.state.mcp.call_tool("dial", {"phone_number": "800"})
-    )
+    call = asyncio.ensure_future(mcp_app.state.mcp.call_tool("dial", {"phone_number": "800"}))
     await _resolve_soon()
     result = await call
     data = json.loads(_tool_text(result))

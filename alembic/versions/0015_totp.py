@@ -4,6 +4,7 @@ Revision ID: 0015
 Revises: 0014
 Create Date: 2026-07-08
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -33,9 +34,7 @@ def upgrade() -> None:
                 server_default=sa.false(),
             )
         )
-        batch_op.add_column(
-            sa.Column("recovery_codes", sa.Text(), nullable=True)
-        )
+        batch_op.add_column(sa.Column("recovery_codes", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:

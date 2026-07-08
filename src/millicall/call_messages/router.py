@@ -17,9 +17,7 @@ async def list_call_messages(
     session: AsyncSession = Depends(get_session),
 ) -> list[CallMessage]:
     stmt = (
-        select(CallMessage)
-        .where(CallMessage.call_uuid == call_uuid)
-        .order_by(CallMessage.id.asc())
+        select(CallMessage).where(CallMessage.call_uuid == call_uuid).order_by(CallMessage.id.asc())
     )
     result = await session.scalars(stmt)
     return list(result)

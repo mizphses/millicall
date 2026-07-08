@@ -1,4 +1,5 @@
 """NetworkConfig / Device の __repr__ が機密フィールドを漏洩しないことを確認する。"""
+
 from millicall.models import Device, NetworkConfig
 
 

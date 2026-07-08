@@ -30,7 +30,7 @@ docker compose logs core | grep "初期管理者を作成しました"
 core が完全に起動しマイグレーション・設定生成が完了したことを確認してから次のステップに進む:
 
 ```bash
-curl -f http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1/healthz
 # 期待レスポンス: {"status":"ok"}
 ```
 
@@ -40,7 +40,7 @@ curl -f http://127.0.0.1:8000/healthz
 ## 2. ログインして内線を2件作成（API 経由）
 
 ```bash
-BASE=http://127.0.0.1:8000
+BASE=http://127.0.0.1
 # ログイン（Cookie を保存）
 curl -c cookie.txt -X POST "$BASE/api/auth/login" \
   -H 'Content-Type: application/json' \

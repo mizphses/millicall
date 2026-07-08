@@ -2,7 +2,9 @@
 set -euo pipefail
 
 MILLICALL_HOME="${MILLICALL_HOME:-$HOME/millicall}"
+REPO_RAW="${MILLICALL_REPO_RAW:-https://raw.githubusercontent.com/mizphses/millicall/main}"
 
+log() { printf '\033[1;34m[millicallctl]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[millicallctl] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ -f "${MILLICALL_HOME}/docker-compose.yml" ] \
@@ -11,6 +13,27 @@ cd "${MILLICALL_HOME}"
 
 dc() { docker compose "$@"; }
 
+# compose と .env.example を最新へ再取得する（新サービス追加・compose 変更を取り込むため）。
+# .env 本体は上書きしない（初回 install のみ生成）。.env.example は更新し、新設定変数を
+# 利用者が確認して .env に反映できるようにする。既存 compose は .bak に退避する。
+fetch_compose() {
+  log "compose / .env.example を最新へ取得中..."
+  cp -f docker-compose.yml docker-compose.yml.bak 2>/dev/null || true
+  curl -fsSL "${REPO_RAW}/deploy/docker-compose.prod.yml" -o docker-compose.yml \
+    || die "compose の取得に失敗しました（ネットワーク/URL を確認）"
+  curl -fsSL "${REPO_RAW}/.env.example" -o .env.example || true
+  # .env に未設定の新変数を通知する（自動反映はしない — 運用者が要否を判断）。
+  if [ -f .env ] && [ -f .env.example ]; then
+    new_vars="$(comm -23 \
+      <(grep -oE '^#?[[:space:]]*MILLICALL_[A-Z_]+' .env.example | sed 's/^#\?[[:space:]]*//' | sort -u) \
+      <(grep -oE '^MILLICALL_[A-Z_]+' .env | sort -u) 2>/dev/null || true)"
+    if [ -n "${new_vars}" ]; then
+      log ".env.example に .env 未設定の変数があります（必要なら .env へ反映してください）:"
+      printf '  %s\n' ${new_vars}
+    fi
+  fi
+}
+
 usage() {
   cat <<'EOF'
 millicallctl <command>
@@ -18,12 +41,13 @@ millicallctl <command>
   up               起動 (up -d)
   down             停止・削除
   restart          再起動
-  update           イメージ更新 (pull + up -d)
+  update           compose 再取得 + イメージ更新 (pull + up -d)
   pull             イメージ取得のみ
   logs [service]   ログ追尾 (既定: 全サービス)
   ps               コンテナ状態
   backup           data/ と .env を backups/ に tar.gz
   version          MILLICALL_VERSION と稼働イメージ digest
+  self-update      millicallctl 自身を最新へ更新
   help             このヘルプ
 EOF
 }
@@ -35,8 +59,25 @@ case "${cmd}" in
   up)       dc up -d ;;
   down)     dc down ;;
   restart)  dc restart ;;
-  update)   dc pull && dc up -d ;;
+  update)
+    # DB マイグレーションは core 起動時に自動実行される。更新前の backup を強く推奨。
+    fetch_compose
+    dc pull
+    dc up -d
+    log "更新完了。'millicallctl ps' と 'millicallctl logs core' で確認してください。"
+    ;;
   pull)     dc pull ;;
+  self-update)
+    tmp="$(mktemp)"
+    curl -fsSL "${REPO_RAW}/millicallctl" -o "${tmp}" || die "millicallctl の取得に失敗しました"
+    chmod +x "${tmp}"
+    dest="$(command -v millicallctl || echo /usr/local/bin/millicallctl)"
+    if mv "${tmp}" "${dest}" 2>/dev/null; then
+      log "millicallctl を更新しました: ${dest}"
+    else
+      sudo mv "${tmp}" "${dest}" && log "millicallctl を更新しました: ${dest}"
+    fi
+    ;;
   logs)     dc logs -f "$@" ;;
   ps)       dc ps ;;
   backup)

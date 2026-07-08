@@ -56,10 +56,7 @@ async def test_vertex_stream():
         token_provider=lambda: "test-token",
     )
     tokens = [
-        t
-        async for t in llm.stream_chat(
-            [ChatMessage("system", "sys"), ChatMessage("user", "hi")]
-        )
+        t async for t in llm.stream_chat([ChatMessage("system", "sys"), ChatMessage("user", "hi")])
     ]
     assert tokens == ["こん", "にちは"]
 
@@ -76,10 +73,7 @@ async def test_vertex_accepts_async_token_provider():
         token_provider=provider,
     )
     tokens = [
-        t
-        async for t in llm.stream_chat(
-            [ChatMessage("system", "sys"), ChatMessage("user", "hi")]
-        )
+        t async for t in llm.stream_chat([ChatMessage("system", "sys"), ChatMessage("user", "hi")])
     ]
     assert tokens == ["こん", "にちは"]
 

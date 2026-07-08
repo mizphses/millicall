@@ -79,7 +79,9 @@ async def admin_client(scim_app):
     transport = ASGITransport(app=scim_app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         # ログインして CSRF トークンを取得
-        r = await c.post("/api/auth/login", json={"username": "admin", "password": _admin_password(scim_app)})
+        r = await c.post(
+            "/api/auth/login", json={"username": "admin", "password": _admin_password(scim_app)}
+        )
         assert r.status_code == 200, r.text
         csrf = c.cookies.get("millicall_csrf", "")
         c.headers.update({"X-CSRF-Token": csrf})
@@ -103,17 +105,20 @@ async def known_admin_client(scim_app):
     async with sm() as session:
         # 既存の admin ユーザーを既知パスワードに更新
         from sqlalchemy import select
+
         admin = await session.scalar(select(User).where(User.username == "admin"))
         if admin:
             admin.hashed_password = hash_password("TestAdmin1!")
         else:
-            session.add(User(
-                username="admin",
-                hashed_password=hash_password("TestAdmin1!"),
-                display_name="Admin",
-                role="admin",
-                origin="local",
-            ))
+            session.add(
+                User(
+                    username="admin",
+                    hashed_password=hash_password("TestAdmin1!"),
+                    display_name="Admin",
+                    role="admin",
+                    origin="local",
+                )
+            )
         await session.commit()
 
     transport = ASGITransport(app=scim_app)
@@ -164,18 +169,22 @@ async def test_token_rotate_non_admin_forbidden(scim_app):
     """非管理者は POST /api/scim/token で 403 を受け取る。"""
     sm = scim_app.state.sessionmaker
     async with sm() as session:
-        session.add(User(
-            username="regular_user",
-            hashed_password=hash_password("Pass1234!"),
-            display_name="Regular",
-            role="user",
-            origin="local",
-        ))
+        session.add(
+            User(
+                username="regular_user",
+                hashed_password=hash_password("Pass1234!"),
+                display_name="Regular",
+                role="user",
+                origin="local",
+            )
+        )
         await session.commit()
 
     transport = ASGITransport(app=scim_app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        r = await c.post("/api/auth/login", json={"username": "regular_user", "password": "Pass1234!"})
+        r = await c.post(
+            "/api/auth/login", json={"username": "regular_user", "password": "Pass1234!"}
+        )
         assert r.status_code == 200
         csrf = c.cookies.get("millicall_csrf", "")
         c.headers.update({"X-CSRF-Token": csrf})
@@ -194,9 +203,12 @@ async def test_token_in_response_not_in_audit(known_admin_client, scim_app):
     from sqlalchemy import select
 
     from millicall.models import AuditLog
+
     sm = scim_app.state.sessionmaker
     async with sm() as session:
-        logs = (await session.scalars(select(AuditLog).where(AuditLog.action == "scim.token.rotate"))).all()
+        logs = (
+            await session.scalars(select(AuditLog).where(AuditLog.action == "scim.token.rotate"))
+        ).all()
         assert len(logs) >= 1
         for log in logs:
             detail = log.detail or ""
@@ -226,9 +238,7 @@ async def test_scim_wrong_bearer_401(known_admin_client, client):
 @pytest.mark.asyncio
 async def test_scim_disabled_returns_404(disabled_client):
     """scim_enabled=False 時は Bearer があっても 404。"""
-    r = await disabled_client.get(
-        "/scim/v2/Users", headers={"Authorization": "Bearer anytoken"}
-    )
+    r = await disabled_client.get("/scim/v2/Users", headers={"Authorization": "Bearer anytoken"})
     assert r.status_code == 404
 
 
@@ -269,6 +279,7 @@ async def test_create_user_scim(known_admin_client, client, scim_app):
     sm = scim_app.state.sessionmaker
     async with sm() as session:
         from sqlalchemy import select
+
         user = await session.scalar(select(User).where(User.username == "scim.alice"))
         assert user is not None
         assert user.origin == "scim"
@@ -337,7 +348,9 @@ async def test_list_users_filter_email(known_admin_client, client):
         headers=headers,
     )
 
-    r = await client.get('/scim/v2/Users?filter=emails.value eq "emailfilter@example.com"', headers=headers)
+    r = await client.get(
+        '/scim/v2/Users?filter=emails.value eq "emailfilter@example.com"', headers=headers
+    )
     assert r.status_code == 200
     assert r.json()["totalResults"] == 1
 
@@ -383,7 +396,11 @@ async def test_put_user_update(known_admin_client, client):
 
     r = await client.post(
         "/scim/v2/Users",
-        json={"schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"], "userName": "scim.put1", "displayName": "Old"},
+        json={
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "userName": "scim.put1",
+            "displayName": "Old",
+        },
         headers=headers,
     )
     assert r.status_code == 201
@@ -409,7 +426,9 @@ async def test_put_user_update(known_admin_client, client):
 
 
 @pytest.mark.asyncio
-async def test_patch_active_false_deactivates_and_revokes_session(known_admin_client, client, scim_app):
+async def test_patch_active_false_deactivates_and_revokes_session(
+    known_admin_client, client, scim_app
+):
     """PATCH active:false → enabled=False AND session_epoch 増加（即時セッション失効）。"""
     token = await _get_scim_token(known_admin_client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -426,6 +445,7 @@ async def test_patch_active_false_deactivates_and_revokes_session(known_admin_cl
     # 初期 epoch を記録
     sm = scim_app.state.sessionmaker
     from sqlalchemy import select
+
     async with sm() as session:
         user_before = await session.get(User, int(user_id))
         epoch_before = user_before.session_epoch
@@ -447,17 +467,22 @@ async def test_patch_active_false_deactivates_and_revokes_session(known_admin_cl
     async with sm() as session:
         user_after = await session.get(User, int(user_id))
         assert user_after.enabled is False, "enabled は False になるべき"
-        assert user_after.session_epoch > epoch_before, "session_epoch は増加するべき（即時セッション失効）"
+        assert user_after.session_epoch > epoch_before, (
+            "session_epoch は増加するべき（即時セッション失効）"
+        )
 
     # 監査ログに scim.user.deactivate が記録されていること
     from millicall.models import AuditLog
+
     async with sm() as session:
-        logs = (await session.scalars(
-            select(AuditLog).where(
-                AuditLog.action == "scim.user.deactivate",
-                AuditLog.target_id == str(user_id),
+        logs = (
+            await session.scalars(
+                select(AuditLog).where(
+                    AuditLog.action == "scim.user.deactivate",
+                    AuditLog.target_id == str(user_id),
+                )
             )
-        )).all()
+        ).all()
         assert len(logs) >= 1
 
 
@@ -621,13 +646,15 @@ async def test_local_user_not_in_list(known_admin_client, client, scim_app):
 
     sm = scim_app.state.sessionmaker
     async with sm() as session:
-        session.add(User(
-            username="local.invisible",
-            hashed_password=hash_password("Pass1!"),
-            display_name="Invisible",
-            role="user",
-            origin="local",
-        ))
+        session.add(
+            User(
+                username="local.invisible",
+                hashed_password=hash_password("Pass1!"),
+                display_name="Invisible",
+                role="user",
+                origin="local",
+            )
+        )
         await session.commit()
 
     r = await client.get("/scim/v2/Users", headers=headers)
@@ -669,7 +696,10 @@ async def test_groups_patch(known_admin_client, client):
 
     r = await client.post(
         "/scim/v2/Groups",
-        json={"schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"], "displayName": "test-group"},
+        json={
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+            "displayName": "test-group",
+        },
         headers=headers,
     )
     assert r.status_code == 201
@@ -768,7 +798,10 @@ async def test_secret_hygiene_token_not_in_user_response(known_admin_client, cli
 
     r = await client.post(
         "/scim/v2/Users",
-        json={"schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"], "userName": "scim.hygiene"},
+        json={
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "userName": "scim.hygiene",
+        },
         headers=headers,
     )
     assert r.status_code == 201

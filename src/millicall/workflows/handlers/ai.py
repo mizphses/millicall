@@ -192,9 +192,7 @@ async def handle_intent_detection(node: object, ctx: ChannelContext) -> str:
         return fallback
 
     # 意図一覧を文字列化してシステムプロンプトへ
-    intent_descriptions = "\n".join(
-        f"- {key}: {desc}" for key, desc in config.intents.items()
-    )
+    intent_descriptions = "\n".join(f"- {key}: {desc}" for key, desc in config.intents.items())
     system_msg = (
         "あなたはユーザの発話を分類するアシスタントです。\n"
         "以下の意図キーの中から最も適切な 1 つを選び、そのキー文字列のみを返答してください。"
@@ -379,9 +377,7 @@ async def _extract_variables(
         return
 
     # mode == "auto": LLM による抽出
-    var_descriptions = "\n".join(
-        f'"{name}": {desc}' for name, desc in extract_vars.items()
-    )
+    var_descriptions = "\n".join(f'"{name}": {desc}' for name, desc in extract_vars.items())
     transcript = "\n".join(f"{msg.role}: {msg.content}" for msg in history)
     extract_system = (
         "以下の会話から必要な情報を抽出してください。\n"

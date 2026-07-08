@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/mizphses/millicall/main/install.sh 
 4. 対話形式で `.env` を生成（初回のみ）
    - **サーバの LAN IP**: ホストの LAN 側 IP（例: `192.168.1.10`）。`MILLICALL_SIP_DOMAIN` に設定されます
    - **リリース版**: `latest`（推奨）/ `dev` / `vX.Y.Z`
-   - **cookie_secure**: 本番 HTTPS なら `true`、LAN HTTP 検証なら `false`
+   - **cookie_secure**: HTTPS 公開（Cloudflare/Tailscale）なら `true`、LAN 閉域運用なら `false`
 5. `millicallctl` を `/usr/local/bin`（または `~/.local/bin`）に配置
 6. `docker compose pull && docker compose up -d` でサービスを起動
 
@@ -55,7 +55,7 @@ millicallctl logs core | grep 初期管理者
 
 ## 4. 管理 GUI へのアクセス
 
-ブラウザで `http://<サーバのLAN-IP>:8000/` を開き、`admin` とメモしたパスワードでログインします。
+ブラウザで `http://<サーバのLAN-IP>/`（ポート 80、省略可）を開き、`admin` とメモしたパスワードでログインします。
 
 ログイン後に確認すべきページ:
 
@@ -72,6 +72,9 @@ millicallctl logs core | grep 初期管理者
 - **ネットワーク設定（DHCP/NAT）**: [ネットワーク設定](network.md)
 - **AI プロバイダ登録**: [プロバイダ追加](providers.md)
 - **更新・ロールバック**: [ops/deployment.md](ops/deployment.md)
+- **LAN 外からアクセスする（リモート公開）**:
+  - Cloudflare Tunnel 経由: [cloudflare.md](cloudflare.md)
+  - Tailscale 経由: [tailscale.md](tailscale.md)
 
 ## millicallctl コマンド早見表
 
@@ -79,7 +82,8 @@ millicallctl logs core | grep 初期管理者
 millicallctl up          # 起動
 millicallctl down        # 停止
 millicallctl restart     # 再起動
-millicallctl update      # イメージ更新（pull + up -d）
+millicallctl update      # 更新（compose 再取得 + イメージ pull + up -d、DBマイグレーションは自動）
+millicallctl self-update # millicallctl 自身を最新へ更新
 millicallctl logs core   # core ログ追尾
 millicallctl logs freeswitch  # freeswitch ログ追尾
 millicallctl ps          # コンテナ状態確認
@@ -87,4 +91,7 @@ millicallctl backup      # data/ と .env をバックアップ
 millicallctl version     # バージョン確認
 ```
 
-更新・ロールバック・バックアップの詳細手順は [ops/deployment.md](ops/deployment.md) を参照してください。
+**更新の基本**: `millicallctl backup` →  `millicallctl update` → `millicallctl ps` で確認。
+`update` は compose も再取得するため新サービス（netd 等）も取り込まれ、DB マイグレーションは
+core 起動時に自動実行されます。更新・ロールバック・移行注意（ポート 80 化等）の詳細手順は
+[ops/deployment.md](ops/deployment.md) を参照してください。

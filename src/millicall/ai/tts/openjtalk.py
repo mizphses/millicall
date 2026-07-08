@@ -16,9 +16,7 @@ from millicall.ai.audio import wav_to_pcm8k
 Runner = Callable[[str], bytes]
 
 _DEFAULT_DICT_DIR = "/var/lib/mecab/dic/open-jtalk/naist-jdic"
-_DEFAULT_VOICE_PATH = (
-    "/usr/share/hts-voice/nitech-jp-atr503-m001/nitech_jp_atr503_m001.htsvoice"
-)
+_DEFAULT_VOICE_PATH = "/usr/share/hts-voice/nitech-jp-atr503-m001/nitech_jp_atr503_m001.htsvoice"
 
 
 class OpenJTalkTTS:
@@ -52,9 +50,7 @@ class OpenJTalkTTS:
                 check=False,
             )
             if proc.returncode != 0:
-                raise RuntimeError(
-                    f"open_jtalk failed: {proc.stderr.decode(errors='replace')}"
-                )
+                raise RuntimeError(f"open_jtalk failed: {proc.stderr.decode(errors='replace')}")
             return out.read_bytes()
 
     async def synthesize(self, text: str) -> bytes:

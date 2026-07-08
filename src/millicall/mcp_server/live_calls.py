@@ -12,6 +12,7 @@
   - §10 list_active_calls: channel_id, state, caller_number,
                            connected_number, created_at
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -67,9 +68,7 @@ class LiveCallView:
             "caller_number": cdr.src_number if cdr else None,
             "connected_name": None,  # show channels パース不使用のため常に null
             "connected_number": cdr.dst_number if cdr else None,
-            "created_at": (
-                cdr.started_at.isoformat() if cdr and cdr.started_at else None
-            ),
+            "created_at": (cdr.started_at.isoformat() if cdr and cdr.started_at else None),
         }
 
     @staticmethod
@@ -80,9 +79,7 @@ class LiveCallView:
             "state": "Up",
             "caller_number": cdr.src_number if cdr else None,
             "connected_number": cdr.dst_number if cdr else None,
-            "created_at": (
-                cdr.started_at.isoformat() if cdr and cdr.started_at else None
-            ),
+            "created_at": (cdr.started_at.isoformat() if cdr and cdr.started_at else None),
         }
 
     async def get_status(self, uuid: str) -> dict | None:

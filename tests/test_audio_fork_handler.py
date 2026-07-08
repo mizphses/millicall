@@ -181,9 +181,7 @@ def _make_app(registry):
 
 def _ws_endpoint(app):
     register_media_ws(app)
-    route = next(
-        r for r in app.routes if getattr(r, "path", "") == "/media/audio-fork/{call_uuid}"
-    )
+    route = next(r for r in app.routes if getattr(r, "path", "") == "/media/audio-fork/{call_uuid}")
     return route.endpoint
 
 

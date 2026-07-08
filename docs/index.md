@@ -15,7 +15,7 @@ millicall は **フレッツ光電話（NTT HGW）に特化したローカル PB
                 │ ESL (127.0.0.1:8021) + WS 音声フォーク
 ┌───────────────▼──────────────────┐  host network
 │  core コンテナ                    │  (ghcr.io/mizphses/millicall-core)
-│  FastAPI (ポート 8000)            │
+│  FastAPI (ポート 80)              │
 │  SPA (Vite/React) 同梱           │
 └──────┬──────────────┬────────────┘
        │ UNIX socket  │ HTTP (127.0.0.1:2375)
@@ -65,13 +65,10 @@ millicall は **フレッツ光電話（NTT HGW）に特化したローカル PB
 | [トラブルシュート](troubleshooting.md) | よくある問題と対処 |
 | [セキュリティモデル](security-model.md) | 脅威モデルと防御構成 |
 
-### 実機検証 RUNBOOK（詳細手順）
+### 運用ドキュメント
 
-| RUNBOOK | 内容 |
+| ドキュメント | 内容 |
 |---|---|
-| [RUNBOOK-phase3-ai.md](RUNBOOK-phase3-ai.md) | 音声 AI パイプライン実機検証 |
-| [RUNBOOK-phase4a-mcp.md](RUNBOOK-phase4a-mcp.md) | MCP エージェント実機検証 |
-| [RUNBOOK-phase4b-workflow.md](RUNBOOK-phase4b-workflow.md) | ワークフロー実機検証 |
-| [RUNBOOK-phase5-netd.md](RUNBOOK-phase5-netd.md) | netd + ネットワーク実機検証 |
-| [RUNBOOK-phase6-auth.md](RUNBOOK-phase6-auth.md) | 認証強化 + 公開耐性チェックリスト |
 | [ops/deployment.md](ops/deployment.md) | デプロイ / 更新 / ロールバック / バックアップ |
+
+> 各機能の**実機検証手順（RUNBOOK）**はリポジトリの `runbooks/` に置いています（開発・検証者向けの内部手順のため公開ドキュメントには含めません）。

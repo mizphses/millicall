@@ -9,6 +9,7 @@ TOTP 2FA が有効なユーザーのログインフロー:
 TOTP 2FA が無効なユーザーのログインフロー:
   1. POST /login → パスワード検証成功後、直接セッション Cookie をセットして UserRead を返す
 """
+
 import json
 
 import pyotp
@@ -320,9 +321,7 @@ async def logout(
         secrets = request.app.state.secrets
         token = request.cookies.get(settings.session_cookie_name)
         if token:
-            session_data = read_session(
-                secrets.session_secret, token, settings.session_max_age
-            )
+            session_data = read_session(secrets.session_secret, token, settings.session_max_age)
             if session_data is not None:
                 user = await session.get(User, session_data.uid)
                 if user is not None:

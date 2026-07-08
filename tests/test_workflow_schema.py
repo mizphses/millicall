@@ -30,7 +30,10 @@ def test_start_config_defaults_ring_count_zero() -> None:
 
 def test_start_config_ring_count_upper_bound() -> None:
     # le=20: 上限内は許可、超過は拒否（無制限 pre-answer sleep 防止）。
-    assert parse_node({"id": "s", "type": "start", "config": {"ring_count": 20}}).config.ring_count == 20
+    assert (
+        parse_node({"id": "s", "type": "start", "config": {"ring_count": 20}}).config.ring_count
+        == 20
+    )
     with pytest.raises(ValidationError):
         parse_node({"id": "s", "type": "start", "config": {"ring_count": 21}})
 
@@ -180,7 +183,17 @@ def test_static_handle_vocab() -> None:
     assert HANDLE_VOCAB["email_notify"] == ["success", "error"]
     assert HANDLE_VOCAB["play_audio"] == ["out"]
     assert HANDLE_VOCAB["menu"] == [
-        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "timeout",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "0",
+        "timeout",
     ]
 
 
@@ -189,7 +202,17 @@ def test_output_handles_dtmf_single_digit() -> None:
         {"id": "d", "type": "dtmf_input", "config": {"max_digits": 1, "variable": "x"}}
     )
     assert output_handles(node) == [
-        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "timeout",
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "timeout",
     ]
 
 
@@ -233,7 +256,17 @@ def test_output_handles_intent_detection_dedup_fallback() -> None:
 def test_output_handles_menu() -> None:
     node = parse_node({"id": "m", "type": "menu", "config": {"prompt_text": "choose"}})
     assert output_handles(node) == [
-        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "timeout",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "0",
+        "timeout",
     ]
 
 
@@ -305,8 +338,11 @@ def test_unknown_source_handle_is_error() -> None:
     defn = _defn(
         [
             {"id": "s", "type": "start"},
-            {"id": "c", "type": "condition",
-             "config": {"variable": "x", "operator": "eq", "value": "1"}},
+            {
+                "id": "c",
+                "type": "condition",
+                "config": {"variable": "x", "operator": "eq", "value": "1"},
+            },
             {"id": "e", "type": "end"},
         ],
         [
@@ -337,8 +373,11 @@ def test_intent_detection_dynamic_handle_accepted() -> None:
     defn = _defn(
         [
             {"id": "s", "type": "start"},
-            {"id": "i", "type": "intent_detection",
-             "config": {"intents": {"foo": "d"}, "llm_provider_id": 1}},
+            {
+                "id": "i",
+                "type": "intent_detection",
+                "config": {"intents": {"foo": "d"}, "llm_provider_id": 1},
+            },
             {"id": "e", "type": "end"},
         ],
         [

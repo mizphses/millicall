@@ -5,6 +5,7 @@
 - public.xml 匿名着信拒否（sip_reject_anonymous=False/True）
 - Settings.sip_trusted_cidrs デフォルト値（HGW 192.168.1.1 を包含）
 """
+
 import defusedxml.ElementTree as ET  # noqa: N817
 
 from millicall.telephony.fsconfig import FreeswitchConfigWriter
@@ -104,6 +105,7 @@ def test_external_profile_acl_is_not_none(tmp_path) -> None:
     _writer(tmp_path).write_all([])
     content = (tmp_path / "sip_profiles" / "external.xml").read_text()
     import re
+
     # apply-inbound-acl パラメータの value が 'none' でないこと（コメント内の 'none' は無視）
     match = re.search(r'name="apply-inbound-acl"\s+value="([^"]+)"', content)
     assert match is not None, "apply-inbound-acl param が見つからない"
@@ -147,6 +149,7 @@ def test_anonymous_reject_does_not_match_numeric_caller_id(tmp_path) -> None:
     _writer(tmp_path, sip_reject_anonymous=True).write_all([])
     content = (tmp_path / "dialplan" / "public.xml").read_text()
     import re
+
     # 拒否 extension の condition 正規表現を取り出す
     match = re.search(r'reject_anonymous.*?expression="([^"]+)"', content, re.DOTALL)
     assert match is not None, "reject_anonymous extension の condition が見つからない"
@@ -186,7 +189,9 @@ def test_settings_default_sip_reject_anonymous_is_false() -> None:
     from millicall.config import Settings
 
     s = Settings()
-    assert s.sip_reject_anonymous is False, "非通知HGW回線保護のためデフォルトは False でなければならない"
+    assert s.sip_reject_anonymous is False, (
+        "非通知HGW回線保護のためデフォルトは False でなければならない"
+    )
 
 
 def test_settings_sip_trusted_cidrs_from_comma_string() -> None:

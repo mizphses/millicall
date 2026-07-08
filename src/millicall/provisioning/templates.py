@@ -14,6 +14,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from xml.etree.ElementTree import Element, SubElement, tostring
 
+from millicall.config import http_port_suffix
+
 if TYPE_CHECKING:
     from millicall.config import Settings
     from millicall.models import Extension, NetworkConfig
@@ -35,11 +37,14 @@ def _yealink_escape(value: str) -> str:
     return value.replace("\n", "").replace("\r", "")
 
 
-def _provisioning_base(network_config: NetworkConfig) -> str:
-    """provisioning_base_url が設定されていればそれを、なければ LAN IP のデフォルト URL を返す。"""
+def _provisioning_base(network_config: NetworkConfig, settings: Settings) -> str:
+    """provisioning_base_url が設定されていればそれを、なければ LAN IP + core の HTTP ポートを返す。
+
+    標準ポート 80 は URL から省略する（`http://<lan_ip>/`）。
+    """
     if network_config.provisioning_base_url:
         return network_config.provisioning_base_url.rstrip("/")
-    return f"http://{network_config.lan_ip}:8000"
+    return f"http://{network_config.lan_ip}{http_port_suffix(settings.http_port)}"
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +61,7 @@ def render_panasonic_common(
 
     行区切りは CRLF（Panasonic 標準）。
     """
-    base = _provisioning_base(network_config)
+    base = _provisioning_base(network_config, settings)
     lan_ip = network_config.lan_ip
     lines = [
         "# Panasonic SIP Phone Standard Format File #",
@@ -181,7 +186,7 @@ def render_yealink_boot(
 
     行区切りは LF。
     """
-    base = _provisioning_base(network_config)
+    base = _provisioning_base(network_config, settings)
     lines = [
         "#!version:1.0.0.1",
         "",
@@ -203,7 +208,7 @@ def render_yealink_common(
 
     行区切りは LF。
     """
-    base = _provisioning_base(network_config)
+    base = _provisioning_base(network_config, settings)
     lan_ip = network_config.lan_ip
     lines = [
         "#!version:1.0.0.1",
@@ -326,9 +331,9 @@ def render_panasonic_phonebook(contacts: list) -> bytes:
         entry = SubElement(root, "DirectoryEntry")
         SubElement(entry, "Name").text = name
         SubElement(entry, "Telephone").text = phone
-    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(
-        root, encoding="unicode"
-    ).encode("utf-8")
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode").encode(
+        "utf-8"
+    )
 
 
 def render_yealink_phonebook(contacts: list) -> bytes:
@@ -349,6 +354,6 @@ def render_yealink_phonebook(contacts: list) -> bytes:
         SubElement(entry, "Name").text = name
         tel = SubElement(entry, "Telephone")
         tel.text = phone
-    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(
-        root, encoding="unicode"
-    ).encode("utf-8")
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode").encode(
+        "utf-8"
+    )

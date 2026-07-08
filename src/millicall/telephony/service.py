@@ -25,7 +25,9 @@ _PREFIX_RE = re.compile(r"^[0-9]{2,8}$")
 
 
 def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfigWriter:
-    raw_prefixes = [p.strip() for p in settings.outbound_international_allow.split(",") if p.strip()]
+    raw_prefixes = [
+        p.strip() for p in settings.outbound_international_allow.split(",") if p.strip()
+    ]
     for p in raw_prefixes:
         if not _PREFIX_RE.match(p):
             raise ValueError(
@@ -117,12 +119,14 @@ class TelephonyChangeListener:
                             ring_count = int(start_nodes[0].get("config", {}).get("ring_count", 0))
                 except Exception:
                     ring_count = 0  # any parse error -> default 0, never raise
-            routes.append(RouteConfig(
-                match_number=r.match_number,
-                target_type=r.target_type,
-                target_value=r.target_value,
-                ring_count=ring_count,
-            ))
+            routes.append(
+                RouteConfig(
+                    match_number=r.match_number,
+                    target_type=r.target_type,
+                    target_value=r.target_value,
+                    ring_count=ring_count,
+                )
+            )
         return routes
 
     async def regenerate(self, session: AsyncSession) -> None:

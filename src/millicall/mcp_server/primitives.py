@@ -33,13 +33,11 @@ _BYTES_PER_SAMPLE = 2
 
 
 class _EslLike(Protocol):
-    async def bgapi(self, command: str) -> str:
-        ...
+    async def bgapi(self, command: str) -> str: ...
 
 
 class _CallControlLike(Protocol):
-    async def play_file(self, path: str) -> None:
-        ...
+    async def play_file(self, path: str) -> None: ...
 
 
 async def _default_read_recording(path: str) -> bytes:
@@ -102,9 +100,7 @@ class CallPrimitives:
         self._seq += 1
         path = self._tts_dir / f"mcp_listen_{self._call_uuid}_{self._seq}.wav"
         path_str = str(path)
-        await self._bgapi(
-            f"uuid_record {self._call_uuid} start {path_str} {max_seconds}"
-        )
+        await self._bgapi(f"uuid_record {self._call_uuid} start {path_str} {max_seconds}")
         try:
             # max_seconds を尊重して録音完了を待つ（テストは injectable sleep で即時）。
             await self._sleep(max_seconds)

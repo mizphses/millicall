@@ -91,7 +91,9 @@ class FreeswitchConfigWriter:
             "esl_password": esl_password,
             "external_sip_port": external_sip_port,
             "international_allow_prefixes": safe_prefixes,
-            "sip_trusted_cidrs": sip_trusted_cidrs if sip_trusted_cidrs is not None else _default_cidrs,
+            "sip_trusted_cidrs": sip_trusted_cidrs
+            if sip_trusted_cidrs is not None
+            else _default_cidrs,
             "sip_reject_anonymous": sip_reject_anonymous,
         }
         self._env = Environment(

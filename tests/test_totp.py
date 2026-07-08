@@ -7,6 +7,7 @@
   - 監査ログの確認
   - 秘密情報のリーク検査（シークレット・リカバリ平文が DB/監査に出ない）
 """
+
 import json
 
 import pyotp
@@ -228,9 +229,7 @@ async def test_login_totp_enabled_returns_ticket(client, app, user_factory):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        resp = await c.post(
-            "/api/auth/login", json={"username": username, "password": password}
-        )
+        resp = await c.post("/api/auth/login", json={"username": username, "password": password})
         assert resp.status_code == 200
         data = resp.json()
         assert data["totp_required"] is True
@@ -255,9 +254,7 @@ async def test_login_totp_correct_code_issues_session(client, app, user_factory)
         assert login_resp.status_code == 200
         ticket = login_resp.json()["ticket"]
         code = pyotp.TOTP(secret).now()
-        totp_resp = await c.post(
-            "/api/auth/login/totp", json={"ticket": ticket, "code": code}
-        )
+        totp_resp = await c.post("/api/auth/login/totp", json={"ticket": ticket, "code": code})
         assert totp_resp.status_code == 200
         assert "millicall_session" in totp_resp.cookies
         assert totp_resp.json()["username"] == username
@@ -277,9 +274,7 @@ async def test_login_totp_wrong_code_returns_401(client, app, user_factory):
             "/api/auth/login", json={"username": username, "password": password}
         )
         ticket = login_resp.json()["ticket"]
-        totp_resp = await c.post(
-            "/api/auth/login/totp", json={"ticket": ticket, "code": "000000"}
-        )
+        totp_resp = await c.post("/api/auth/login/totp", json={"ticket": ticket, "code": "000000"})
         assert totp_resp.status_code == 401
         assert "millicall_session" not in totp_resp.cookies
 
@@ -341,9 +336,7 @@ async def test_login_totp_disabled_user_via_ticket_returns_401(app):
             await s.commit()
 
         code = pyotp.TOTP(secret).now()
-        resp = await c.post(
-            "/api/auth/login/totp", json={"ticket": ticket, "code": code}
-        )
+        resp = await c.post("/api/auth/login/totp", json={"ticket": ticket, "code": code})
         assert resp.status_code == 401
 
 
@@ -372,9 +365,7 @@ async def test_login_totp_epoch_changed_after_ticket_returns_401(app):
             await s.commit()
 
         code = pyotp.TOTP(secret).now()
-        resp = await c.post(
-            "/api/auth/login/totp", json={"ticket": ticket, "code": code}
-        )
+        resp = await c.post("/api/auth/login/totp", json={"ticket": ticket, "code": code})
         assert resp.status_code == 401
 
 
@@ -398,9 +389,7 @@ async def test_recovery_code_login_succeeds(app):
         )
         ticket = login_resp.json()["ticket"]
         rc = recovery_codes[0]
-        resp = await c.post(
-            "/api/auth/login/totp", json={"ticket": ticket, "code": rc}
-        )
+        resp = await c.post("/api/auth/login/totp", json={"ticket": ticket, "code": rc})
         assert resp.status_code == 200
         assert "millicall_session" in resp.cookies
 

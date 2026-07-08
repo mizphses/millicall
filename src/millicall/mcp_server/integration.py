@@ -85,9 +85,7 @@ async def mcp_session_context(app: FastAPI) -> AsyncIterator[None]:
 
     # 起動完了（started）か、起動中の例外（task 完了）のどちらか早い方を待つ。
     started_wait = asyncio.ensure_future(started.wait())
-    done, _ = await asyncio.wait(
-        {task, started_wait}, return_when=asyncio.FIRST_COMPLETED
-    )
+    done, _ = await asyncio.wait({task, started_wait}, return_when=asyncio.FIRST_COMPLETED)
     if task in done:  # started 前に終了 = 起動失敗
         started_wait.cancel()
         task.result()  # 例外を送出

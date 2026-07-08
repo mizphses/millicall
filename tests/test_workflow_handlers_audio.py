@@ -175,9 +175,9 @@ async def test_play_audio_file_path_calls_play_file_not_say() -> None:
     [
         "/audio/x.wav; uuid_kill uuid",  # ESL コマンド連結
         "/audio/x.wav\nuuid_kill uuid",  # 改行注入
-        "/audio/x.wav && rm -rf /",       # シェルメタ
-        "/audio/`id`.wav",                # バッククォート
-        "/audio/x |tee.wav",              # 空白・パイプ
+        "/audio/x.wav && rm -rf /",  # シェルメタ
+        "/audio/`id`.wav",  # バッククォート
+        "/audio/x |tee.wav",  # 空白・パイプ
     ],
 )
 async def test_play_audio_rejects_injection_file_path(bad_path: str) -> None:
@@ -482,6 +482,7 @@ class _FakeStt:
         async def feed(self, pcm: bytes) -> None: ...
         async def finish(self) -> str:
             return "ok"
+
     def open_session(self) -> _FakeStt._Sess:
         return self._Sess()
 
@@ -582,13 +583,13 @@ def _make_prim(tmp_path: Path) -> object:
 @pytest.mark.parametrize(
     "bad_path",
     [
-        "/tmp/vm.wav; uuid_kill uuid-x",   # ESL コマンド連結
-        "/tmp/vm.wav\nuuid_kill uuid-x",   # 改行注入
-        "/tmp/vm.wav && rm -rf /",          # シェルメタ
-        "/tmp/vm $(whoami).wav",            # 空白・コマンド置換
-        "/tmp/`id`.wav",                    # バッククォート
-        "/tmp/vm|tee.wav",                  # パイプ
-        "",                                  # 空文字
+        "/tmp/vm.wav; uuid_kill uuid-x",  # ESL コマンド連結
+        "/tmp/vm.wav\nuuid_kill uuid-x",  # 改行注入
+        "/tmp/vm.wav && rm -rf /",  # シェルメタ
+        "/tmp/vm $(whoami).wav",  # 空白・コマンド置換
+        "/tmp/`id`.wav",  # バッククォート
+        "/tmp/vm|tee.wav",  # パイプ
+        "",  # 空文字
     ],
 )
 async def test_primitives_record_rejects_injection_paths(tmp_path: Path, bad_path: str) -> None:

@@ -1,4 +1,5 @@
 """ユーザー管理 API テスト (Task 9a)。"""
+
 from sqlalchemy import select
 
 
@@ -21,7 +22,9 @@ async def test_list_users_unauthenticated(client):
 
 async def test_list_users_non_admin(client, user_factory):
     """role=user では 403。"""
-    username, password = await user_factory(username="regularuser", password="Passw0rd1", role="user")
+    username, password = await user_factory(
+        username="regularuser", password="Passw0rd1", role="user"
+    )
     await _login_as(client, username, password)
     r = await client.get("/api/users")
     assert r.status_code == 403
@@ -29,7 +32,9 @@ async def test_list_users_non_admin(client, user_factory):
 
 async def test_list_users_admin(client, user_factory):
     """管理者は 200 かつ UserRead 形式（秘密フィールドなし）。"""
-    username, password = await user_factory(username="listadmin", password="Passw0rd1", role="admin")
+    username, password = await user_factory(
+        username="listadmin", password="Passw0rd1", role="admin"
+    )
     await _login_as(client, username, password)
     r = await client.get("/api/users")
     assert r.status_code == 200
@@ -56,7 +61,12 @@ async def test_create_user_success(auth_client):
     """ユーザー作成成功: 201 と UserRead が返る。"""
     r = await auth_client.post(
         "/api/users",
-        json={"username": "newuser1", "display_name": "New User", "password": "Passw0rd1", "role": "user"},
+        json={
+            "username": "newuser1",
+            "display_name": "New User",
+            "password": "Passw0rd1",
+            "role": "user",
+        },
     )
     assert r.status_code == 201
     data = r.json()
@@ -70,7 +80,12 @@ async def test_create_admin_user(auth_client):
     """管理者ユーザーの作成: 201。"""
     r = await auth_client.post(
         "/api/users",
-        json={"username": "newadmin1", "display_name": "New Admin", "password": "Passw0rd1", "role": "admin"},
+        json={
+            "username": "newadmin1",
+            "display_name": "New Admin",
+            "password": "Passw0rd1",
+            "role": "admin",
+        },
     )
     assert r.status_code == 201
     data = r.json()
@@ -79,7 +94,12 @@ async def test_create_admin_user(auth_client):
 
 async def test_create_user_duplicate_username(auth_client):
     """同じユーザー名は 409。"""
-    payload = {"username": "dupuser", "display_name": "Dup", "password": "Passw0rd1", "role": "user"}
+    payload = {
+        "username": "dupuser",
+        "display_name": "Dup",
+        "password": "Passw0rd1",
+        "role": "user",
+    }
     r1 = await auth_client.post("/api/users", json=payload)
     assert r1.status_code == 201
     r2 = await auth_client.post("/api/users", json=payload)
@@ -90,12 +110,24 @@ async def test_create_user_duplicate_email(auth_client):
     """同じメールアドレスは 409。"""
     r1 = await auth_client.post(
         "/api/users",
-        json={"username": "emailuser1", "display_name": "E1", "password": "Passw0rd1", "role": "user", "email": "dup@example.com"},
+        json={
+            "username": "emailuser1",
+            "display_name": "E1",
+            "password": "Passw0rd1",
+            "role": "user",
+            "email": "dup@example.com",
+        },
     )
     assert r1.status_code == 201
     r2 = await auth_client.post(
         "/api/users",
-        json={"username": "emailuser2", "display_name": "E2", "password": "Passw0rd1", "role": "user", "email": "dup@example.com"},
+        json={
+            "username": "emailuser2",
+            "display_name": "E2",
+            "password": "Passw0rd1",
+            "role": "user",
+            "email": "dup@example.com",
+        },
     )
     assert r2.status_code == 409
 
@@ -113,7 +145,12 @@ async def test_create_user_invalid_role(auth_client):
     """無効なロールは 422。"""
     r = await auth_client.post(
         "/api/users",
-        json={"username": "badroleu", "display_name": "Bad", "password": "Passw0rd1", "role": "superuser"},
+        json={
+            "username": "badroleu",
+            "display_name": "Bad",
+            "password": "Passw0rd1",
+            "role": "superuser",
+        },
     )
     assert r.status_code == 422
 
@@ -127,7 +164,9 @@ async def test_patch_user_disable_bumps_epoch(app, auth_client, user_factory):
     """ユーザーを無効化すると session_epoch がインクリメントされる。"""
     from millicall.models import User
 
-    username, password = await user_factory(username="epochtest1", password="Passw0rd1", role="user")
+    username, password = await user_factory(
+        username="epochtest1", password="Passw0rd1", role="user"
+    )
     sm = app.state.sessionmaker
     async with sm() as session:
         user = await session.scalar(select(User).where(User.username == username))
@@ -146,7 +185,9 @@ async def test_patch_user_role_change_bumps_epoch(app, auth_client, user_factory
     """ロール変更でも session_epoch がインクリメントされる。"""
     from millicall.models import User
 
-    username, password = await user_factory(username="epochtest2", password="Passw0rd1", role="user")
+    username, password = await user_factory(
+        username="epochtest2", password="Passw0rd1", role="user"
+    )
     sm = app.state.sessionmaker
     async with sm() as session:
         user = await session.scalar(select(User).where(User.username == username))
@@ -165,7 +206,9 @@ async def test_patch_last_admin_disable_blocked(app, client, user_factory):
     """唯一の有効な管理者を無効化しようとすると 400。"""
     from millicall.models import User
 
-    username, password = await user_factory(username="onlyadmin", password="Passw0rd1", role="admin")
+    username, password = await user_factory(
+        username="onlyadmin", password="Passw0rd1", role="admin"
+    )
     await _login_as(client, username, password)
 
     sm = app.state.sessionmaker
@@ -188,7 +231,9 @@ async def test_patch_last_admin_demote_blocked(app, client, user_factory):
     """唯一の有効な管理者のロールを変更しようとすると 400。"""
     from millicall.models import User
 
-    username, password = await user_factory(username="onlyadmin2", password="Passw0rd1", role="admin")
+    username, password = await user_factory(
+        username="onlyadmin2", password="Passw0rd1", role="admin"
+    )
     await _login_as(client, username, password)
 
     sm = app.state.sessionmaker
@@ -211,12 +256,23 @@ async def test_patch_email_uniqueness(auth_client):
     """別ユーザーのメールアドレスに変更しようとすると 409。"""
     r1 = await auth_client.post(
         "/api/users",
-        json={"username": "emailpatch1", "display_name": "EP1", "password": "Passw0rd1", "role": "user", "email": "unique@example.com"},
+        json={
+            "username": "emailpatch1",
+            "display_name": "EP1",
+            "password": "Passw0rd1",
+            "role": "user",
+            "email": "unique@example.com",
+        },
     )
     assert r1.status_code == 201
     r2 = await auth_client.post(
         "/api/users",
-        json={"username": "emailpatch2", "display_name": "EP2", "password": "Passw0rd1", "role": "user"},
+        json={
+            "username": "emailpatch2",
+            "display_name": "EP2",
+            "password": "Passw0rd1",
+            "role": "user",
+        },
     )
     assert r2.status_code == 201
     user2_id = r2.json()["id"]
@@ -234,14 +290,18 @@ async def test_reset_password_local_user(app, auth_client, user_factory):
     """ローカルユーザーのパスワードリセット: 200 + UserRead、epoch インクリメント。"""
     from millicall.models import User
 
-    username, password = await user_factory(username="localreset", password="Passw0rd1", role="user")
+    username, password = await user_factory(
+        username="localreset", password="Passw0rd1", role="user"
+    )
     sm = app.state.sessionmaker
     async with sm() as session:
         user = await session.scalar(select(User).where(User.username == username))
         user_id = user.id
         epoch_before = user.session_epoch
 
-    r = await auth_client.post(f"/api/users/{user_id}/reset-password", json={"new_password": "NewPassw0rd!"})
+    r = await auth_client.post(
+        f"/api/users/{user_id}/reset-password", json={"new_password": "NewPassw0rd!"}
+    )
     assert r.status_code == 200
     data = r.json()
     assert "id" in data
@@ -271,7 +331,9 @@ async def test_reset_password_saml_user(app, auth_client):
         await session.refresh(saml_user)
         user_id = saml_user.id
 
-    r = await auth_client.post(f"/api/users/{user_id}/reset-password", json={"new_password": "NewPassw0rd!"})
+    r = await auth_client.post(
+        f"/api/users/{user_id}/reset-password", json={"new_password": "NewPassw0rd!"}
+    )
     assert r.status_code == 400
 
 
@@ -294,7 +356,9 @@ async def test_reset_password_scim_user(app, auth_client):
         await session.refresh(scim_user)
         user_id = scim_user.id
 
-    r = await auth_client.post(f"/api/users/{user_id}/reset-password", json={"new_password": "NewPassw0rd!"})
+    r = await auth_client.post(
+        f"/api/users/{user_id}/reset-password", json={"new_password": "NewPassw0rd!"}
+    )
     assert r.status_code == 400
 
 
@@ -302,12 +366,19 @@ async def test_reset_password_weak(auth_client):
     """短いパスワードは 400 または 422。"""
     r = await auth_client.post(
         "/api/users",
-        json={"username": "weakresetuser", "display_name": "Weak", "password": "Passw0rd1", "role": "user"},
+        json={
+            "username": "weakresetuser",
+            "display_name": "Weak",
+            "password": "Passw0rd1",
+            "role": "user",
+        },
     )
     assert r.status_code == 201
     user_id = r.json()["id"]
 
-    r2 = await auth_client.post(f"/api/users/{user_id}/reset-password", json={"new_password": "abc"})
+    r2 = await auth_client.post(
+        f"/api/users/{user_id}/reset-password", json={"new_password": "abc"}
+    )
     assert r2.status_code in (400, 422)
 
 
@@ -315,13 +386,20 @@ async def test_reset_password_never_in_response(auth_client):
     """レスポンスにパスワード文字列が含まれない。"""
     r = await auth_client.post(
         "/api/users",
-        json={"username": "nopwinresp", "display_name": "NP", "password": "Passw0rd1", "role": "user"},
+        json={
+            "username": "nopwinresp",
+            "display_name": "NP",
+            "password": "Passw0rd1",
+            "role": "user",
+        },
     )
     assert r.status_code == 201
     user_id = r.json()["id"]
 
     new_pw = "MySecretPw99!"
-    r2 = await auth_client.post(f"/api/users/{user_id}/reset-password", json={"new_password": new_pw})
+    r2 = await auth_client.post(
+        f"/api/users/{user_id}/reset-password", json={"new_password": new_pw}
+    )
     assert r2.status_code == 200
     assert new_pw not in r2.text
 
@@ -337,7 +415,12 @@ async def test_delete_user_success(app, auth_client):
 
     r = await auth_client.post(
         "/api/users",
-        json={"username": "deleteme", "display_name": "Del", "password": "Passw0rd1", "role": "user"},
+        json={
+            "username": "deleteme",
+            "display_name": "Del",
+            "password": "Passw0rd1",
+            "role": "user",
+        },
     )
     assert r.status_code == 201
     user_id = r.json()["id"]
@@ -355,7 +438,9 @@ async def test_delete_self_blocked(app, client, user_factory):
     """管理者が自分自身を削除しようとすると 400。"""
     from millicall.models import User
 
-    username, password = await user_factory(username="selfdelete", password="Passw0rd1", role="admin")
+    username, password = await user_factory(
+        username="selfdelete", password="Passw0rd1", role="admin"
+    )
     await _login_as(client, username, password)
 
     sm = app.state.sessionmaker
@@ -397,9 +482,13 @@ async def test_delete_last_admin_blocked(app, user_factory):
     sm = app.state.sessionmaker
 
     # target: 唯一の有効な管理者
-    target_name, _ = await user_factory(username="lastadmin_target", password="Passw0rd1", role="admin")
+    target_name, _ = await user_factory(
+        username="lastadmin_target", password="Passw0rd1", role="admin"
+    )
     # actor: 別の管理者（後で DB 上で無効化する）
-    actor_name, _ = await user_factory(username="lastadmin_actor", password="Passw0rd1", role="admin")
+    actor_name, _ = await user_factory(
+        username="lastadmin_actor", password="Passw0rd1", role="admin"
+    )
 
     async with sm() as session:
         target = await session.scalar(select(User).where(User.username == target_name))
@@ -447,7 +536,12 @@ async def test_audit_create_recorded(app, auth_client):
 
     r = await auth_client.post(
         "/api/users",
-        json={"username": "auditcreate", "display_name": "AC", "password": "Passw0rd1", "role": "user"},
+        json={
+            "username": "auditcreate",
+            "display_name": "AC",
+            "password": "Passw0rd1",
+            "role": "user",
+        },
     )
     assert r.status_code == 201
     user_id = r.json()["id"]
@@ -468,7 +562,12 @@ async def test_audit_update_recorded(app, auth_client):
 
     r = await auth_client.post(
         "/api/users",
-        json={"username": "auditupdate", "display_name": "AU", "password": "Passw0rd1", "role": "user"},
+        json={
+            "username": "auditupdate",
+            "display_name": "AU",
+            "password": "Passw0rd1",
+            "role": "user",
+        },
     )
     assert r.status_code == 201
     user_id = r.json()["id"]
@@ -492,7 +591,12 @@ async def test_audit_reset_password_recorded(app, auth_client):
 
     r = await auth_client.post(
         "/api/users",
-        json={"username": "auditreset", "display_name": "AR", "password": "Passw0rd1", "role": "user"},
+        json={
+            "username": "auditreset",
+            "display_name": "AR",
+            "password": "Passw0rd1",
+            "role": "user",
+        },
     )
     assert r.status_code == 201
     user_id = r.json()["id"]
@@ -521,7 +625,12 @@ async def test_audit_delete_recorded(app, auth_client):
 
     r = await auth_client.post(
         "/api/users",
-        json={"username": "auditdelete", "display_name": "AD", "password": "Passw0rd1", "role": "user"},
+        json={
+            "username": "auditdelete",
+            "display_name": "AD",
+            "password": "Passw0rd1",
+            "role": "user",
+        },
     )
     assert r.status_code == 201
     user_id = r.json()["id"]

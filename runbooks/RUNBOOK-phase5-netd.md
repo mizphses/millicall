@@ -36,7 +36,7 @@ userspace-networking で起動する。
 
 1. **LAN/DHCP**: LAN インターフェース（例 `enp3s0`）、LAN IP（例 `172.20.0.1`）、
    プレフィックス（`16`）、DHCP レンジ、リース時間、プロビジョニング URL（空なら
-   `http://<lan_ip>:8000/provisioning/` を自動生成）を入力して保存。
+   `http://<lan_ip>/provisioning/` を自動生成（ポート 80 は省略））を入力して保存。
 2. **NAT**: 「NAT 有効」トグル + WAN インターフェース（HGW 配下の NIC）。保存。
 3. **「設定を適用」** を押す → core が netd に `apply_dhcp`→`apply_nat` を送る。
    - 失敗時は 502 とメッセージ（netd 未起動・適用失敗）が表示される。
@@ -45,16 +45,16 @@ userspace-networking で起動する。
 
 API で行う場合:
 ```bash
-curl -s http://192.168.1.3:8000/api/network -b cookie.txt            # 現在設定（auth key は返らない）
-curl -s -X PUT http://192.168.1.3:8000/api/network -b cookie.txt -H 'Content-Type: application/json' -d '{...}'
-curl -s -X POST http://192.168.1.3:8000/api/network/apply -b cookie.txt   # netd へ適用
-curl -s http://192.168.1.3:8000/api/network/tailscale/status -b cookie.txt
+curl -s http://192.168.1.3/api/network -b cookie.txt            # 現在設定（auth key は返らない）
+curl -s -X PUT http://192.168.1.3/api/network -b cookie.txt -H 'Content-Type: application/json' -d '{...}'
+curl -s -X POST http://192.168.1.3/api/network/apply -b cookie.txt   # netd へ適用
+curl -s http://192.168.1.3/api/network/tailscale/status -b cookie.txt
 ```
 
 ## 3. ゼロタッチプロビジョニング
 
 1. 電話機を LAN ポートに接続 → dnsmasq が IP + DHCP option 66（プロビジョニング URL）を配布。
-2. 電話機が `http://<lan_ip>:8000/provisioning/<機種>/...` を自動取得。
+2. 電話機が `http://<lan_ip>/provisioning/<機種>/...` を自動取得（ポート 80 は省略）。
    - **未登録 MAC には認証情報を返さない**（404）。まず GUI の /devices に「未割当」で現れる。
 3. GUI /devices → **「リース同期」** で dnsmasq リースを取り込み → 対象デバイスに
    **「内線割当」**（内線番号 + 表示名）→ quick-provision（Extension 作成 + provisioned +

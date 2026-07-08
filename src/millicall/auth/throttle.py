@@ -7,6 +7,7 @@
   - ログイン成功時は clear_failures を呼んで、該当ユーザー名の失敗行を削除する。
     （IP 失敗は残す。IP は複数ユーザーが共有する可能性があるため）
 """
+
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
@@ -30,7 +31,9 @@ async def _count_recent(
     """ウィンドウ内の失敗数を返す。"""
     since = _now_utc() - timedelta(seconds=window_seconds)
     result = await session.scalar(
-        select(func.count()).select_from(LoginAttempt).where(
+        select(func.count())
+        .select_from(LoginAttempt)
+        .where(
             LoginAttempt.key == key,
             LoginAttempt.created_at >= since,
         )
@@ -117,8 +120,26 @@ async def record_failure(
     """
     now = _now_utc()
     if ip:
-        session.add(LoginAttempt(key=ip, key_type="ip", ip_address=ip, username=username, action=action, created_at=now))
-    session.add(LoginAttempt(key=username, key_type="username", ip_address=ip, username=username, action=action, created_at=now))
+        session.add(
+            LoginAttempt(
+                key=ip,
+                key_type="ip",
+                ip_address=ip,
+                username=username,
+                action=action,
+                created_at=now,
+            )
+        )
+    session.add(
+        LoginAttempt(
+            key=username,
+            key_type="username",
+            ip_address=ip,
+            username=username,
+            action=action,
+            created_at=now,
+        )
+    )
 
 
 async def clear_failures(
@@ -136,7 +157,9 @@ async def clear_failures(
     """
     # ユーザー名キーの行を削除
     await session.execute(
-        delete(LoginAttempt).where(LoginAttempt.key == username, LoginAttempt.key_type == "username")
+        delete(LoginAttempt).where(
+            LoginAttempt.key == username, LoginAttempt.key_type == "username"
+        )
     )
     # IP キーのうち、このユーザーの失敗として記録された行も削除
     await session.execute(
