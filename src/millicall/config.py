@@ -15,6 +15,10 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("data")
     database_url: str = "sqlite+aiosqlite:///data/millicall.db"
+    # core が待受ける HTTP ポート。本番 compose は 80。dev で変える場合は MILLICALL_HTTP_PORT。
+    # プロビジョニング URL(option 66)・media_ws・healthcheck の既定はこのポートから導出する。
+    # TLS/443 はフロント(Cloudflare Tunnel / Tailscale Serve)に委譲し core は平文のみ配信する。
+    http_port: int = 80
     # SPA（管理 GUI）の配信元。存在するときのみ StaticFiles + SPA fallback を有効化する。
     # core イメージでは Dockerfile が /app/static にビルド済み dist を配置する。
     # 開発時は既定パスが存在しないため無効化され、Vite dev server + proxy を使う。
@@ -23,8 +27,9 @@ class Settings(BaseSettings):
     # TTS 音声を書き出す共有ディレクトリ（FreeSWITCH コンテナにも同一パスで bind mount）
     tts_cache_dir: Path = Path("data/freeswitch/tts")
     # FreeSWITCH の mod_audio_stream が core の音声受け WS へ接続するベース URL。
-    # host ネットワーキング前提のため既定は 127.0.0.1:8000（パス /media/audio-fork/<uuid> が付与される）。
-    media_ws_base_url: str = "ws://127.0.0.1:8000"
+    # host ネットワーキング前提。未設定(空文字)なら http_port から ws://127.0.0.1:<port> を導出する。
+    # 明示的に値を設定した場合はそれを優先する（パス /media/audio-fork/<uuid> が付与される）。
+    media_ws_base_url: str = ""
 
     sip_domain: str = "millicall.local"
     sip_port: int = 5060
@@ -176,6 +181,21 @@ class Settings(BaseSettings):
     phone_admin_username: str = "admin"
     phone_admin_password: str = "adminpass"
 
+    # --- TLS フロント (任意) ---
+    # True のとき netd は tailscale up 成功後に `tailscale serve` を張り、tailnet 上で
+    # http://localhost:<http_port> を HTTPS 公開する（管理画面/MCP のリモート公開）。
+    # 閉域運用ではインターネット非接続のため無効のまま(平文 LAN のみ)。
+    tailscale_serve_enabled: bool = False
+
+    @field_validator("media_ws_base_url", mode="after")
+    @classmethod
+    def _derive_media_ws(cls, v: str, info) -> str:
+        # 空文字なら http_port から ws://127.0.0.1:<port> を導出する。明示値はそのまま使う。
+        if v:
+            return v
+        port = info.data.get("http_port", 80)
+        return f"ws://127.0.0.1:{port}"
+
     @field_validator("mcp_allowed_hosts", mode="before")
     @classmethod
     def _split_allowed_hosts(cls, v: object) -> object:
@@ -191,6 +211,14 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [c.strip() for c in v.split(",") if c.strip()]
         return v
+
+
+def http_port_suffix(port: int) -> str:
+    """HTTP ポートを URL に付与する接尾辞を返す。標準ポート 80 は省略する。
+
+    例: 80 -> ""（`http://host/...`）、8000 -> ":8000"（`http://host:8000/...`）
+    """
+    return "" if port == 80 else f":{port}"
 
 
 @lru_cache

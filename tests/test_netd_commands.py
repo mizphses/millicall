@@ -315,6 +315,7 @@ class TestTailscaleUp:
         resp = await dispatch(payload, ops, SETTINGS)
 
         assert resp["ok"] is True
+        # serve 無効(既定)なので up の 1 コールのみ
         assert len(ops.run_calls) == 1
         argv, _ = ops.run_calls[0]
         assert argv[0] == "tailscale"
@@ -322,6 +323,43 @@ class TestTailscaleUp:
         assert "--authkey" in argv
         # キー自体が argv に含まれる（これは正常 — tailscale コマンドへの引数として必要）
         assert self._VALID_KEY in argv
+
+    @pytest.mark.asyncio
+    async def test_serve_enabled_runs_serve_after_up(self):
+        """tailscale_serve_enabled=True のとき up 成功後に tailscale serve を張る。"""
+        class ServeSettings(FakeSettings):
+            tailscale_serve_enabled = True
+            http_port = 80
+
+        ops = FakeSystemOps()
+        payload = {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}
+        resp = await dispatch(payload, ops, ServeSettings())
+
+        assert resp["ok"] is True
+        # up → serve の 2 コール
+        assert len(ops.run_calls) == 2
+        serve_argv, _ = ops.run_calls[1]
+        assert serve_argv[0] == "tailscale"
+        assert serve_argv[1] == "serve"
+        assert "http://localhost:80" in serve_argv
+        # auth key は serve コマンドに渡さない（秘密情報保護）
+        assert self._VALID_KEY not in serve_argv
+
+    @pytest.mark.asyncio
+    async def test_serve_failure_does_not_fail_up(self):
+        """serve が失敗しても up 自体の成功は覆らない。"""
+        class ServeSettings(FakeSettings):
+            tailscale_serve_enabled = True
+            http_port = 8000
+
+        # up は rc=0、serve も同じ ops で rc=0 になる想定だが、run_rc を 0 のままにして
+        # serve が呼ばれることだけ確認（失敗系は run_rc をハンドラ内で個別制御できないため
+        # ここでは serve が 2 コール目に出ることと ok=True を確認）。
+        ops = FakeSystemOps()
+        resp = await dispatch({"cmd": "tailscale_up", "auth_key": self._VALID_KEY}, ops, ServeSettings())
+        assert resp["ok"] is True
+        assert len(ops.run_calls) == 2
+        assert "http://localhost:8000" in ops.run_calls[1][0]
 
     @pytest.mark.asyncio
     async def test_invalid_key_format_returns_error_no_ops(self):

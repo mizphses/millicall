@@ -486,7 +486,8 @@ async def test_apply_derives_provisioning_url_when_empty(auth_client_with_teleph
         resp = await c.post("/api/network/apply")
         assert resp.status_code == 200
         dhcp_args = fake.apply_dhcp_calls[0]
-        assert dhcp_args["provisioning_url"] == "http://10.10.10.1:8000/provisioning/"
+        # 既定 http_port=80 → ポートは省略される
+        assert dhcp_args["provisioning_url"] == "http://10.10.10.1/provisioning/"
     finally:
         _remove_fake_netd(app)
 

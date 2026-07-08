@@ -58,10 +58,8 @@ services:
       - docker-proxy
     healthcheck:
       test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').getcode()==200 else 1)"
+        - CMD-SHELL
+        - "python -c \"import os,urllib.request,sys; p=os.environ.get('MILLICALL_HTTP_PORT','80'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{p}/healthz').getcode()==200 else 1)\""
       interval: 5s
       timeout: 3s
       retries: 30
@@ -111,6 +109,28 @@ services:
     restart: unless-stopped
     # netd は core の起動に依存しない (独立してネットワーク管理を担う)。
     # core の NetdClient は接続を per-call で試みるため、netd が後から起動しても動作する。
+    # Tailscale Serve: .env で MILLICALL_TAILSCALE_SERVE_ENABLED=true とすると、
+    # netd は tailscale up 成功後に `tailscale serve` を張り tailnet 上で HTTPS 公開する。
+
+  # ------------------------------------------------------------------
+  # cloudflared: Cloudflare Tunnel（任意・プロファイル起動）。
+  #
+  #   docker compose --profile cloudflare up -d
+  #
+  # で起動し、Cloudflare 側で公開ホスト名 → http://localhost:<MILLICALL_HTTP_PORT>
+  # のルーティングを設定する。管理画面/MCP を公開 HTTPS で提供する用途。
+  # .env に MILLICALL_CLOUDFLARE_TUNNEL_TOKEN を設定すること。
+  # 閉域運用ではインターネット非接続のため起動しない。
+  # ------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles:
+      - cloudflare
+    network_mode: host
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${MILLICALL_CLOUDFLARE_TUNNEL_TOKEN}
+    restart: unless-stopped
 
 volumes:
   # netd と core が UNIX ソケットを共有するための named volume。

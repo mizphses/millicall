@@ -12,10 +12,11 @@ netd への apply / tailscale 操作エンドポイントを提供する。
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from millicall.config import http_port_suffix
 from millicall.crypto import SecretBox
 from millicall.deps import get_netd_client, get_secret_box, get_session, require_admin
 from millicall.models import NetworkConfig
@@ -233,6 +234,7 @@ async def update_network_config(
 
 @router.post("/apply", response_model=ApplyResult)
 async def apply_network_config(
+    request: Request,
     session: AsyncSession = Depends(get_session),
     netd: NetdClient = Depends(get_netd_client),
 ) -> ApplyResult:
@@ -245,10 +247,13 @@ async def apply_network_config(
     cfg = await _get_or_create(session)
     await session.commit()
 
-    # provisioning_base_url が空の場合は lan_ip から構築する
+    # provisioning_base_url が空の場合は lan_ip + core の HTTP ポートから構築する
+    # （標準ポート 80 は URL から省略。option 66 が指す先 = core の待受ポート）。
     provisioning_url = cfg.provisioning_base_url
     if not provisioning_url:
-        provisioning_url = f"http://{cfg.lan_ip}:8000/provisioning/"
+        settings = request.app.state.settings
+        suffix = http_port_suffix(settings.http_port)
+        provisioning_url = f"http://{cfg.lan_ip}{suffix}/provisioning/"
 
     try:
         await netd.apply_dhcp(

@@ -208,6 +208,17 @@ async def tailscale_up(
         safe_stderr = redacted[:200]
         return _err(f"tailscale up 失敗 (rc={rc}): {safe_stderr}")
 
+    # tailscale_serve_enabled のとき、up 成功後に tailnet 上で HTTPS を張り
+    # http://localhost:<http_port> を公開する（管理画面/MCP のリモート公開）。
+    # serve の失敗は up 自体の成功を覆さない（警告のみ。auth key は serve コマンドに渡さない）。
+    if getattr(settings, "tailscale_serve_enabled", False):
+        port = getattr(settings, "http_port", 80)
+        s_rc, _s_out, s_err = await ops.run(
+            ["tailscale", "serve", "--bg", "--https=443", f"http://localhost:{port}"]
+        )
+        if s_rc != 0:
+            logger.warning("tailscale serve 失敗 (rc=%d): %s", s_rc, (s_err or "")[:200])
+
     return _ok()
 
 
