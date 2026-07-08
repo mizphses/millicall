@@ -1648,8 +1648,6 @@ export interface components {
             id: number;
             /** Number */
             number: string;
-            /** Sip Password */
-            sip_password: string;
         };
         /** ExtensionUpdate */
         ExtensionUpdate: {
@@ -1810,7 +1808,7 @@ export interface components {
          * ProviderKind
          * @enum {string}
          */
-        ProviderKind: "openai_compatible" | "anthropic" | "gemini" | "vertex_ai" | "voicevox" | "openjtalk" | "whisper" | "google_stt";
+        ProviderKind: "openai_compatible" | "anthropic" | "gemini" | "vertex_ai" | "voicevox" | "openjtalk" | "coefont" | "whisper" | "google_stt";
         /** ProviderRead */
         ProviderRead: {
             /** Api Key Masked */

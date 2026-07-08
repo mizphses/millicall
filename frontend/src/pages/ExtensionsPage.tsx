@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 
-import { css, cx } from "styled-system/css";
+import { css } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
@@ -78,7 +78,6 @@ export function ExtensionsPage() {
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<"number" | "display_name", string>>
   >({});
-  const [revealPassword, setRevealPassword] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<ExtensionRead | null>(null);
 
@@ -86,7 +85,6 @@ export function ExtensionsPage() {
     setEditing(null);
     setForm(emptyForm());
     setFieldErrors({});
-    setRevealPassword(false);
     setPanelOpen(true);
   }
 
@@ -94,7 +92,6 @@ export function ExtensionsPage() {
     setEditing(ext);
     setForm(formFromExtension(ext));
     setFieldErrors({});
-    setRevealPassword(false);
     setPanelOpen(true);
   }
 
@@ -295,24 +292,6 @@ export function ExtensionsPage() {
                 />
                 有効にする
               </label>
-
-              <Field label="SIP パスワード（自動生成・変更不可）">
-                <div className={css({ display: "flex", gap: "2" })}>
-                  <input
-                    className={cx(input(), css({ flex: "1" }))}
-                    type={revealPassword ? "text" : "password"}
-                    value={editing.sip_password}
-                    readOnly
-                  />
-                  <button
-                    type="button"
-                    className={button({ variant: "secondary", size: "sm" })}
-                    onClick={() => setRevealPassword((v) => !v)}
-                  >
-                    {revealPassword ? "隠す" : "表示"}
-                  </button>
-                </div>
-              </Field>
             </>
           ) : null}
         </form>

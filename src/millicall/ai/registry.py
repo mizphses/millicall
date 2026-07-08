@@ -12,8 +12,9 @@
     loopback (127.x.x.x) / link-local (169.254.x.x) / multicast / reserved / unspecified
     は拒否する（_resolve_and_check_ssrf_lan_allowed）。
     _PinnedTransport + follow_redirects=False で TOCTOU 対策と redirect 追跡を抑制。
-  * anthropic / gemini / vertex_ai / whisper / google_stt: エンドポイントはコードで
-    ハードコードされているため SSRF ガード不要（それぞれのクライアントライブラリが管理）。
+  * anthropic / gemini / vertex_ai / whisper / google_stt / coefont: エンドポイントは
+    コードでハードコードされているため SSRF ガード不要（coefont の 302 リダイレクト先は
+    CoeFont が署名発行する音声 URL で、ユーザー入力由来ではない）。
 """
 
 from urllib.parse import urlparse
@@ -77,7 +78,17 @@ def build_llm(kind: str, config: dict, api_key: str | None):
 
 
 def build_tts(kind: str, config: dict, api_key: str | None):
-    # TODO(phase4): google_tts / coefont をプロバイダ抽象に追加
+    # TODO(phase4): google_tts をプロバイダ抽象に追加
+    if kind == "coefont":
+        from millicall.ai.tts.coefont import CoefontTTS
+
+        return CoefontTTS(
+            access_key=config.get("access_key", ""),
+            access_secret=api_key or "",
+            coefont=config.get("coefont", ""),
+            speed=config.get("speed", 1.0),
+            pitch=config.get("pitch", 0.0),
+        )
     if kind == "voicevox":
         from millicall.ai.tts.voicevox import VoicevoxTTS
 
