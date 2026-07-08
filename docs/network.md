@@ -2,7 +2,7 @@
 
 millicall の netd コンテナが LAN ルーター機能（DHCP / DNS / NAT / Tailscale）を提供します。管理 GUI の `/network` ページから設定します。
 
-詳細な実機確認手順は [RUNBOOK-phase5-netd.md](RUNBOOK-phase5-netd.md) を参照してください。
+詳細な実機確認手順は RUNBOOK-phase5-netd.md（リポジトリ runbooks/ 参照） を参照してください。
 
 ## netd の役割とアーキテクチャ
 
@@ -89,4 +89,4 @@ curl -X POST -b cookie.txt http://192.168.1.10/api/network/apply
 | リース同期が 502 | netd 未起動、または電話機未接続で dnsmasq リースファイルが未生成 |
 | NAT が効かない | WAN インターフェース名が正しいか確認。「設定を適用」を実行済みか確認 |
 
-詳細: [RUNBOOK-phase5-netd.md § 5. トラブルシュート](RUNBOOK-phase5-netd.md)
+詳細: RUNBOOK-phase5-netd.md § 5. トラブルシュート（リポジトリ runbooks/ 参照）

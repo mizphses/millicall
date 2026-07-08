@@ -11,7 +11,7 @@ Tailscale の用途は **2 種類**あります。混同しないよう注意し
 
 ## 1. SIP 内線（tailnet 経由）
 
-詳細な実機確認手順は [RUNBOOK-phase5-netd.md](RUNBOOK-phase5-netd.md) を参照してください。
+詳細な実機確認手順は RUNBOOK-phase5-netd.md（リポジトリ runbooks/ 参照） を参照してください。
 
 ### 仕組み
 
@@ -132,4 +132,4 @@ MILLICALL_MCP_ALLOWED_HOSTS=millicall.your-tailnet-name.ts.net,localhost,127.0.0
 | `/dev/net/tun` がない | userspace-networking で動作。`millicallctl logs netd` で確認 |
 | Serve 有効化後に HTTPS でアクセスできない | `millicallctl logs netd` で `tailscale serve` の実行ログを確認。Tailscale が `Running` 状態か確認 |
 
-詳細: [RUNBOOK-phase5-netd.md § 4](RUNBOOK-phase5-netd.md)
+詳細: RUNBOOK-phase5-netd.md § 4（リポジトリ runbooks/ 参照）

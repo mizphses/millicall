@@ -2,7 +2,7 @@
 
 ワークフロー機能を使うと、着信をノードベースのフローで処理できます。IVR メニュー、AI 会話、時間帯分岐、メール通知など 19 種のノードを組み合わせます。エディタは `/workflows` の xyflow ベースの GUI で操作します。
 
-詳細な実機確認手順は [RUNBOOK-phase4b-workflow.md](RUNBOOK-phase4b-workflow.md) を参照してください。
+詳細な実機確認手順は RUNBOOK-phase4b-workflow.md（リポジトリ runbooks/ 参照） を参照してください。
 
 ## 前提
 
@@ -157,4 +157,4 @@ curl -X DELETE -b cookie.txt http://192.168.1.10/api/workflows/<id>
 | api_call が常に error | SSRF ガードで内部アドレスが拒否されている可能性。外部到達可能な URL か確認 |
 | フロー途中で停止 | 実行ステップ上限は 500。`goto` ループや過大なフローを見直す |
 
-詳細: [RUNBOOK-phase4b-workflow.md](RUNBOOK-phase4b-workflow.md)
+詳細: RUNBOOK-phase4b-workflow.md（リポジトリ runbooks/ 参照）

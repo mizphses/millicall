@@ -61,13 +61,13 @@ jobs:
           # 3-a. 対象ファイルを収集（superpowers/ を除外）
           #
           # 収集対象:
-          #   docs/*.md
-          #   docs/RUNBOOK-*.md  (上の *.md に含まれるが明示)
-          #   docs/ops/*.md
-          #   docs/runbooks/*.md
+          #   docs/*.md   （公開ユーザードキュメント）
+          #   docs/ops/*.md（デプロイ運用手順）
           #
           # 除外:
-          #   docs/superpowers/**  (find の -prune で確実に除外)
+          #   docs/superpowers/**  (AI 作業成果物。find の -prune で確実に除外)
+          #   実機検証 RUNBOOK はリポジトリ直下 runbooks/ に置き docs/ 外なので
+          #   そもそも収集対象に入らない（内部手順のため公開しない）。
           # ----------------------------------------------------------------
           declare -A WIKI_MAP  # wiki_page_name -> source_path (衝突検出用)
 
@@ -146,19 +146,9 @@ jobs:
             for f in "$WIKI_DIR"/*.md; do
               [[ -e "$f" ]] || continue
               page="$(basename "$f" .md)"
-              # RUNBOOK・Home・_ 系は別セクション
-              [[ "$page" == RUNBOOK-* ]] && continue
-              [[ "$page" == Home ]]      && continue
-              [[ "$page" == _* ]]        && continue
-              echo "- [[$page]]"
-            done | sort
-
-            echo ""
-            echo "## RUNBOOK"
-            echo ""
-            for f in "$WIKI_DIR"/RUNBOOK-*.md; do
-              [[ -e "$f" ]] || continue
-              page="$(basename "$f" .md)"
+              # Home・_ 系（_Sidebar 等）はナビに出さない
+              [[ "$page" == Home ]] && continue
+              [[ "$page" == _* ]]   && continue
               echo "- [[$page]]"
             done | sort
           } > "$WIKI_DIR/_Sidebar.md"
