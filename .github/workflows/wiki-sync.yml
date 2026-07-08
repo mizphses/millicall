@@ -1,0 +1,194 @@
+# wiki-sync.yml — docs/ → GitHub Wiki 自動同期
+#
+# !! 一回限りの手動初期化が必要 !!
+# GitHub Wiki のリポジトリ (*.wiki.git) はデフォルトでは存在しない。
+# clone が 404 で失敗する場合は以下を先に実施してください:
+#   1. GitHub の当リポジトリページ → "Wiki" タブを開く
+#   2. "Create the first page" ボタンで任意のページを 1 件作成する
+#   3. 以降はこのワークフローが自動管理する
+#
+# 除外ルール: docs/superpowers/ 配下は AI 作業成果物（内部計画・報告書等）であり
+# 絶対に公開 Wiki へ掲載してはならない。find の -prune で除外している。
+
+name: Wiki Sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. ソースリポジトリを取得 ────────────────────────────────────────
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── 2. Wiki リポジトリを clone ──────────────────────────────────────
+      - name: Clone wiki repo
+        id: clone_wiki
+        env:
+          WIKI_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git
+        run: |
+          set -euo pipefail
+          if ! git clone --depth=1 "$WIKI_URL" /tmp/wiki 2>&1; then
+            echo "::warning::Wiki リポジトリの clone に失敗しました。"
+            echo "::warning::GitHub の Wiki タブで最初のページを作成してから再実行してください。"
+            echo "wiki_exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "wiki_exists=true" >> "$GITHUB_OUTPUT"
+
+      # ── 3. docs/ を Wiki へ同期 ──────────────────────────────────────────
+      - name: Sync docs to wiki
+        if: steps.clone_wiki.outputs.wiki_exists == 'true'
+        run: |
+          set -euo pipefail
+
+          WIKI_DIR=/tmp/wiki
+          SRC_ROOT="${GITHUB_WORKSPACE}/docs"
+
+          # ----------------------------------------------------------------
+          # 3-a. 対象ファイルを収集（superpowers/ を除外）
+          #
+          # 収集対象:
+          #   docs/*.md
+          #   docs/RUNBOOK-*.md  (上の *.md に含まれるが明示)
+          #   docs/ops/*.md
+          #   docs/runbooks/*.md
+          #
+          # 除外:
+          #   docs/superpowers/**  (find の -prune で確実に除外)
+          # ----------------------------------------------------------------
+          declare -A WIKI_MAP  # wiki_page_name -> source_path (衝突検出用)
+
+          collect_file() {
+            local src="$1"
+            local basename
+            basename="$(basename "$src")"
+
+            # docs/index.md → Home.md (Wiki のランディングページ)
+            if [[ "$basename" == "index.md" ]]; then
+              basename="Home.md"
+            fi
+
+            # 同じ wiki ページ名へ複数のソースが衝突する場合は即座に失敗
+            if [[ -v WIKI_MAP["$basename"] ]]; then
+              echo "::error::Wiki ページ名の衝突: '$basename' が '$src' と '${WIKI_MAP[$basename]}' の両方からマップされます。"
+              exit 1
+            fi
+            WIKI_MAP["$basename"]="$src"
+          }
+
+          # docs/superpowers/ を prune しながら *.md を列挙
+          while IFS= read -r -d '' f; do
+            collect_file "$f"
+          done < <(
+            find "$SRC_ROOT" \
+              -path "$SRC_ROOT/superpowers" -prune \
+              -o -name "*.md" -print0
+          )
+
+          if [[ ${#WIKI_MAP[@]} -eq 0 ]]; then
+            echo "同期対象の .md ファイルが見つかりませんでした。スキップします。"
+            exit 0
+          fi
+
+          echo "同期対象: ${#WIKI_MAP[@]} ファイル"
+
+          # ----------------------------------------------------------------
+          # 3-b. 古い wiki ページを削除
+          #      このワークフローが生成したはずのページ（上記 WIKI_MAP のキー）で
+          #      今回のソースに存在しないものを削除する。
+          #      _Sidebar.md / _Footer.md など _ で始まるページは触らない。
+          # ----------------------------------------------------------------
+          for wiki_file in "$WIKI_DIR"/*.md; do
+            [[ -e "$wiki_file" ]] || continue
+            wiki_page="$(basename "$wiki_file")"
+
+            # _ で始まるページ（_Sidebar.md, _Footer.md 等）は保護
+            [[ "$wiki_page" == _* ]] && continue
+
+            if [[ ! -v WIKI_MAP["$wiki_page"] ]]; then
+              echo "削除 (ソース消滅): $wiki_page"
+              rm -f "$wiki_file"
+            fi
+          done
+
+          # ----------------------------------------------------------------
+          # 3-c. 最新ファイルをコピー
+          # ----------------------------------------------------------------
+          for wiki_page in "${!WIKI_MAP[@]}"; do
+            src="${WIKI_MAP[$wiki_page]}"
+            echo "コピー: $src → $WIKI_DIR/$wiki_page"
+            cp "$src" "$WIKI_DIR/$wiki_page"
+          done
+
+      # ── 4. _Sidebar.md を生成 ────────────────────────────────────────────
+      - name: Generate _Sidebar.md
+        if: steps.clone_wiki.outputs.wiki_exists == 'true'
+        run: |
+          set -euo pipefail
+          WIKI_DIR=/tmp/wiki
+
+          {
+            echo "## ユーザードキュメント"
+            echo ""
+            for f in "$WIKI_DIR"/*.md; do
+              [[ -e "$f" ]] || continue
+              page="$(basename "$f" .md)"
+              # RUNBOOK・Home・_ 系は別セクション
+              [[ "$page" == RUNBOOK-* ]] && continue
+              [[ "$page" == Home ]]      && continue
+              [[ "$page" == _* ]]        && continue
+              echo "- [[$page]]"
+            done | sort
+
+            echo ""
+            echo "## RUNBOOK"
+            echo ""
+            for f in "$WIKI_DIR"/RUNBOOK-*.md; do
+              [[ -e "$f" ]] || continue
+              page="$(basename "$f" .md)"
+              echo "- [[$page]]"
+            done | sort
+          } > "$WIKI_DIR/_Sidebar.md"
+
+          echo "_Sidebar.md を生成しました。"
+
+      # ── 5. コミット & プッシュ ─────────────────────────────────────────
+      - name: Commit and push wiki
+        if: steps.clone_wiki.outputs.wiki_exists == 'true'
+        env:
+          # github.sha は 40 桁 hex で攻撃者が制御できないが、
+          # セキュリティガイドラインに従い env: 経由で渡す。
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          WIKI_DIR=/tmp/wiki
+
+          cd "$WIKI_DIR"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          # 変更がなければスキップ（冪等）
+          if git diff --cached --quiet; then
+            echo "変更なし — プッシュをスキップします。"
+            exit 0
+          fi
+
+          git commit -m "docs: sync from ${COMMIT_SHA}"
+          git push
+          echo "Wiki へのプッシュが完了しました。"
