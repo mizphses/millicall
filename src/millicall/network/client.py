@@ -218,7 +218,8 @@ class NetdClient:
         """Tailscale VPN の現在ステータスを取得する。
 
         Returns:
-            netd から返された status 辞書（形式は tailscale status --json に準拠）。
+            netd から返された status 辞書。netd 側で安全なサブセットに
+            整形済み（backend_state / self / peers、キーは snake_case）。
 
         Raises:
             NetdError: 通信失敗またはサーバー側エラーの場合。

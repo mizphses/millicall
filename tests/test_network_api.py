@@ -33,7 +33,7 @@ class _FakeNetdClient:
         self.apply_nat_calls: list[dict] = []
         self.tailscale_up_calls: list[str] = []
         self.tailscale_down_calls: int = 0
-        self.tailscale_status_result: dict = {"BackendState": "Running"}
+        self.tailscale_status_result: dict = {"backend_state": "Running"}
 
         # エラーを注入したいときは True にする
         self.fail_apply_dhcp = False
@@ -560,7 +560,7 @@ async def test_apply_netd_error_returns_502(auth_client_with_telephony, app):
 async def test_tailscale_status_running(auth_client_with_telephony, app):
     """tailscale が Running のとき connected=True が返ること。"""
     fake = _FakeNetdClient()
-    fake.tailscale_status_result = {"BackendState": "Running"}
+    fake.tailscale_status_result = {"backend_state": "Running"}
     _inject_fake_netd(app, fake)
     try:
         c = auth_client_with_telephony

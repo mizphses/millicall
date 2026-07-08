@@ -294,7 +294,9 @@ async def tailscale_status(
     """
     try:
         detail = await netd.tailscale_status()
-        connected = bool(detail.get("BackendState") == "Running")
+        # netd の tailscale_status は safe subset (snake_case) を返す。
+        # tailscale status --json 生出力の "BackendState" ではない点に注意。
+        connected = bool(detail.get("backend_state") == "Running")
         return TailscaleStatusResult(connected=connected, detail=detail)
     except NetdError as exc:
         return TailscaleStatusResult(connected=False, error=str(exc))
