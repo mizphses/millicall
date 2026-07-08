@@ -1,25 +1,115 @@
-# millicall v2 (core)
+# millicall v2
 
-[![ci](https://github.com/mizphses/millicall/actions/workflows/ci.yml/badge.svg)](https://github.com/mizphses/millicall/actions/workflows/ci.yml)
+[![CI](https://github.com/mizphses/millicall/actions/workflows/ci.yml/badge.svg)](https://github.com/mizphses/millicall/actions/workflows/ci.yml)
+[![Release (stable)](https://github.com/mizphses/millicall/actions/workflows/release-stable.yml/badge.svg)](https://github.com/mizphses/millicall/actions/workflows/release-stable.yml)
+[![Release (dev)](https://github.com/mizphses/millicall/actions/workflows/release-dev.yml/badge.svg)](https://github.com/mizphses/millicall/actions/workflows/release-dev.yml)
 
-フレッツ特化ローカルPBX の core サービス（FastAPI + FreeSWITCH 制御）。
+## 概要
 
-## クイックデプロイ（本番 / amd64 Linux）
+フレッツ光回線の HGW（ホームゲートウェイ）に特化したローカル PBX システム。コアは **FastAPI**（ESL 制御・音声 AI・MCP サーバ）と **FreeSWITCH**（SIP/RTP 処理）で構成され、**React SPA** が管理 UI を担う。本番スタックは役割別 4 コンテナ（`core` / `freeswitch` / `netd` / `docker-proxy`）で動作し、GHCR のプリビルドイメージ（amd64）を `install.sh` ワンライナーで導入できる。
+
+## 主な機能
+
+- **内線・外線・ルーティング**: SIP 内線管理、外線トランク（SIP trunk）設定、着信ルーティング、CDR（通話明細）、電話帳、オンデマンド発信
+- **音声 AI パイプライン**: WebRTC VAD + ストリーミング STT（Google Speech-to-Text）+ 文分割 TTS（VoiceVox / OpenJTalk）+ バージイン（再生中の割り込み検知）。LLM は Anthropic / OpenAI / Gemini / Vertex AI に対応。TTS は VoiceVox / OpenJTalk 対応。STT は Google Cloud Speech-to-Text / Whisper 対応。プロバイダカタログは管理画面から切り替え可能
+- **MCPエージェント**: MCP over HTTP サーバ（`converse` を含む 15 ツール）を標準搭載。`dial` / `say` / `listen` / `hangup` 等の電話プリミティブと、`converse`（自律会話）、電話帳 CRUD、内線・トランク一覧など。OAuth2.1 による認証済み外部エージェント連携対応
+- **ワークフロー（IVR + AI ノード）**: xyflow ベースのビジュアルエディタで IVR フロー・AI 分岐ノードを構築。React SPA から設定・プレビューが可能
+- **ゼロタッチプロビジョニング + netd**: SIP 電話機向け自動設定配布（ZTP）。`netd` コンテナが dnsmasq（DHCP/DNS）・nftables NAT・Tailscale を管理し、フレッツ環境の NW 設定をコアから API 経由で制御
+- **認証強化**: TOTP 2FA、SAML SP（シングルサインオン）、SCIM プロビジョニング、操作監査ログ、レート制限、CSRF 保護、内線ごとの発信権限制御、SIP 多層防御、Docker socket-proxy（`docker.sock` は proxy コンテナのみに read-only マウント）
+- **ワンライナー導入 + GHCR プリビルドイメージ**: `install.sh` が compose・`.env` 生成・イメージ pull・起動を一括実施。イメージは GHCR（amd64）で公開。更新は `millicallctl update` 一発
+
+## クイックデプロイ
+
+**前提条件**: Docker Engine + Compose v2、amd64 Linux、フレッツ HGW 環境
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mizphses/millicall/main/install.sh | bash
 ```
 
-インストーラは `~/millicall` に compose と `.env` を配置し、GHCR からプリビルドイメージを pull して起動します。
-更新は `millicallctl update`。詳細は [docs/ops/deployment.md](docs/ops/deployment.md)。
+インストーラが `~/millicall/` に `docker-compose.yml` と `.env` を配置し、GHCR からプリビルドイメージを pull して起動する。対話項目: サーバ LAN IP・リリース版（`latest` 推奨）・`cookie_secure`。
 
-初期管理者パスワード（初回起動ログに一度だけ表示）:
+**初期管理者パスワード**（初回起動ログに一度だけ表示）:
 
 ```bash
 millicallctl logs core | grep 初期管理者
 ```
 
+**更新**:
+
+```bash
+millicallctl update
+```
+
+詳細は [docs/ops/deployment.md](docs/ops/deployment.md) を参照。
+
+### イメージ
+
+| イメージ | 用途 |
+|---|---|
+| `ghcr.io/mizphses/millicall-core` | FastAPI コア（ESL / AI / MCP）|
+| `ghcr.io/mizphses/millicall-freeswitch` | FreeSWITCH（mod_audio_stream 同梱）|
+| `ghcr.io/mizphses/millicall-netd` | ネットワーク管理デーモン |
+| `ghcr.io/tecnativa/docker-socket-proxy` | Docker API 最小公開プロキシ |
+
+タグ: `latest`（stable 最新）/ `vX.Y.Z`（固定）/ `dev` / `main-<sha>`（プレビュー）。
+
+> **arm64 について:** FreeSWITCH ベースイメージ（`safarov/freeswitch`）が amd64 専用のため、現時点のスタック全体が amd64 に固定。arm64 対応は将来課題。
+
+## ドキュメント
+
+以下のドキュメントは [GitHub Wiki](https://github.com/mizphses/millicall/wiki) にも同期される。
+
+| ドキュメント | 内容 |
+|---|---|
+| [docs/quickstart.md](docs/quickstart.md) | 5 分でわかるセットアップ手順 |
+| [docs/index.md](docs/index.md) | 総合目次 |
+| [docs/ops/deployment.md](docs/ops/deployment.md) | デプロイ・更新・ロールバック・バックアップ |
+| [docs/sso.md](docs/sso.md) | SAML SP / SCIM 設定 |
+| [docs/workflows.md](docs/workflows.md) | ワークフロー（IVR + AI ノード）の使い方 |
+| [docs/mcp.md](docs/mcp.md) | MCP エージェント API リファレンス |
+| [docs/security-model.md](docs/security-model.md) | セキュリティモデル（認証・防御・権限設計）|
+| [docs/troubleshooting.md](docs/troubleshooting.md) | よくあるトラブルと解決策 |
+
+## アーキテクチャ
+
+```
+フレッツ HGW
+    │  SIP/RTP (NAT 越え)
+    ▼
+┌─────────────┐       ESL       ┌────────────────────────────────┐
+│ freeswitch  │ ◄────────────► │  core (FastAPI)                │
+│  SIP / RTP  │                 │  ├─ ESL 制御 / ルーティング    │
+└─────────────┘                 │  ├─ 音声 AI (VAD/STT/TTS/LLM) │
+                                │  ├─ MCP サーバ (15 tools)      │
+                                │  ├─ ワークフローランナー        │
+                                │  ├─ REST API / SPA サーバ      │
+                                │  └─ 認証 (TOTP/SAML/SCIM)     │
+                                └───────────┬────────────────────┘
+                                            │ UNIX ソケット (/run/millicall)
+                                ┌───────────▼────────┐
+                                │  netd              │
+                                │  dnsmasq / nftables│
+                                │  NAT / Tailscale   │
+                                └────────────────────┘
+                                            │ HTTP (127.0.0.1:2375)
+                                ┌───────────▼────────┐
+                                │  docker-proxy      │
+                                │  socket-proxy      │
+                                │  (read-only 仲介)  │
+                                └────────────────────┘
+                                            │ ブラウザ
+                                ┌───────────▼────────┐
+                                │  React SPA         │
+                                │  管理画面 / ワーク  │
+                                │  フローエディタ     │
+                                └────────────────────┘
+```
+
+全コンテナは `network_mode: host`（docker-proxy を除く）。`core` と `netd` は名前付き volume（`millicall-run`）で UNIX ソケットを共有する。
+
 ## 開発
+
+### バックエンド（Python / uv）
 
 ```bash
 uv sync --extra dev
@@ -27,21 +117,23 @@ uv run pytest -q
 uv run ruff check .
 ```
 
-## 実行（ローカル）
+### フロントエンド（React / Vite）
 
 ```bash
-uv run uvicorn millicall.main:app --host 0.0.0.0 --port 8000
-# もしくは compose でスタック全体 (freeswitch イメージのビルドに時間がかかる)
+cd frontend
+npm install
+npm run build    # 本番ビルド
+npm run test     # vitest
+```
+
+### ローカル起動（スタック全体）
+
+```bash
 docker compose up -d --build
 ```
 
-## イメージ
+> `docs/superpowers/`・`.claude/`・`.superpowers/` は AI 補助ツールの作業ファイルであり gitignore 対象。
 
-- `ghcr.io/mizphses/millicall-core` — **amd64 のみ**（現時点）
-- `ghcr.io/mizphses/millicall-freeswitch` — **amd64 のみ**（mod_audio_stream 同梱）
+## ライセンス
 
-タグ: `latest`（stable 最新）、`vX.Y.Z`（stable 固定）、`dev` / `main-<sha>`（main プレビュー）。
-
-> **arm64 について:** runtime base `safarov/freeswitch`（pinned digest `sha256:b31c743f…`）は単一 amd64 マニフェストであり arm64 タグが存在しないため、現時点のスタック全体が amd64 に固定されています。arm64 対応は将来課題です（FreeSWITCH 1.10.x を arm64 向けにソースビルドするか arm64 対応 base イメージを選定する別スパイクが必要）。
-
-詳細な設計は `docs/`（Wiki 同期対象）を参照。
+準備中（LICENSE ファイル未設定）。
