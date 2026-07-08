@@ -59,6 +59,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+
+      # dev タグをビルド対象コミットへ移動する。
+      # release イベントはタグのコミット時点のワークフロー定義で実行されるため、
+      # タグが古いままだと (dev リリースが誤って released 化された場合に)
+      # 古いビルド定義で release-stable が走ってしまう。
+      - name: Move dev tag to current commit
+        run: |
+          git tag -f dev "${GITHUB_SHA}"
+          git push origin dev --force
+
       - name: Create/update dev prerelease
         uses: softprops/action-gh-release@v3
         with:
