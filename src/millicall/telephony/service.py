@@ -136,16 +136,24 @@ class TelephonyChangeListener:
         self._writer.write_all(configs, trunks, routes)
 
     @staticmethod
-    async def _esl_connect_and_reload(client: ESLClient) -> None:
+    async def _esl_connect_and_reload(client: ESLClient, sync_gateway: str | None = None) -> None:
         await client.connect()
         await client.reloadxml()
+        if sync_gateway is not None:
+            # reloadxml だけでは sofia ゲートウェイは再ロードされない。
+            # killgw で既存ゲートウェイを破棄し(未ロードなら -ERR だが無害)、
+            # rescan で XML 上のゲートウェイをロードする。ロード時に register=true の
+            # ゲートウェイは直ちに REGISTER を試行するため、保存直後に HGW 側で
+            # 登録状態を確認できる。削除時は XML に無いので rescan で再ロードされない。
+            await client.api(f"sofia profile external killgw {sync_gateway}")
+            await client.api("sofia profile external rescan")
 
-    async def notify(self, session: AsyncSession) -> None:
+    async def notify(self, session: AsyncSession, *, sync_gateway: str | None = None) -> None:
         await self.regenerate(session)
         client = self._esl_factory()
         try:
             await asyncio.wait_for(
-                self._esl_connect_and_reload(client),
+                self._esl_connect_and_reload(client, sync_gateway),
                 timeout=self._esl_timeout,
             )
         except TimeoutError:

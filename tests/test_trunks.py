@@ -115,3 +115,84 @@ async def test_delete_trunk(admin_client):
 
 async def test_trunks_require_auth(client):
     assert (await client.get("/api/trunks")).status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /api/trunks/{id}/status — sofia ゲートウェイ登録状態
+# ---------------------------------------------------------------------------
+
+
+class _FakeESL:
+    """trunk_status 用のフェイク ESL クライアント。"""
+
+    def __init__(self, response: str = "", fail_connect: bool = False) -> None:
+        self.response = response
+        self.fail_connect = fail_connect
+        self.commands: list[str] = []
+
+    async def connect(self) -> None:
+        if self.fail_connect:
+            raise OSError("FreeSWITCH unreachable")
+
+    async def api(self, command: str) -> str:
+        self.commands.append(command)
+        return self.response
+
+    async def close(self) -> None:
+        return None
+
+
+_SOFIA_REGED = "Name    \thgw\nProfile \texternal\nState   \tREGED\nStatus  \tUP\n"
+_SOFIA_FAILED = "Name    \thgw\nProfile \texternal\nState   \tFAIL_WAIT\nStatus  \tDOWN\n"
+
+
+async def _create_hgw(admin_client) -> int:
+    resp = await admin_client.post(
+        "/api/trunks",
+        json={
+            "name": "hgw",
+            "display_name": "ひかり電話",
+            "host": "192.168.1.1",
+            "username": "0312345678",
+            "password": "pw",
+        },
+    )
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+async def test_trunk_status_registered(admin_client, app):
+    tid = await _create_hgw(admin_client)
+    fake = _FakeESL(response=_SOFIA_REGED)
+    app.state.esl_factory = lambda: fake
+    resp = await admin_client.get(f"/api/trunks/{tid}/status")
+    assert resp.status_code == 200
+    assert resp.json() == {"registered": True, "state": "REGED"}
+    assert fake.commands == ["sofia status gateway hgw"]
+
+
+async def test_trunk_status_fail_wait(admin_client, app):
+    tid = await _create_hgw(admin_client)
+    app.state.esl_factory = lambda: _FakeESL(response=_SOFIA_FAILED)
+    resp = await admin_client.get(f"/api/trunks/{tid}/status")
+    assert resp.json() == {"registered": False, "state": "FAIL_WAIT"}
+
+
+async def test_trunk_status_gateway_not_loaded(admin_client, app):
+    tid = await _create_hgw(admin_client)
+    app.state.esl_factory = lambda: _FakeESL(response="Invalid Gateway!\n")
+    resp = await admin_client.get(f"/api/trunks/{tid}/status")
+    assert resp.json() == {"registered": False, "state": "NOT_LOADED"}
+
+
+async def test_trunk_status_fs_unreachable_returns_unknown(admin_client, app):
+    tid = await _create_hgw(admin_client)
+    app.state.esl_factory = lambda: _FakeESL(fail_connect=True)
+    resp = await admin_client.get(f"/api/trunks/{tid}/status")
+    assert resp.status_code == 200
+    assert resp.json() == {"registered": False, "state": "UNKNOWN"}
+
+
+async def test_trunk_status_missing_trunk_404(admin_client):
+    resp = await admin_client.get("/api/trunks/9999/status")
+    assert resp.status_code == 404
