@@ -104,7 +104,12 @@ export function WorkflowsPage() {
         number: form.number.trim(),
         description: form.description.trim(),
         enabled: true,
-        definition: { nodes: [], edges: [] },
+        // バックエンドは「start ノードちょうど1個」を必須とするため、
+        // 空グラフではなく start のみの最小定義で作成する(空だと 422 で作成不能)。
+        definition: {
+          nodes: [{ id: "start", type: "start", position: { x: 80, y: 80 }, config: {} }],
+          edges: [],
+        },
       }),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: WORKFLOWS_KEY });
