@@ -50,6 +50,28 @@ async def test_create_workflow_valid(auth_client_with_telephony):
 
 
 @pytest.mark.asyncio
+async def test_create_workflow_gui_minimal_definition(auth_client_with_telephony):
+    """GUI の新規作成が送る最小定義(start ノードのみ・edges 空)で 201 になること。
+
+    WorkflowsPage の createMutation と同じペイロード。空グラフ {nodes: [], edges: []}
+    は「start ちょうど1個」制約で 422 になるため、GUI は start 入りで作成する契約。
+    """
+    c = auth_client_with_telephony
+    resp = await _create_workflow(
+        c,
+        number="0503334444",
+        name="新規フロー",
+        definition={
+            "nodes": [
+                {"id": "start", "type": "start", "position": {"x": 80, "y": 80}, "config": {}}
+            ],
+            "edges": [],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
 async def test_list_and_get_workflow(auth_client_with_telephony):
     c = auth_client_with_telephony
     wid = (await _create_workflow(c)).json()["id"]
