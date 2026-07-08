@@ -15,13 +15,26 @@ import hashlib
 import json
 import secrets
 import urllib.parse
+from unittest.mock import MagicMock, patch
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from millicall.config import Settings
 from millicall.main import create_app
 from millicall.models import Contact, Extension, Trunk
+
+
+@pytest.fixture(autouse=True)
+def _admin_auth_context():
+    """H1 で mutating ツールが admin ゲートされたため、本番 middleware 相当の
+    admin AccessToken を注入する（lifespan が作る username=admin, role=admin を subject に）。
+    直接 call_tool するテストは auth context を経ないため、ここで補う。"""
+    tok = MagicMock()
+    tok.subject = "admin"
+    with patch("millicall.mcp_server.tools.get_access_token", return_value=tok):
+        yield
 
 # 契約 §1–§15 の 15 ツール名。
 EXPECTED_TOOLS = {

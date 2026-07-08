@@ -68,27 +68,25 @@ def _is_blocked_ip(ip_str: str) -> bool:
 
 
 def _is_blocked_ip_lan_allowed(ip_str: str) -> bool:
-    """LAN (RFC1918) へのアクセスを許可するが、危険アドレスはブロックする変種。
+    """自ホスト/LAN 型エンジン向けに loopback + RFC1918 を許可する変種。
 
-    VOICEVOX など自ホスト型エンジンが LAN 上にある場合に使用する。
-    以下はそれでもブロック:
-      * loopback (127.0.0.0/8, ::1)
-      * link-local (169.254.0.0/16, fe80::/10)  ← クラウドメタデータ等
+    VOICEVOX は既定で同梱コンテナ（localhost:50021）または LAN 上で稼働するため、
+    loopback と RFC1918 プライベートアドレスは許可する。以下はブロック:
+      * link-local (169.254.0.0/16, fe80::/10)  ← クラウドメタデータ 169.254.169.254 等
       * multicast
       * reserved (旧 IETF 特殊用途)
       * unspecified (0.0.0.0, ::)
 
-    RFC1918 プライベートアドレス（10/8, 172.16/12, 192.168/16）は許可する。
-    残存リスク: 同 LAN 上の任意ホストへのリクエストは防げないため、
-    管理者が engine_url を設定する際に適切なホストを指定する運用責任が必要。
+    残存リスク: loopback/同 LAN 上の任意ホスト/ポートへのリクエストは防げないため、
+    管理者が engine_url を設定する際に適切なホストを指定する運用責任が必要
+    （engine_url は admin 設定のため defense-in-depth 位置づけ）。
     """
     try:
         ip = _normalize_ip(ipaddress.ip_address(ip_str))
     except ValueError:
         return True  # パース不能 → 安全側でブロック
     return (
-        ip.is_loopback
-        or ip.is_link_local
+        ip.is_link_local
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
@@ -161,7 +159,7 @@ def _resolve_and_check_ssrf_lan_allowed(url: str) -> str:
         if _is_blocked_ip_lan_allowed(ip_str):
             raise ValueError(
                 f"SSRF ブロック: {host!r} が {ip_str!r} に解決され、"
-                "ループバック/リンクローカル等のアドレスへのアクセスは拒否されます"
+                "リンクローカル/マルチキャスト等の危険アドレスへのアクセスは拒否されます"
             )
 
     return resolved_ips[0]

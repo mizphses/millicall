@@ -110,27 +110,29 @@ def test_build_llm_openai_compat_transport_pinned_to_resolved_ip():
 # --------------------------------------------------------------------------- #
 
 
-def test_build_tts_voicevox_rejects_loopback():
-    """loopback (127.0.0.1) は voicevox engine_url でも拒否されること。
+def test_build_tts_voicevox_allows_loopback():
+    """loopback (127.0.0.1) は voicevox engine_url で許可されること。
 
-    デフォルト engine_url (http://127.0.0.1:50021) も同様に拒否される。
-    本番では LAN IP を指定すること。
+    VOICEVOX は既定で同梱コンテナ（localhost:50021）で稼働するため loopback は正当。
+    link-local（メタデータ）等の危険アドレスのみブロックする。
     """
     from millicall.ai import registry
+    from millicall.ai.tts.voicevox import VoicevoxTTS
 
-    with _mock_getaddrinfo("127.0.0.1"), pytest.raises(ValueError, match="ループバック"):
-        registry.build_tts(
+    with _mock_getaddrinfo("127.0.0.1"):
+        tts = registry.build_tts(
             "voicevox",
             {"engine_url": "http://127.0.0.1:50021", "speaker": 1},
             api_key=None,
         )
+    assert isinstance(tts, VoicevoxTTS)
 
 
 def test_build_tts_voicevox_rejects_link_local():
-    """link-local (169.254.x.x) は voicevox engine_url でも拒否されること。"""
+    """link-local (169.254.x.x = クラウドメタデータ) は voicevox engine_url でも拒否されること。"""
     from millicall.ai import registry
 
-    with _mock_getaddrinfo("169.254.169.254"), pytest.raises(ValueError, match="ループバック|リンクローカル"):
+    with _mock_getaddrinfo("169.254.169.254"), pytest.raises(ValueError, match="リンクローカル|SSRF"):
         registry.build_tts(
             "voicevox",
             {"engine_url": "http://metadata.local:50021", "speaker": 1},
