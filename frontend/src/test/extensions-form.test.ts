@@ -12,7 +12,6 @@ const original: ExtensionRead = {
   id: 1,
   number: "1001",
   display_name: "営業部 田中",
-  sip_password: "generated-secret",
   enabled: true,
   calling_permission: "domestic",
 };

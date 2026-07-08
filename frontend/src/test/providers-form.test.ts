@@ -18,8 +18,8 @@ import {
 } from "../pages/providers/formPayload";
 
 describe("KIND_CATALOG / typeForKind", () => {
-  it("8 種すべてが定義され、順序リストと一致する", () => {
-    expect(KIND_ORDER).toHaveLength(8);
+  it("9 種すべてが定義され、順序リストと一致する", () => {
+    expect(KIND_ORDER).toHaveLength(9);
     expect(Object.keys(KIND_CATALOG).sort()).toEqual([...KIND_ORDER].sort());
   });
 
@@ -30,6 +30,7 @@ describe("KIND_CATALOG / typeForKind", () => {
     expect(typeForKind("vertex_ai")).toBe("llm");
     expect(typeForKind("voicevox")).toBe("tts");
     expect(typeForKind("openjtalk")).toBe("tts");
+    expect(typeForKind("coefont")).toBe("tts");
     expect(typeForKind("whisper")).toBe("stt");
     expect(typeForKind("google_stt")).toBe("stt");
   });
@@ -39,6 +40,8 @@ describe("KIND_CATALOG / typeForKind", () => {
     expect(KIND_CATALOG.anthropic.usesApiKey).toBe(true);
     expect(KIND_CATALOG.gemini.usesApiKey).toBe(true);
     expect(KIND_CATALOG.whisper.usesApiKey).toBe(true);
+    // coefont は api_key 欄に access secret を入れる（access key は config 側）
+    expect(KIND_CATALOG.coefont.usesApiKey).toBe(true);
     expect(KIND_CATALOG.vertex_ai.usesApiKey).toBe(false);
     expect(KIND_CATALOG.voicevox.usesApiKey).toBe(false);
     expect(KIND_CATALOG.openjtalk.usesApiKey).toBe(false);

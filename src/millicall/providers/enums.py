@@ -14,6 +14,7 @@ class ProviderKind(enum.StrEnum):
     VERTEX_AI = "vertex_ai"
     VOICEVOX = "voicevox"
     OPENJTALK = "openjtalk"
+    COEFONT = "coefont"
     WHISPER = "whisper"
     GOOGLE_STT = "google_stt"
 
@@ -26,6 +27,6 @@ KIND_BY_TYPE: dict[ProviderType, set[ProviderKind]] = {
         ProviderKind.GEMINI,
         ProviderKind.VERTEX_AI,
     },
-    ProviderType.TTS: {ProviderKind.VOICEVOX, ProviderKind.OPENJTALK},
+    ProviderType.TTS: {ProviderKind.VOICEVOX, ProviderKind.OPENJTALK, ProviderKind.COEFONT},
     ProviderType.STT: {ProviderKind.WHISPER, ProviderKind.GOOGLE_STT},
 }

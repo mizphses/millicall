@@ -55,6 +55,7 @@ export const TYPE_LABEL: Record<ProviderType, string> = {
  * - vertex_ai: project / location / model / temperature（SA JSON 認証）
  * - voicevox: engine_url / speaker（api_key なし）
  * - openjtalk: dict_dir / voice_path（api_key なし・サーバ側パス）
+ * - coefont: access_key / coefont / speed / pitch（api_key = access secret）
  * - whisper: model / language（api_key あり）
  * - google_stt: project / location / language / model（SA JSON 認証 or ADC）
  */
@@ -140,6 +141,19 @@ export const KIND_CATALOG: Record<ProviderKind, KindDef> = {
       },
     ],
   },
+  coefont: {
+    kind: "coefont",
+    type: "tts",
+    label: "CoeFont",
+    description: "CoeFont CLOUD による音声合成（API キー欄には access secret を入力）",
+    usesApiKey: true,
+    fields: [
+      { key: "access_key", label: "アクセスキー", valueType: "string", placeholder: "CoeFont の access key" },
+      { key: "coefont", label: "CoeFont ID (声の UUID)", valueType: "string", placeholder: "xxxxxxxx-xxxx-..." },
+      { key: "speed", label: "話速 (0.1–10)", valueType: "number", placeholder: "1" },
+      { key: "pitch", label: "ピッチ (-3000–3000)", valueType: "number", placeholder: "0" },
+    ],
+  },
   whisper: {
     kind: "whisper",
     type: "stt",
@@ -175,6 +189,7 @@ export const KIND_ORDER: ProviderKind[] = [
   "vertex_ai",
   "voicevox",
   "openjtalk",
+  "coefont",
   "whisper",
   "google_stt",
 ];
