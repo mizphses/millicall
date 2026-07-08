@@ -451,3 +451,141 @@ async def test_access_token_revoked_when_epoch_bumped(mcp_app):
         u.session_epoch = (u.session_epoch or 0) + 1
         await s.commit()
     assert await provider.load_access_token("tok-c1e") is None
+
+
+# --------------------------------------------------------------------------
+# H2: /mcp-login/callback レート制限（ブルートフォース対策）
+# --------------------------------------------------------------------------
+
+
+def _mcp_settings_with_throttle(tmp_path, max_attempts: int = 3, lockout_seconds: int = 60):
+    """レート制限を小さい値に設定した MCP 用 Settings を生成する。"""
+    return Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
+        fs_config_dir=tmp_path / "fs",
+        cookie_secure=False,
+        esl_timeout_seconds=1.0,
+        mcp_issuer_url="http://localhost",
+        mcp_allowed_hosts=["localhost", "127.0.0.1"],
+        static_dir=tmp_path / "no-static",
+        login_max_attempts=max_attempts,
+        login_lockout_seconds=lockout_seconds,
+    )
+
+
+async def test_mcp_callback_throttle_username_lockout(tmp_path):
+    """同一ユーザー名で連続失敗すると /mcp-login/callback が 429 を返す（H2）。"""
+    app = create_app(_mcp_settings_with_throttle(tmp_path, max_attempts=3))
+    async with app.router.lifespan_context(app):
+        await _make_user(app, username="th1", password="Passw0rd1", role="admin")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://localhost") as c:
+            ticket = _ticket(app, client_id="cli")
+            # 3 回失敗
+            for _ in range(3):
+                r = await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket, "username": "th1", "password": "WrongPass"},
+                )
+                assert r.status_code == 401
+            # 4 回目は 429
+            r = await c.post(
+                "/mcp-login/callback",
+                data={"ticket": ticket, "username": "th1", "password": "WrongPass"},
+            )
+            assert r.status_code == 429
+
+
+async def test_mcp_callback_throttle_retry_after_header(tmp_path):
+    """429 レスポンスに Retry-After ヘッダーが含まれる（H2）。"""
+    app = create_app(_mcp_settings_with_throttle(tmp_path, max_attempts=2, lockout_seconds=120))
+    async with app.router.lifespan_context(app):
+        await _make_user(app, username="th2", password="Passw0rd1", role="admin")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://localhost") as c:
+            ticket = _ticket(app, client_id="cli")
+            for _ in range(2):
+                await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket, "username": "th2", "password": "WrongPass"},
+                )
+            r = await c.post(
+                "/mcp-login/callback",
+                data={"ticket": ticket, "username": "th2", "password": "WrongPass"},
+            )
+            assert r.status_code == 429
+            assert r.headers.get("Retry-After") == "120"
+
+
+async def test_mcp_callback_success_clears_counter(tmp_path):
+    """ログイン成功でカウンタがリセットされ、再び試行できる（H2）。"""
+    app = create_app(_mcp_settings_with_throttle(tmp_path, max_attempts=3))
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        await _make_user(app, username="th3", password="Passw0rd1", role="admin")
+        async with AsyncClient(transport=transport, base_url="http://localhost") as c:
+            # DCR でクライアント登録
+            client_id = await _register_client(c)
+            verifier, challenge = _pkce()
+
+            # 2 回失敗（上限未満）
+            ticket = _ticket(app, client_id="cli")
+            for _ in range(2):
+                r = await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket, "username": "th3", "password": "WrongPass"},
+                )
+                assert r.status_code == 401
+
+            # 成功でリセット（登録済みクライアント経由）
+            ticket2 = _ticket(app, client_id=client_id, code_challenge=challenge, state="ok")
+            r = await c.post(
+                "/mcp-login/callback",
+                data={"ticket": ticket2, "username": "th3", "password": "Passw0rd1"},
+            )
+            assert r.status_code == 302
+
+            # 再び 2 回失敗しても 429 にならない（カウンタがリセット済み）
+            ticket3 = _ticket(app, client_id="cli")
+            for _ in range(2):
+                r = await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket3, "username": "th3", "password": "WrongPass"},
+                )
+                assert r.status_code == 401
+
+
+async def test_mcp_callback_disabled_user_records_failure(tmp_path):
+    """無効化ユーザー認証試行も失敗として記録され、ロックアウトが発動する（H2）。"""
+    from sqlalchemy import func
+    from sqlalchemy import select as sa_select
+
+    from millicall.models import LoginAttempt
+
+    app = create_app(_mcp_settings_with_throttle(tmp_path, max_attempts=3))
+    async with app.router.lifespan_context(app):
+        await _make_user(app, username="th4", password="Passw0rd1", role="admin", enabled=False)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://localhost") as c:
+            ticket = _ticket(app, client_id="cli")
+            for _ in range(3):
+                await c.post(
+                    "/mcp-login/callback",
+                    data={"ticket": ticket, "username": "th4", "password": "Passw0rd1"},
+                )
+            # 4 回目は 429（失敗記録が蓄積されロックアウト）
+            r = await c.post(
+                "/mcp-login/callback",
+                data={"ticket": ticket, "username": "th4", "password": "Passw0rd1"},
+            )
+            assert r.status_code == 429
+
+        sm = app.state.sessionmaker
+        async with sm() as s:
+            count = await s.scalar(
+                sa_select(func.count())
+                .select_from(LoginAttempt)
+                .where(LoginAttempt.username == "th4")
+            )
+        assert count and count >= 3

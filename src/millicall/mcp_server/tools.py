@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from mcp.server.auth.middleware.auth_context import get_access_token
 from sqlalchemy import select
 
 from millicall.mcp_server.directory import Directory
@@ -28,7 +29,7 @@ from millicall.mcp_server.outbound import (
 from millicall.mcp_server.primitives import CallPrimitives
 from millicall.mcp_server.server import get_app_state
 from millicall.media.call_control import EslCallControl
-from millicall.models import Trunk
+from millicall.models import Trunk, User
 from millicall.telephony.esl import ESLError
 
 if TYPE_CHECKING:
@@ -70,6 +71,38 @@ def _build_outbound(state) -> OutboundCallService:
     )
 
 
+async def _require_admin_subject(state) -> str:
+    """現在のリクエストの認証サブジェクト（username）を取得し、admin ロールを要求する。
+
+    仕組み: AuthContextMiddleware が contextvars.ContextVar にセットした AccessToken を
+    get_access_token()（mcp.server.auth.middleware.auth_context）で取得する。
+    AccessToken.subject が OAuth ログイン時に username として記録されている。
+
+    role が admin でなければ McpError に相当するエラー文字列を返す代わりに ValueError を
+    送出し、呼び出し元がそれを MCP ツールエラーとして返す。
+
+    Returns:
+        subject (username) 文字列。
+
+    Raises:
+        ValueError: トークン不在・subject 不明・admin でない場合。
+    """
+    token = get_access_token()
+    if token is None or not token.subject:
+        raise ValueError("認証情報が取得できません")
+
+    subject = token.subject
+    sessionmaker = state.sessionmaker
+    async with sessionmaker() as session:
+        user = await session.scalar(select(User).where(User.username == subject))
+
+    if user is None:
+        raise ValueError(f"ユーザーが見つかりません: {subject}")
+    if user.role != "admin":
+        raise ValueError(f"この操作には管理者権限が必要です（現在のロール: {user.role}）")
+    return subject
+
+
 def register_tools(mcp: FastMCP) -> None:
     """契約 §1–§15 の 15 ツール + guide リソースを FastMCP に登録する。
 
@@ -101,6 +134,10 @@ def register_tools(mcp: FastMCP) -> None:
             voice: 現行版では未使用（互換のため受理して無視）。TODO(phase4b)。
         """
         state = get_app_state(mcp)
+        try:
+            await _require_admin_subject(state)
+        except ValueError as exc:
+            return _err(str(exc))
         try:
             providers = await resolve_default_providers(
                 state.sessionmaker, state.secrets, state.settings.mcp_default_agent_id
@@ -144,6 +181,10 @@ def register_tools(mcp: FastMCP) -> None:
             trunk: 使用するトランク（省略時自動選択）。
         """
         state = get_app_state(mcp)
+        try:
+            await _require_admin_subject(state)
+        except ValueError as exc:
+            return _err(str(exc))
         svc = _build_outbound(state)
         try:
             result = await svc.dial(phone_number, caller_id, trunk)
@@ -264,6 +305,10 @@ def register_tools(mcp: FastMCP) -> None:
             channel_id: dial が返した channel_id。
         """
         state = get_app_state(mcp)
+        try:
+            await _require_admin_subject(state)
+        except ValueError as exc:
+            return _err(str(exc))
         entry = state.session_registry.get(channel_id)
         if entry is not None:
             # 管理中の AI セッション: 登録済み CallControl で終話。
@@ -301,6 +346,10 @@ def register_tools(mcp: FastMCP) -> None:
         """
         state = get_app_state(mcp)
         try:
+            await _require_admin_subject(state)
+        except ValueError as exc:
+            return _err(str(exc))
+        try:
             cc = EslCallControl(
                 state.esl_command,
                 channel_id,
@@ -322,6 +371,10 @@ def register_tools(mcp: FastMCP) -> None:
             destination: 転送先内線番号。
         """
         state = get_app_state(mcp)
+        try:
+            await _require_admin_subject(state)
+        except ValueError as exc:
+            return _err(str(exc))
         try:
             cc = EslCallControl(
                 state.esl_command,
@@ -395,6 +448,10 @@ def register_tools(mcp: FastMCP) -> None:
             notes: メモ。
         """
         state = get_app_state(mcp)
+        try:
+            await _require_admin_subject(state)
+        except ValueError as exc:
+            return _err(str(exc))
         directory = Directory(state.sessionmaker)
         try:
             return _dumps(
@@ -418,6 +475,10 @@ def register_tools(mcp: FastMCP) -> None:
             contact_id: 削除する連絡先のID。
         """
         state = get_app_state(mcp)
+        try:
+            await _require_admin_subject(state)
+        except ValueError as exc:
+            return _err(str(exc))
         directory = Directory(state.sessionmaker)
         try:
             return _dumps(await directory.delete_contact(contact_id))
