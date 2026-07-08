@@ -81,6 +81,10 @@ async def lifespan(app: FastAPI):
     engine = create_db_engine(settings.database_url)
     app.state.engine = engine
     app.state.sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    # MCP OAuth の Bearer 面にも Cookie 面と同等の失効契約（enabled/session_epoch 照合）を
+    # 持たせるため sessionmaker を注入する（監査 C1）。
+    if _mcp_provider is not None:
+        _mcp_provider.set_sessionmaker(app.state.sessionmaker)
     writer = build_config_writer(settings, app.state.secrets)
     esl_factory = build_esl_factory(settings, app.state.secrets)
     app.state.esl_factory = esl_factory

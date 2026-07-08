@@ -55,13 +55,39 @@ class MillicallOAuthProvider(
         self._auth_codes: dict[str, AuthorizationCode] = {}
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, RefreshToken] = {}
+        # トークン発行時点の User.session_epoch（アクセス/リフレッシュ token 文字列 → epoch）。
+        # load_access_token / exchange_refresh_token で現在値と照合し、無効化（enabled=False）
+        # や失効（epoch bump: パスワード変更・logout-all・SCIM deactivate 等）を Bearer 面でも
+        # 即時反映する（Cookie 面の deps.get_current_user と同等の失効契約を MCP に持たせる）。
+        self._token_epoch: dict[str, int] = {}
         # ログイン往復（authorize→/mcp-login→callback）の間、認可パラメータを
         # 改ざん不能に保持するための署名器。secrets ロード後に lifespan で注入する。
         self._signer: SecretBox | None = None
+        # User.session_epoch/enabled 照合用の DB セッションファクトリ（lifespan で注入）。
+        # None のときは検証をスキップする（DB 非依存のユニットテスト用フォールバック）。
+        self._sessionmaker = None
 
     def set_signer(self, signer: SecretBox) -> None:
         """認可パラメータ署名用の SecretBox を注入する（lifespan で secrets ロード後）。"""
         self._signer = signer
+
+    def set_sessionmaker(self, sessionmaker) -> None:
+        """User.enabled/session_epoch 照合用の sessionmaker を注入する（lifespan）。"""
+        self._sessionmaker = sessionmaker
+
+    async def _current_user_state(self, subject: str) -> tuple[bool, int] | None:
+        """subject(username) の (enabled, session_epoch) を返す。不在/未配線時は None。"""
+        if self._sessionmaker is None:
+            return None
+        from sqlalchemy import select
+
+        from millicall.models import User
+
+        async with self._sessionmaker() as session:
+            user = await session.scalar(select(User).where(User.username == subject))
+        if user is None:
+            return None
+        return bool(user.enabled), int(user.session_epoch)
 
     def sign_login_ticket(self, payload: dict) -> str:
         """authorize パラメータを署名付き opaque トークンにする。"""
@@ -192,6 +218,7 @@ class MillicallOAuthProvider(
             expires_at=int(now + _REFRESH_TTL),
             subject=authorization_code.subject,
         )
+        await self._record_token_epoch(authorization_code.subject, access, refresh)
         logger.info(
             "MCP OAuth: issued tokens for subject=%s access=%s",
             authorization_code.subject,
@@ -226,6 +253,17 @@ class MillicallOAuthProvider(
         self._refresh_tokens.pop(refresh_token.token, None)
         assert client.client_id is not None
 
+        # リフレッシュ時にも enabled/epoch を再検証する。無効化/失効済みなら新トークンを
+        # 発行しない（漏洩リフレッシュトークンや無効化ユーザーの延命を防ぐ）。
+        state = await self._current_user_state(refresh_token.subject)
+        if state is not None:
+            enabled, current_epoch = state
+            issued_epoch = self._token_epoch.get(refresh_token.token)
+            if not enabled or (issued_epoch is not None and issued_epoch != current_epoch):
+                self._refresh_tokens.pop(refresh_token.token, None)
+                self._token_epoch.pop(refresh_token.token, None)
+                raise ValueError("refresh token no longer valid")
+
         use_scopes = scopes or refresh_token.scopes
         access = secrets.token_urlsafe(48)
         refresh = secrets.token_urlsafe(48)
@@ -244,6 +282,8 @@ class MillicallOAuthProvider(
             expires_at=int(now + _REFRESH_TTL),
             subject=refresh_token.subject,
         )
+        self._token_epoch.pop(refresh_token.token, None)
+        await self._record_token_epoch(refresh_token.subject, access, refresh)
         return OAuthToken(
             access_token=access,
             refresh_token=refresh,
@@ -259,11 +299,32 @@ class MillicallOAuthProvider(
             return None
         if stored.expires_at is not None and time.time() >= stored.expires_at:
             self._access_tokens.pop(token, None)
+            self._token_epoch.pop(token, None)
             return None
+        # 失効契約（監査 C1）: subject の User が存在し enabled、かつ発行時 epoch が現在値と
+        # 一致する場合のみ有効。無効化/失効済みならトークンを破棄して拒否する。
+        state = await self._current_user_state(stored.subject)
+        if state is not None:
+            enabled, current_epoch = state
+            issued_epoch = self._token_epoch.get(token)
+            if not enabled or (issued_epoch is not None and issued_epoch != current_epoch):
+                self._access_tokens.pop(token, None)
+                self._token_epoch.pop(token, None)
+                return None
         return stored
+
+    async def _record_token_epoch(self, subject: str, access: str, refresh: str) -> None:
+        """発行したトークンに subject の現在 session_epoch を紐づける（失効照合用）。"""
+        state = await self._current_user_state(subject)
+        if state is None:
+            return
+        _enabled, epoch = state
+        self._token_epoch[access] = epoch
+        self._token_epoch[refresh] = epoch
 
     # -- 失効 --
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         self._access_tokens.pop(token.token, None)
         self._refresh_tokens.pop(token.token, None)
+        self._token_epoch.pop(token.token, None)
