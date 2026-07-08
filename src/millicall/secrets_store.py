@@ -27,6 +27,9 @@ def load_or_create_secrets(data_dir: Path) -> Secrets:
             ) from exc
 
     data_dir.mkdir(parents=True, exist_ok=True)
+    # data/ ディレクトリのパーミッションを 700 に制限する（M7: 他ユーザーからの読み取り防止）。
+    # mkdir(exist_ok=True) はパーミッションを変更しないため、明示的に chmod する。
+    os.chmod(data_dir, 0o700)
     secrets = Secrets(
         session_secret=generate_password(48),
         master_key=generate_password(48),

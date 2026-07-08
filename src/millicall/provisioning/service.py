@@ -195,6 +195,13 @@ async def resync_phone(
     if not device.ip_address:
         return False
 
+    # 資格情報が未設定(空)なら resync をスキップする（監査 M2: phone_admin の既定を空にした。
+    # 空の Basic 認証を電話機へ送らない fail-closed 動作）。運用者が
+    # MILLICALL_PHONE_ADMIN_USERNAME/PASSWORD を設定して初めて resync が有効になる。
+    if not admin_username or not admin_password:
+        logger.info("resync_phone: 電話機管理者資格情報が未設定のため resync をスキップ")
+        return False
+
     ip = device.ip_address
 
     # --- SSRF ガード: デバイス IP の分類チェック ---

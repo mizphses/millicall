@@ -49,5 +49,7 @@ COPY --from=webbuilder /web/dist /app/static
 # Tailscale Serve)に委譲する。ポートは MILLICALL_HTTP_PORT で上書き可。
 EXPOSE 80
 
-# shell 形式で MILLICALL_HTTP_PORT を uvicorn --port に渡す（既定 80）。
-CMD ["sh", "-c", "uv run --no-dev uvicorn millicall.main:app --host 0.0.0.0 --port ${MILLICALL_HTTP_PORT:-80}"]
+# shell 形式で MILLICALL_HTTP_PORT / MILLICALL_HTTP_BIND を uvicorn に渡す。
+# MILLICALL_HTTP_BIND デフォルト: 0.0.0.0（nftables INPUT フィルタが LAN 限定ゲートになる）。
+# CF-Tunnel / Tailscale 専用デプロイでは 127.0.0.1 に設定し LAN/WAN 露出を完全排除できる。
+CMD ["sh", "-c", "uv run --no-dev uvicorn millicall.main:app --host ${MILLICALL_HTTP_BIND:-0.0.0.0} --port ${MILLICALL_HTTP_PORT:-80}"]

@@ -150,43 +150,83 @@ def render_nftables_ruleset(
     lan_ip: str,
     lan_prefix: int,
     wan_interface: str,
+    http_port: int = 80,
     table_name: str = "millicall_nat",
 ) -> str:
-    """nftables マスカレードルールセット文字列を生成する。
+    """nftables マスカレード + INPUT フィルタルールセット文字列を生成する。
 
     ``nft -f -`` の標準入力に渡すことを想定した nftables ルールセットを返す。
-    enabled=False の場合はテーブルのフラッシュのみ行う安全なルールセットを返す。
+    enabled=False の場合は NAT テーブルのフラッシュのみ行うが、INPUT フィルタ
+    （millicall_filter テーブル）は常に適用する（HTTP ポートは NAT 有無にかかわらず
+    LAN CIDR＋ループバックのみに限定し、WAN インターフェイスからは DROP する）。
 
     ip_forward の有効化は commands.py 側で sysctl 経由で行うため、
     このモジュールでは nftables ルールのみを生成する。
 
     Args:
         enabled: True のとき NAT マスカレードを有効化するルールを生成する。
-                 False のとき既存テーブルをフラッシュ（削除）するルールを生成する。
+                 False のとき既存 NAT テーブルをフラッシュ（削除）するルールを生成する。
         lan_ip: LAN IP アドレス（CIDR のホスト部）。
         lan_prefix: CIDR プレフィックス長。
-        wan_interface: WAN インターフェイス名（マスカレード出口）。
-        table_name: nftables テーブル名（デフォルト: "millicall_nat"）。
+        wan_interface: WAN インターフェイス名（マスカレード出口 / HTTP DROP 対象 if）。
+        http_port: core が待受ける HTTP ポート番号（デフォルト: 80）。
+                   LAN CIDR + loopback からのみ許可し、WAN インターフェイスからは DROP する。
+        table_name: nftables NAT テーブル名（デフォルト: "millicall_nat"）。
 
     Returns:
         nftables ルールセット文字列（``nft -f -`` への stdin として使用）。
 
     Raises:
         ValueError: いずれかの引数が不正な場合。
+
+    設計メモ — INPUT フィルタの適用タイミング:
+        INPUT フィルタ（millicall_filter テーブル）は enabled=True/False にかかわらず
+        常に生成・適用する。HTTP ポートの LAN 限定保護は NAT 有効/無効と直交する
+        セキュリティ要件であり、NAT を切っても HTTP 管理面が WAN に晒されては困る。
+        CF-Tunnel / Tailscale 専用デプロイ（http_bind=127.0.0.1）ではこのフィルタが
+        多層防御の第二層になる。
     """
     # --- 入力検証 ---
     validate_ipv4(lan_ip)
     validate_cidr_prefix(lan_prefix)
     if not is_valid_interface(wan_interface):
         raise ValueError(f"不正な WAN インターフェイス名: {wan_interface!r}")
+    if not isinstance(http_port, int) or not (1 <= http_port <= 65535):
+        raise ValueError(f"http_port は 1–65535 の整数でなければなりません: {http_port!r}")
 
     # ipaddress モジュールを使って CIDR を安全に構築する（文字列結合でのインジェクション防止）
     network = ipaddress.IPv4Network(f"{lan_ip}/{lan_prefix}", strict=False)
     cidr_str = str(network)  # 例: "172.20.0.0/16"
 
+    # --- INPUT フィルタチェーン（NAT 有無にかかわらず常に生成する） ---
+    # ルール設計:
+    #   1. ループバック (iif lo) は全許可（プロセス間通信・healthcheck 等）
+    #   2. ESTABLISHED/RELATED は全許可（応答パケット）
+    #   3. LAN CIDR からの tcp/<http_port> は許可（管理 GUI / MCP / API）
+    #   4. WAN インターフェイスからの tcp/<http_port> は DROP（L3/L4 ゲート）
+    # WAN DROP は wan_interface が空の場合でも safe（空文字はインターフェイス名として
+    # 無効なので上の is_valid_interface 検証で弾かれている）。
+    filter_lines = [
+        "# Millicall netd: HTTP 管理面 INPUT フィルタ（NAT 有無にかかわらず適用）",
+        "table ip millicall_filter {",
+        "  chain input {",
+        "    type filter hook input priority 0; policy accept;",
+        "    # ループバックは全許可（内部通信・healthcheck）",
+        "    iif lo accept",
+        "    # ESTABLISHED/RELATED は全許可（応答パケット）",
+        "    ct state established,related accept",
+        "    # LAN CIDR からの HTTP 管理ポートを許可",
+        f"    ip saddr {cidr_str} tcp dport {http_port} accept",
+        "    # WAN インターフェイスからの HTTP 管理ポートを DROP（L3/L4 ゲート）",
+        f"    iif {wan_interface!r} tcp dport {http_port} drop",
+        "  }",
+        "}",
+        "",
+    ]
+
     if enabled:
-        lines = [
-            "# Millicall netd が自動生成した nftables ルールセットです。",
+        nat_lines = [
+            "# Millicall netd: NAT マスカレードルールセット",
             f"table ip {table_name} {{",
             "  chain postrouting {",
             "    type nat hook postrouting priority 100; policy accept;",
@@ -197,9 +237,10 @@ def render_nftables_ruleset(
         ]
     else:
         # NAT 無効時はテーブルを削除する
-        lines = [
+        nat_lines = [
             "# Millicall netd: NAT 無効 — テーブルを削除します。",
             f"delete table ip {table_name}",
             "",
         ]
-    return "\n".join(lines)
+
+    return "\n".join(filter_lines + nat_lines)

@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     # プロビジョニング URL(option 66)・media_ws・healthcheck の既定はこのポートから導出する。
     # TLS/443 はフロント(Cloudflare Tunnel / Tailscale Serve)に委譲し core は平文のみ配信する。
     http_port: int = 80
+    # core が HTTP を待受けるバインドアドレス（デフォルト: 0.0.0.0）。
+    # nftables INPUT フィルタ（C2a）が LAN CIDR 限定の第一防衛ラインとなるため、
+    # 既定は 0.0.0.0 のまま閉域 LAN からの到達性を維持する。
+    # Cloudflare Tunnel / Tailscale Serve 専用デプロイでは 127.0.0.1 に設定すること:
+    #   MILLICALL_HTTP_BIND=127.0.0.1
+    # これにより LAN/WAN への HTTP 露出を完全に排除し、フロントのみが localhost 経由でアクセスする。
+    http_bind: str = "0.0.0.0"
     # SPA（管理 GUI）の配信元。存在するときのみ StaticFiles + SPA fallback を有効化する。
     # core イメージでは Dockerfile が /app/static にビルド済み dist を配置する。
     # 開発時は既定パスが存在しないため無効化され、Vite dev server + proxy を使う。
@@ -178,10 +185,12 @@ class Settings(BaseSettings):
     dnsmasq_leases_path: str = "/var/lib/misc/dnsmasq.leases"
     # nftables テーブル名（millicall NAT ルールを格納するテーブル）。
     nftables_table: str = "millicall_nat"
-    # 電話機の Web 管理者資格情報（HTTP resync 用）。既定は機種の工場出荷値（公開情報）。
-    # 実サイトでは env MILLICALL_PHONE_ADMIN_USERNAME/PASSWORD で上書きすること。
-    phone_admin_username: str = "admin"
-    phone_admin_password: str = "adminpass"
+    # 電話機の Web 管理者資格情報（HTTP resync 用）。
+    # デフォルトは空文字 — 未設定時は resync を実行しないこと。
+    # 実サイトでは env MILLICALL_PHONE_ADMIN_USERNAME/PASSWORD で電話機ごとの値を設定する。
+    # resync スキップ判定は provisioning/service.py の resync_phone で行う（M4 エージェント担当）。
+    phone_admin_username: str = ""
+    phone_admin_password: str = ""
 
     # --- TLS フロント (任意) ---
     # True のとき netd は tailscale up 成功後に `tailscale serve` を張り、tailnet 上で

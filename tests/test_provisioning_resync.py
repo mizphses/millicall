@@ -88,6 +88,29 @@ async def test_resync_no_ip_returns_false():
     assert await service.resync_phone(device, admin_username="a", admin_password="b") is False
 
 
+@pytest.mark.asyncio
+async def test_resync_skips_when_credentials_empty(monkeypatch):
+    """M2×M4 連携: phone_admin が空(既定)なら resync をスキップし HTTP を発行しない。"""
+    called = False
+
+    class _NoCall:
+        async def __aenter__(self):
+            nonlocal called
+            called = True
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(service.httpx, "AsyncClient", lambda *a, **k: _NoCall())
+    device = Device(mac_address="AA:BB:CC:DD:EE:FF", ip_address="192.168.1.50", model="panasonic")
+    # 空パスワード → スキップ
+    assert await service.resync_phone(device, admin_username="admin", admin_password="") is False
+    # 空ユーザ名 → スキップ
+    assert await service.resync_phone(device, admin_username="", admin_password="pw") is False
+    assert called is False
+
+
 def test_no_hardcoded_admin_credential_literal():
     """service.py のソースに旧ハードコード資格情報が残っていないこと。"""
     import inspect

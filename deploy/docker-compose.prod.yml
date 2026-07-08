@@ -3,10 +3,13 @@ services:
   # docker-proxy: Docker Engine HTTP API を最小 API のみに限定して公開する。
   #
   # Tecnativa/docker-socket-proxy を使用し、core が必要とする操作のみ許可:
-  #   CONTAINERS=1  コンテナ一覧・検査
-  #   POST=1        POST メソッド（restart に必要）
-  #   INFO=1        /info エンドポイント
-  #   VERSION=1     /version エンドポイント
+  #   CONTAINERS=1      コンテナ一覧・検査
+  #   INFO=1            /info エンドポイント
+  #   VERSION=1         /version エンドポイント
+  #   ALLOW_RESTARTS=1  POST /containers/{id}/restart のみ許可（H4: POST=1 を廃止）
+  #
+  # H4 修正: POST=1 は kill/stop/start/create 等の全 POST を許可するため廃止。
+  # Tecnativa の ALLOW_RESTARTS=1 フラグが POST /restart のみを粒度細かく許可する。
   # IMAGES・EXEC・volumes・swarm・secrets・networks 等は全て 0（デフォルト）のまま。
   #
   # core は network_mode: host のため 127.0.0.1:2375 でプロキシに到達できる。
@@ -16,18 +19,23 @@ services:
   # core・freeswitch・netd は docker.sock を一切マウントしない。
   # ------------------------------------------------------------------
   docker-proxy:
-    image: ghcr.io/tecnativa/docker-socket-proxy:latest
+    # M8: :latest を廃止して具体的なバージョンタグに固定する。
+    # ダイジェスト固定 (@sha256:...) が理想だが offline では解決できないため
+    # バージョンタグで固定し、定期的なアップデート時に sha256 ダイジストへの移行を推奨。
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     environment:
       # コンテナ一覧・検査を許可
       - CONTAINERS=1
-      # POST メソッドを許可（restart エンドポイントに必要）
-      - POST=1
+      # POST /containers/{id}/restart のみ許可（H4: POST=1 廃止、ALLOW_RESTARTS=1 で代替）
+      # ALLOW_RESTARTS=1 は restart エンドポイントのみを粒度細かく許可し、
+      # kill/stop/start/create は許可しない。
+      - ALLOW_RESTARTS=1
       # /info エンドポイントを許可
       - INFO=1
       # /version エンドポイントを許可
       - VERSION=1
       # その他は全て 0（デフォルト）のまま:
-      # IMAGES=0, EXEC=0, VOLUMES=0, NETWORKS=0, SWARM=0, SECRETS=0 ...
+      # POST=0, IMAGES=0, EXEC=0, VOLUMES=0, NETWORKS=0, SWARM=0, SECRETS=0 ...
     volumes:
       # Docker socket は read-only で proxy コンテナのみにマウントする。
       # core・freeswitch・netd にはマウントしない。
@@ -36,6 +44,11 @@ services:
       # core (network_mode: host) から 127.0.0.1:2375 でアクセスできるようにバインドする。
       # ループバックバインドにより外部ネットワークからのアクセスを防ぐ。
       - "127.0.0.1:2375:2375"
+    # H3: 全サービスに no-new-privileges を適用（特権昇格防止）
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 128m
+    pids_limit: 64
     restart: unless-stopped
 
   core:
@@ -63,6 +76,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
+    # H3: no-new-privileges + リソース制限。
+    # 注意: core は network_mode: host で :80 をバインドする。
+    # root + cap_drop ALL では CAP_NET_BIND_SERVICE が消えて :80 バインド失敗となるため
+    # core の cap_drop は行わない。非 root 化 + port≥1024 or cap_add:NET_BIND_SERVICE は
+    # 将来の follow-up タスクとする（リスク評価後に適用）。
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 1g
+    pids_limit: 256
     restart: unless-stopped
 
   freeswitch:
@@ -80,6 +102,12 @@ services:
       - ./data/freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml
       - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
       - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
+    # H3: FreeSWITCH は root + ネットワーク系 cap が必要なため cap_drop は行わない。
+    # no-new-privileges とメモリ/PID 制限のみ適用する。
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 2g
+    pids_limit: 512
     restart: unless-stopped
 
   netd:
@@ -88,9 +116,19 @@ services:
     # LAN/WAN インターフェイスを直接扱うためホストネットワークを使用する。
     # dnsmasq (UDP 53/67) / Tailscale (UDP 41641) はホストのポートを直接 bind する。
     network_mode: host
+    # H3: cap_drop ALL + 必要な cap のみ add（最小権限）
+    # netd は nftables / ip route / Tailscale のため NET_ADMIN / NET_RAW が必要。
+    # root のまま維持（dnsmasq ソケット・nft テーブル操作に必要）。
+    # read_only: true は不可（/run/millicall/netd.sock 等を書き込む）— follow-up で検討。
+    cap_drop:
+      - ALL
     cap_add:
       - NET_ADMIN  # nftables / ip route 操作に必要
       - NET_RAW    # 低レベルソケット (Tailscale ICMP 等) に必要
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 256m
+    pids_limit: 64
     devices:
       # Tailscale カーネル TUN モード用。ホストに /dev/net/tun が無い場合は
       # このエントリを削除するか、entrypoint が userspace-networking で起動する。
@@ -123,13 +161,20 @@ services:
   # 閉域運用ではインターネット非接続のため起動しない。
   # ------------------------------------------------------------------
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    # M8: :latest を廃止して具体的なバージョンタグに固定する。
+    # ダイジェスト固定 (@sha256:...) が理想 — 定期アップデート時に移行を推奨。
+    image: cloudflare/cloudflared:2025.5.0
     profiles:
       - cloudflare
     network_mode: host
     command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${MILLICALL_CLOUDFLARE_TUNNEL_TOKEN}
+    # H3: cloudflared は権限不要なため no-new-privileges + 軽量リソース制限のみ
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 128m
+    pids_limit: 64
     restart: unless-stopped
 
 volumes:

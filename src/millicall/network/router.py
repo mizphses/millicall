@@ -247,11 +247,13 @@ async def apply_network_config(
     cfg = await _get_or_create(session)
     await session.commit()
 
+    # settings は apply_nat の http_port 引数にも使う（スコープを if の外に出す）
+    settings = request.app.state.settings
+
     # provisioning_base_url が空の場合は lan_ip + core の HTTP ポートから構築する
     # （標準ポート 80 は URL から省略。option 66 が指す先 = core の待受ポート）。
     provisioning_url = cfg.provisioning_base_url
     if not provisioning_url:
-        settings = request.app.state.settings
         suffix = http_port_suffix(settings.http_port)
         provisioning_url = f"http://{cfg.lan_ip}{suffix}/provisioning/"
 
@@ -270,6 +272,7 @@ async def apply_network_config(
             lan_ip=cfg.lan_ip,
             lan_prefix=cfg.lan_prefix,
             wan_interface=cfg.wan_interface,
+            http_port=settings.http_port,
         )
     except NetdError as exc:
         raise HTTPException(

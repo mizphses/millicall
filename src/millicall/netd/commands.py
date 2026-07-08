@@ -121,21 +121,26 @@ async def apply_nat(
     ops: SystemOps,
     settings: Any,
 ) -> dict:
-    """NAT マスカレード設定を適用する。
+    """NAT マスカレード設定 + HTTP INPUT フィルタを適用する。
 
     nftables ルールセットを生成して ``nft -f -`` に渡す。
     enabled=True の場合は ip_forward も有効化する。
+    INPUT フィルタ（millicall_filter テーブル）は enabled 値にかかわらず常に適用する。
 
     ペイロードフィールド:
-        enabled (bool): True で NAT 有効、False で無効（テーブル削除）。
+        enabled (bool): True で NAT 有効、False で無効（NAT テーブル削除）。
         lan_ip (str): LAN IP アドレス。
         lan_prefix (int): LAN CIDR プレフィックス長。
         wan_interface (str): WAN インターフェイス名。
+        http_port (int): core の HTTP ポート番号（省略時: 80）。
+                        INPUT フィルタの LAN 許可 / WAN DROP に使用する。
     """
     enabled = payload.get("enabled", True)
     lan_ip = payload.get("lan_ip", "")
     lan_prefix = payload.get("lan_prefix", 16)
     wan_interface = payload.get("wan_interface", "")
+    # http_port は省略可能（後方互換性のため既定値 80 にフォールバック）
+    http_port = payload.get("http_port", 80)
 
     # --- 入力再検証 ---
     try:
@@ -151,11 +156,19 @@ async def apply_nat(
         return _err(f"enabled は bool でなければなりません: {enabled!r}")
 
     try:
+        http_port_int = int(http_port)
+    except (TypeError, ValueError):
+        return _err(f"http_port は整数でなければなりません: {http_port!r}")
+    if not (1 <= http_port_int <= 65535):
+        return _err(f"http_port は 1–65535 の範囲でなければなりません: {http_port_int!r}")
+
+    try:
         ruleset = render_nftables_ruleset(
             enabled=bool(enabled),
             lan_ip=str(lan_ip),
             lan_prefix=int(lan_prefix),
             wan_interface=str(wan_interface),
+            http_port=http_port_int,
             table_name=settings.nftables_table,
         )
     except ValueError as exc:

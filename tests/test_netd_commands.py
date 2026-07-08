@@ -245,11 +245,107 @@ class TestApplyNat:
         nft_call = next(c for c in argvs if c[0] == "nft")
         assert nft_call == ["nft", "-f", "-"]
 
-        # nft への stdin にマスカレードルールが含まれる
+        # nft への stdin にマスカレードルールが含まれる（NAT 有効）
         nft_idx = argvs.index(["nft", "-f", "-"])
         nft_input = ops.run_calls[nft_idx][1]
         assert nft_input is not None
         assert "masquerade" in nft_input
+
+    @pytest.mark.asyncio
+    async def test_input_filter_chain_present_when_enabled(self):
+        """apply_nat (enabled=True) が生成するルールセットに INPUT フィルタチェーンが含まれること。"""
+        ops = FakeSystemOps()
+        payload = {**_VALID_NAT_PAYLOAD, "http_port": 80}
+        resp = await dispatch(payload, ops, SETTINGS)
+
+        assert resp["ok"] is True
+        argvs = [call[0] for call in ops.run_calls]
+        nft_idx = argvs.index(["nft", "-f", "-"])
+        nft_input = ops.run_calls[nft_idx][1]
+        assert nft_input is not None
+
+        # millicall_filter テーブルの INPUT チェーンが含まれること
+        assert "millicall_filter" in nft_input
+        assert "type filter hook input" in nft_input
+        # LAN CIDR (172.20.0.0/16) が accept ルールにあること
+        assert "172.20.0.0/16" in nft_input
+        assert "tcp dport 80" in nft_input
+        # WAN インターフェイス (eth0) が drop ルールにあること
+        assert "'eth0'" in nft_input or "eth0" in nft_input
+        assert "drop" in nft_input
+        # マスカレードも含まれること（NAT 有効）
+        assert "masquerade" in nft_input
+
+    @pytest.mark.asyncio
+    async def test_input_filter_chain_present_when_disabled(self):
+        """apply_nat (enabled=False) でも INPUT フィルタチェーンが生成されること。
+        HTTP ポートの LAN 限定保護は NAT 有効/無効と直交するセキュリティ要件のため。
+        """
+        ops = FakeSystemOps()
+        payload = {**_VALID_NAT_PAYLOAD, "enabled": False, "http_port": 80}
+        resp = await dispatch(payload, ops, SETTINGS)
+
+        assert resp["ok"] is True
+        argvs = [call[0] for call in ops.run_calls]
+        nft_idx = argvs.index(["nft", "-f", "-"])
+        nft_input = ops.run_calls[nft_idx][1]
+        assert nft_input is not None
+
+        # INPUT フィルタは enabled=False でも出力される
+        assert "millicall_filter" in nft_input
+        assert "type filter hook input" in nft_input
+        assert "tcp dport 80" in nft_input
+        assert "drop" in nft_input
+        # NAT 無効なのでマスカレードは含まれない、テーブル削除が含まれる
+        assert "masquerade" not in nft_input
+        assert "delete table" in nft_input
+
+    @pytest.mark.asyncio
+    async def test_input_filter_uses_custom_http_port(self):
+        """http_port を明示指定した場合、そのポートが INPUT フィルタに使われること。"""
+        ops = FakeSystemOps()
+        payload = {**_VALID_NAT_PAYLOAD, "http_port": 8080}
+        resp = await dispatch(payload, ops, SETTINGS)
+
+        assert resp["ok"] is True
+        argvs = [call[0] for call in ops.run_calls]
+        nft_idx = argvs.index(["nft", "-f", "-"])
+        nft_input = ops.run_calls[nft_idx][1]
+        assert nft_input is not None
+        assert "tcp dport 8080" in nft_input
+        # "tcp dport 80 " (スペース区切り) は含まれないこと（8080 に差し替えられた）
+        # 注意: "8080" は "80" をサブストリングとして含むため、厳密な語境界チェックを行う
+        assert "tcp dport 80\n" not in nft_input and "tcp dport 80 " not in nft_input
+
+    @pytest.mark.asyncio
+    async def test_http_port_default_is_80_when_absent(self):
+        """http_port をペイロードに含めない場合、デフォルト 80 が使われること（後方互換性）。"""
+        ops = FakeSystemOps()
+        # http_port を含まない旧形式のペイロード
+        payload = {
+            "cmd": "apply_nat",
+            "enabled": True,
+            "lan_ip": "172.20.0.1",
+            "lan_prefix": 16,
+            "wan_interface": "eth0",
+        }
+        resp = await dispatch(payload, ops, SETTINGS)
+
+        assert resp["ok"] is True
+        argvs = [call[0] for call in ops.run_calls]
+        nft_idx = argvs.index(["nft", "-f", "-"])
+        nft_input = ops.run_calls[nft_idx][1]
+        assert "tcp dport 80" in nft_input
+
+    @pytest.mark.asyncio
+    async def test_invalid_http_port_returns_error_no_ops(self):
+        """http_port が範囲外の場合はエラーを返し ops を呼ばない。"""
+        ops = FakeSystemOps()
+        payload = {**_VALID_NAT_PAYLOAD, "http_port": 99999}
+        resp = await dispatch(payload, ops, SETTINGS)
+
+        assert resp["ok"] is False
+        assert ops.run_calls == []
 
     @pytest.mark.asyncio
     async def test_valid_disabled_no_sysctl(self):
