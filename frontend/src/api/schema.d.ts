@@ -836,6 +836,29 @@ export interface paths {
         patch: operations["update_trunk_api_trunks__trunk_id__patch"];
         trace?: never;
     };
+    "/api/trunks/{trunk_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trunk Status
+         * @description トランクの sofia ゲートウェイ登録状態を返す。
+         *
+         *     FreeSWITCH へ到達できない場合も 200 で state=UNKNOWN を返し、
+         *     GUI が常に状態をレンダリングできるようにする。
+         */
+        get: operations["trunk_status_api_trunks__trunk_id__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tts-cache/synthesize": {
         parameters: {
             query?: never;
@@ -2026,6 +2049,20 @@ export interface components {
             name: string;
             /** Username */
             username: string;
+        };
+        /**
+         * TrunkStatusResult
+         * @description GET /api/trunks/{id}/status のレスポンス。
+         *
+         *     state は sofia のゲートウェイ状態そのまま:
+         *       REGED(登録済み) / TRYING / FAIL_WAIT / UNREGED / NOREG(register=false) など。
+         *       ゲートウェイ未ロード時は NOT_LOADED、FS へ到達できない場合は UNKNOWN。
+         */
+        TrunkStatusResult: {
+            /** Registered */
+            registered: boolean;
+            /** State */
+            state: string;
         };
         /** TrunkUpdate */
         TrunkUpdate: {
@@ -3788,6 +3825,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrunkRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trunk_status_api_trunks__trunk_id__status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trunk_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrunkStatusResult"];
                 };
             };
             /** @description Validation Error */

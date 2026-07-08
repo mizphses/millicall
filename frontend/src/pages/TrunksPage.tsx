@@ -6,6 +6,7 @@ import { css, cx } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
+import type { components } from "../api/schema";
 import { TRUNKS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
@@ -60,6 +61,52 @@ async function deleteTrunk(id: number): Promise<void> {
     params: { path: { trunk_id: id } },
   });
   if (error) throw new Error("トランクの削除に失敗しました");
+}
+
+type TrunkStatusResult = components["schemas"]["TrunkStatusResult"];
+
+async function fetchTrunkStatus(id: number): Promise<TrunkStatusResult> {
+  const { data, error } = await api.GET("/api/trunks/{trunk_id}/status", {
+    params: { path: { trunk_id: id } },
+  });
+  if (error || !data) throw new Error("登録状態の取得に失敗しました");
+  return data;
+}
+
+/**
+ * sofia ゲートウェイの REGISTER 状態バッジ。
+ * トランク保存時にバックエンドが即 REGISTER を試行するため、
+ * 10 秒間隔のポーリングで結果(REGED / FAIL_WAIT 等)を反映する。
+ */
+function TrunkStatusBadge({ trunk }: { trunk: TrunkRead }) {
+  const statusQuery = useQuery({
+    queryKey: [...TRUNKS_KEY, trunk.id, "status"],
+    queryFn: () => fetchTrunkStatus(trunk.id),
+    enabled: trunk.enabled,
+    refetchInterval: 10_000,
+  });
+  if (!trunk.enabled) {
+    return <span className={badge({ tone: "neutral" })}>—</span>;
+  }
+  const st = statusQuery.data;
+  if (!st) {
+    return <span className={badge({ tone: "neutral" })}>確認中…</span>;
+  }
+  if (st.registered) {
+    return <span className={badge({ tone: "success" })}>登録済み</span>;
+  }
+  if (st.state === "TRYING") {
+    return <span className={badge({ tone: "warn" })}>登録中…</span>;
+  }
+  if (st.state === "UNKNOWN") {
+    return <span className={badge({ tone: "neutral" })}>不明</span>;
+  }
+  // FAIL_WAIT / UNREGED / NOT_LOADED など。詳細は title で確認できる。
+  return (
+    <span className={badge({ tone: "warn" })} title={st.state}>
+      未登録
+    </span>
+  );
 }
 
 export function TrunksPage() {
@@ -171,6 +218,12 @@ export function TrunksPage() {
         ) : (
           <span className={badge({ tone: "neutral" })}>無効</span>
         ),
+    },
+    {
+      key: "registration",
+      header: "登録状態",
+      width: "110px",
+      render: (row) => <TrunkStatusBadge trunk={row} />,
     },
     {
       key: "actions",

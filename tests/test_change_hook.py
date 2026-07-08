@@ -35,7 +35,9 @@ async def _start_accepting_fake_fs() -> tuple[asyncio.AbstractServer, int, list[
                     return
                 cmd = line.strip()
                 received.append(cmd)
-                if cmd.startswith("api reloadxml"):
+                # 任意の api コマンドに +OK を返す（reloadxml / sofia killgw / rescan 等）。
+                # 応答しないと ESLClient.api() が応答待ちでタイムアウトまで停止する。
+                if cmd.startswith("api "):
                     body = b"+OK [Success]\n"
                     writer.write(
                         b"Content-Type: api/response\nContent-Length: %d\n\n%s" % (len(body), body)
