@@ -7,6 +7,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 from millicall.ai_agents.router import router as ai_agents_router
 from millicall.audit_router import router as audit_router
@@ -54,6 +57,44 @@ from millicall.workflows.runner import WorkflowRunner
 from millicall.workflows.service import NoLlmProviderError
 
 logger = logging.getLogger("millicall")
+
+# CSP ポリシー選定の根拠:
+#   - SPA は Vite ビルド済みバンドル（/assets/*.js, /assets/*.css）のみを使用し、
+#     インラインスクリプトは一切含まない（frontend/dist/index.html で確認済み）。
+#     そのため script-src に 'unsafe-inline' は不要。
+#   - PandaCSS は CSS ファイルとして出力されるため style-src は 'self' で足りるが、
+#     ランタイムに css-in-js 風の style 属性を使うコンポーネントがある可能性を考慮し
+#     'unsafe-inline' を style-src に限り許容する（スクリプト実行ではなく見た目のみ）。
+#   - img-src に data: を許可するのは UI でのアバター/QR コード等の data URI 表示のため。
+#   - HSTS は設定しない。TLS は front（nginx 等）が担当し、
+#     core は HTTP で動作するため plain-HTTP origin から HSTS を発行するのは誤り。
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "img-src 'self' data:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self'; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """全レスポンスにセキュリティヘッダーを付与するミドルウェア。
+
+    ヘッダーは additive（既存レスポンスに追加）なので、SAML/MCP/provisioning
+    レスポンスの機能には影響しない。
+    HSTS は設定しない（TLS は front 側の責務）。
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = _CSP_POLICY
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
 
 @asynccontextmanager
@@ -243,6 +284,10 @@ def _mount_spa(app: FastAPI, static_dir: Path) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="millicall v2 core", lifespan=lifespan)
     app.state.settings = settings or get_settings()
+    # セキュリティヘッダーミドルウェア（最外層）。
+    # CSP / X-Content-Type-Options / X-Frame-Options / Referrer-Policy を全レスポンスに付与。
+    # HSTS は設定しない（TLS は front の責務; core は HTTP で動作）。
+    app.add_middleware(SecurityHeadersMiddleware)
     # CSRF 保護ミドルウェア（double-submit cookie パターン）。
     # ルーター登録より前に追加することで全ルートに適用される。
     app.add_middleware(CsrfMiddleware)

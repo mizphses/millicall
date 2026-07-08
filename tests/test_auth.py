@@ -5,6 +5,7 @@ from millicall.auth.security import (
     verify_password,
 )
 from millicall.auth.service import ensure_admin_user
+from millicall.models import User
 
 
 def test_password_hash_roundtrip() -> None:
@@ -78,3 +79,39 @@ async def test_healthz(client) -> None:
     resp = await client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+# M1: User.role デフォルト値テスト
+def test_user_role_default_is_user() -> None:
+    """M1: User.role カラムの INSERT default が "user" であることを確認。
+
+    SQLAlchemy の mapped_column の default は ORM flush 時に適用されるカラムレベルの
+    デフォルトであり、コンストラクタ呼び出し時には適用されない。
+    そのためテーブルカラムの ColumnDefault を直接確認する。
+    server_default も同様に "user" であることを確認する。
+    """
+    col = User.__table__.c["role"]
+    # Python-side (ORM) default
+    assert col.default is not None, "role column has no default"
+    assert col.default.arg == "user", f"expected default 'user', got {col.default.arg!r}"
+    # DB server_default（既存 DB への raw INSERT も "user" になる）
+    assert col.server_default is not None, "role column has no server_default"
+    assert col.server_default.arg == "user", (
+        f"expected server_default 'user', got {col.server_default.arg!r}"
+    )
+
+
+# M6: セキュリティヘッダーテスト
+async def test_security_headers_present(client) -> None:
+    """M6: 全レスポンスにセキュリティヘッダーが付与されることを確認。
+
+    /healthz エンドポイントを使用（認証不要・副作用なし）。
+    """
+    resp = await client.get("/healthz")
+    assert resp.status_code == 200
+    assert "content-security-policy" in resp.headers, "CSP header missing"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert resp.headers["referrer-policy"] == "no-referrer"
+    # HSTS は設定しない（core は HTTP で動作; TLS は front の責務）
+    assert "strict-transport-security" not in resp.headers

@@ -30,6 +30,5 @@ class ExtensionRead(BaseModel):
     id: int
     number: str
     display_name: str
-    sip_password: str
     enabled: bool
     calling_permission: str

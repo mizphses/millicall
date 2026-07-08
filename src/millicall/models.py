@@ -24,7 +24,7 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="admin", server_default="admin"
+        String(20), nullable=False, default="user", server_default="user"
     )
     origin: Mapped[str] = mapped_column(
         String(20), nullable=False, default="local", server_default="local"
