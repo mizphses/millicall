@@ -35,8 +35,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # --- Tailscale 公式 apt リポジトリ (Ubuntu Noble 向け) ---
 # https://tailscale.com/download/linux/ubuntu-2404
-RUN curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarch.gpg \
-        | tee /usr/share/keyrings/tailscale-archive-keyring.gpg > /dev/null \
+# 旧 URL の noble.noarch.gpg は 404 になったため noble.gpg を使う。
+# noble.gpg は ASCII-armored 公開鍵なので gpg --dearmor でバイナリ keyring に変換する。
+# curl を tee にパイプすると 404 でも空ファイルが作られ apt が署名エラーになるため、
+# 鍵取得を独立したステップにして失敗時にビルドを中断させる。
+RUN curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/tailscale-archive-keyring.gpg \
     && printf 'deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main\n' \
         > /etc/apt/sources.list.d/tailscale.list \
     && apt-get update && apt-get install -y --no-install-recommends tailscale \
