@@ -1,4 +1,4 @@
-# millicall v2
+# millicall
 
 [![CI](https://github.com/mizphses/millicall/actions/workflows/ci.yml/badge.svg)](https://github.com/mizphses/millicall/actions/workflows/ci.yml)
 [![Release (stable)](https://github.com/mizphses/millicall/actions/workflows/release-stable.yml/badge.svg)](https://github.com/mizphses/millicall/actions/workflows/release-stable.yml)
@@ -11,7 +11,7 @@
 ## 主な機能
 
 - **内線・外線・ルーティング**: SIP 内線管理、外線トランク（SIP trunk）設定、着信ルーティング、CDR（通話明細）、電話帳、オンデマンド発信
-- **音声 AI パイプライン**: WebRTC VAD + ストリーミング STT（Google Speech-to-Text）+ 文分割 TTS（VoiceVox / OpenJTalk）+ バージイン（再生中の割り込み検知）。LLM は Anthropic / OpenAI / Gemini / Vertex AI に対応。TTS は VoiceVox / OpenJTalk 対応。STT は Google Cloud Speech-to-Text / Whisper 対応。プロバイダカタログは管理画面から切り替え可能
+- **音声 AI パイプライン**: WebRTC VAD + ストリーミング STT（Google Speech-to-Text）+ 文分割 TTS（VoiceVox または OpenJTalk）+ バージイン（再生中の割り込み検知）。LLM は Anthropic / OpenAI / Gemini / Vertex AI に対応。TTS は VoiceVox / OpenJTalk 対応。STT は Google Cloud Speech-to-Text / Whisper 対応。プロバイダカタログは管理画面から切り替え可能
 - **MCPエージェント**: MCP over HTTP サーバ（`converse` を含む 15 ツール）を標準搭載。`dial` / `say` / `listen` / `hangup` 等の電話プリミティブと、`converse`（自律会話）、電話帳 CRUD、内線・トランク一覧など。OAuth2.1 による認証済み外部エージェント連携対応
 - **ワークフロー（IVR + AI ノード）**: xyflow ベースのビジュアルエディタで IVR フロー・AI 分岐ノードを構築。React SPA から設定・プレビューが可能
 - **ゼロタッチプロビジョニング + netd**: SIP 電話機向け自動設定配布（ZTP）。`netd` コンテナが dnsmasq（DHCP/DNS）・nftables NAT・Tailscale を管理し、フレッツ環境の NW 設定をコアから API 経由で制御
@@ -72,39 +72,6 @@ millicallctl update
 
 ## アーキテクチャ
 
-```
-フレッツ HGW
-    │  SIP/RTP (NAT 越え)
-    ▼
-┌─────────────┐       ESL       ┌────────────────────────────────┐
-│ freeswitch  │ ◄────────────► │  core (FastAPI)                │
-│  SIP / RTP  │                 │  ├─ ESL 制御 / ルーティング    │
-└─────────────┘                 │  ├─ 音声 AI (VAD/STT/TTS/LLM) │
-                                │  ├─ MCP サーバ (15 tools)      │
-                                │  ├─ ワークフローランナー        │
-                                │  ├─ REST API / SPA サーバ      │
-                                │  └─ 認証 (TOTP/SAML/SCIM)     │
-                                └───────────┬────────────────────┘
-                                            │ UNIX ソケット (/run/millicall)
-                                ┌───────────▼────────┐
-                                │  netd              │
-                                │  dnsmasq / nftables│
-                                │  NAT / Tailscale   │
-                                └────────────────────┘
-                                            │ HTTP (127.0.0.1:2375)
-                                ┌───────────▼────────┐
-                                │  docker-proxy      │
-                                │  socket-proxy      │
-                                │  (read-only 仲介)  │
-                                └────────────────────┘
-                                            │ ブラウザ
-                                ┌───────────▼────────┐
-                                │  React SPA         │
-                                │  管理画面 / ワーク  │
-                                │  フローエディタ     │
-                                └────────────────────┘
-```
-
 全コンテナは `network_mode: host`（docker-proxy を除く）。`core` と `netd` は名前付き volume（`millicall-run`）で UNIX ソケットを共有する。
 
 ## 開発
@@ -131,8 +98,6 @@ npm run test     # vitest
 ```bash
 docker compose up -d --build
 ```
-
-> `docs/superpowers/`・`.claude/`・`.superpowers/` は AI 補助ツールの作業ファイルであり gitignore 対象。
 
 ## ライセンス
 
