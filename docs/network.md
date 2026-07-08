@@ -36,7 +36,7 @@ millicall の netd コンテナが LAN ルーター機能（DHCP / DNS / NAT / T
 | DHCP レンジ（開始） | `172.20.1.1` | 電話機への払い出し開始 |
 | DHCP レンジ（終了） | `172.20.1.254` | 電話機への払い出し終了 |
 | リース時間 | `12h` | DHCP リース有効期間 |
-| プロビジョニング URL | （空白推奨） | 空白の場合 `http://<lan_ip>:8000/provisioning/` が自動生成 |
+| プロビジョニング URL | （空白推奨） | 空白の場合 `http://<lan_ip>/provisioning/` が自動生成（ポート 80 の場合は省略） |
 
 ### 2. NAT 設定
 
@@ -56,7 +56,7 @@ millicall の netd コンテナが LAN ルーター機能（DHCP / DNS / NAT / T
 
 1. 電話機を LAN ポートに接続
 2. dnsmasq が IP + DHCP option 66（プロビジョニング URL）を配布
-3. 電話機が `http://<lan_ip>:8000/provisioning/<機種>/...` を自動取得
+3. 電話機が `http://<lan_ip>/provisioning/<機種>/...` を自動取得（ポート 80 の場合は省略）
 4. **未登録 MAC の場合は 404** が返ります。`/devices` ページに「未割当」として表示されます
 5. `/devices` で「リース同期」→「内線割当」（内線番号 + 表示名）→「クイックプロビジョン」
 6. 電話機が設定を再取得して SIP REGISTER → 内線化完了
@@ -69,15 +69,15 @@ millicall の netd コンテナが LAN ルーター機能（DHCP / DNS / NAT / T
 
 ```bash
 # 現在のネットワーク設定を取得（auth key はマスク）
-curl -b cookie.txt http://192.168.1.10:8000/api/network
+curl -b cookie.txt http://192.168.1.10/api/network
 
 # 設定を更新
-curl -X PUT -b cookie.txt http://192.168.1.10:8000/api/network \
+curl -X PUT -b cookie.txt http://192.168.1.10/api/network \
   -H 'Content-Type: application/json' \
   -d '{"lan_interface":"enp3s0","lan_ip":"172.20.0.1","prefix_len":16,...}'
 
 # netd へ適用
-curl -X POST -b cookie.txt http://192.168.1.10:8000/api/network/apply
+curl -X POST -b cookie.txt http://192.168.1.10/api/network/apply
 ```
 
 ## トラブルシュート

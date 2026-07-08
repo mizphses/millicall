@@ -122,10 +122,10 @@ API で実行する場合:
 
 ```bash
 # プロバイダ ID を確認
-curl -b cookie.txt http://192.168.1.10:8000/api/providers
+curl -b cookie.txt http://192.168.1.10/api/providers
 
 # 接続テスト（id=1 の場合）
-curl -b cookie.txt -X POST http://192.168.1.10:8000/api/providers/1/test
+curl -b cookie.txt -X POST http://192.168.1.10/api/providers/1/test
 # 期待: {"ok": true, "detail": "...", "latency_ms": 123}
 ```
 

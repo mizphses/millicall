@@ -49,7 +49,7 @@ Phase 2 の外線トランク・着信ルーティングは `external.xml` と `
 | internal（内線SIP） | 5060 | `MILLICALL_SIP_PORT`（既定 5060） |
 | external（外線SIP） | 5080 | `MILLICALL_EXTERNAL_SIP_PORT`（既定 5080） |
 | ESL（FreeSWITCH制御） | 8021 | 固定（`event_socket.conf.xml`） |
-| core HTTP API | 8000 | 固定 |
+| core HTTP API | 80 | 既定（`MILLICALL_HTTP_PORT` で変更可） |
 
 ---
 
@@ -72,14 +72,14 @@ docker compose logs core | grep "初期管理者を作成しました"
 ヘルスチェック:
 
 ```bash
-curl -f http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1/healthz
 # {"status":"ok"} が返れば DB マイグレーション・設定生成が完了
 ```
 
 以降の操作は Cookie ファイル `cookie.txt` を使う:
 
 ```bash
-BASE=http://127.0.0.1:8000
+BASE=http://127.0.0.1
 curl -c cookie.txt -X POST "$BASE/api/auth/login" \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"<初期パスワード>"}'

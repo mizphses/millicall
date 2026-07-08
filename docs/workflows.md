@@ -131,18 +131,18 @@ MILLICALL_SMTP_TIMEOUT=15
 
 ```bash
 # ノード種別カタログを取得
-curl -b cookie.txt http://192.168.1.10:8000/api/workflows/node-types | jq '.[].type'
+curl -b cookie.txt http://192.168.1.10/api/workflows/node-types | jq '.[].type'
 
 # ワークフロー一覧
-curl -b cookie.txt http://192.168.1.10:8000/api/workflows
+curl -b cookie.txt http://192.168.1.10/api/workflows
 
 # ワークフロー作成
-curl -X POST -b cookie.txt http://192.168.1.10:8000/api/workflows \
+curl -X POST -b cookie.txt http://192.168.1.10/api/workflows \
   -H 'Content-Type: application/json' \
   -d '{"name":"受付IVR","number":"30","definition":{"nodes":[...],"edges":[...]}}'
 
 # ワークフロー削除（Route も自動削除）
-curl -X DELETE -b cookie.txt http://192.168.1.10:8000/api/workflows/<id>
+curl -X DELETE -b cookie.txt http://192.168.1.10/api/workflows/<id>
 ```
 
 ---

@@ -15,7 +15,7 @@ millicall は **フレッツ光電話（NTT HGW）に特化したローカル PB
                 │ ESL (127.0.0.1:8021) + WS 音声フォーク
 ┌───────────────▼──────────────────┐  host network
 │  core コンテナ                    │  (ghcr.io/mizphses/millicall-core)
-│  FastAPI (ポート 8000)            │
+│  FastAPI (ポート 80)              │
 │  SPA (Vite/React) 同梱           │
 └──────┬──────────────┬────────────┘
        │ UNIX socket  │ HTTP (127.0.0.1:2375)

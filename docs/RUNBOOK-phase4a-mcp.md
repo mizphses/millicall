@@ -308,7 +308,7 @@ docker compose down                       # VOICEVOX なしの場合
 認証テスト用に追加した連絡先（§3-3 の「テスト太郎」等）を削除する:
 
 ```bash
-BASE=http://127.0.0.1:8000
+BASE=http://127.0.0.1
 curl -c cj.txt -X POST $BASE/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"<パスワード>"}'
