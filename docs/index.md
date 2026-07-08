@@ -42,7 +42,7 @@ millicall は **フレッツ光電話（NTT HGW）に特化したローカル PB
 | オンデマンド発信 | MCP `dial` / `converse` ツール経由 |
 | 音声 AI | VAD + STT + LLM + TTS パイプライン、バージイン、プロバイダカタログ |
 | プロバイダ | LLM: OpenAI 互換 / Anthropic / Gemini / Vertex AI；TTS: VOICEVOX / Open JTalk；STT: Whisper / Google STT |
-| MCP | Streamable HTTP + OAuth 2.1、15 ツール + converse、claude.ai カスタムコネクタ |
+| MCP | Streamable HTTP + OAuth 2.1、15 ツール（converse を含む）、claude.ai カスタムコネクタ |
 | ワークフロー | IVR + AI ノード（19 種）、xyflow エディタ、AI 自動生成 |
 | ネットワーク | dnsmasq DHCP/DNS、nftables NAT、ゼロタッチプロビジョニング（Panasonic / Yealink） |
 | Tailscale | tailnet 内線（Zoiper on tailnet から着発信） |

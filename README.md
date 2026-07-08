@@ -12,7 +12,7 @@
 
 - **内線・外線・ルーティング**: SIP 内線管理、外線トランク（SIP trunk）設定、着信ルーティング、CDR（通話明細）、電話帳、オンデマンド発信
 - **音声 AI パイプライン**: WebRTC VAD + ストリーミング STT（Google Speech-to-Text）+ 文分割 TTS（VoiceVox / OpenJTalk）+ バージイン（再生中の割り込み検知）。LLM は Anthropic / OpenAI / Gemini / Vertex AI に対応。TTS は VoiceVox / OpenJTalk 対応。STT は Google Cloud Speech-to-Text / Whisper 対応。プロバイダカタログは管理画面から切り替え可能
-- **MCPエージェント**: MCP over HTTP サーバ（15 ツール + `converse`）を標準搭載。`dial` / `say` / `listen` / `hangup` 等の電話プリミティブと、`converse`（自律会話）、電話帳 CRUD、内線・トランク一覧など。OAuth2.1 による認証済み外部エージェント連携対応
+- **MCPエージェント**: MCP over HTTP サーバ（`converse` を含む 15 ツール）を標準搭載。`dial` / `say` / `listen` / `hangup` 等の電話プリミティブと、`converse`（自律会話）、電話帳 CRUD、内線・トランク一覧など。OAuth2.1 による認証済み外部エージェント連携対応
 - **ワークフロー（IVR + AI ノード）**: xyflow ベースのビジュアルエディタで IVR フロー・AI 分岐ノードを構築。React SPA から設定・プレビューが可能
 - **ゼロタッチプロビジョニング + netd**: SIP 電話機向け自動設定配布（ZTP）。`netd` コンテナが dnsmasq（DHCP/DNS）・nftables NAT・Tailscale を管理し、フレッツ環境の NW 設定をコアから API 経由で制御
 - **認証強化**: TOTP 2FA、SAML SP（シングルサインオン）、SCIM プロビジョニング、操作監査ログ、レート制限、CSRF 保護、内線ごとの発信権限制御、SIP 多層防御、Docker socket-proxy（`docker.sock` は proxy コンテナのみに read-only マウント）

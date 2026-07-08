@@ -70,7 +70,7 @@ curl -s -o /dev/null -w "%{http_code}" $BASE/mcp
 
 ---
 
-## 利用可能なツール（15 ツール + converse）
+## 利用可能なツール（converse を含む 15 ツール）
 
 ### 電話操作
 
