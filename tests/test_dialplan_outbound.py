@@ -15,8 +15,12 @@ def _writer(tmp_path, allow=None):
 
 def _trunk():
     return TrunkConfig(
-        name="hgw", display_name="HGW", host="192.168.1.1",
-        username="0312345678", password="pw", caller_id="0398765432",
+        name="hgw",
+        display_name="HGW",
+        host="192.168.1.1",
+        username="0312345678",
+        password="pw",
+        caller_id="0398765432",
     )
 
 

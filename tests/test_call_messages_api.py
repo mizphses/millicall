@@ -6,12 +6,36 @@ from millicall.models import CallMessage
 async def test_list_call_messages_returns_ascending_by_id(auth_client_with_telephony, app):
     sm = app.state.sessionmaker
     async with sm() as s:
-        s.add(CallMessage(call_uuid="c1", agent_id=1, role="user", text="もしもし",
-                          latency_ms=None, created_at=datetime(2026, 7, 5, 10, 0, 0)))
-        s.add(CallMessage(call_uuid="c1", agent_id=1, role="assistant", text="はい、こちら",
-                          latency_ms=420, created_at=datetime(2026, 7, 5, 10, 0, 1)))
-        s.add(CallMessage(call_uuid="other", agent_id=1, role="user", text="別通話",
-                          latency_ms=None, created_at=datetime(2026, 7, 5, 10, 0, 2)))
+        s.add(
+            CallMessage(
+                call_uuid="c1",
+                agent_id=1,
+                role="user",
+                text="もしもし",
+                latency_ms=None,
+                created_at=datetime(2026, 7, 5, 10, 0, 0),
+            )
+        )
+        s.add(
+            CallMessage(
+                call_uuid="c1",
+                agent_id=1,
+                role="assistant",
+                text="はい、こちら",
+                latency_ms=420,
+                created_at=datetime(2026, 7, 5, 10, 0, 1),
+            )
+        )
+        s.add(
+            CallMessage(
+                call_uuid="other",
+                agent_id=1,
+                role="user",
+                text="別通話",
+                latency_ms=None,
+                created_at=datetime(2026, 7, 5, 10, 0, 2),
+            )
+        )
         await s.commit()
     resp = await auth_client_with_telephony.get("/api/call-messages?call_uuid=c1")
     assert resp.status_code == 200

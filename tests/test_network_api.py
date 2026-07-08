@@ -157,18 +157,21 @@ async def test_put_network_config_updates_fields(auth_client_with_telephony):
 async def test_put_network_config_persist_survives_get(auth_client_with_telephony):
     """PUT した値が GET で同じ値として返ること。"""
     c = auth_client_with_telephony
-    await c.put("/api/network", json={
-        "lan_interface": "enp4s0",
-        "lan_ip": "10.0.0.1",
-        "lan_prefix": 8,
-        "dhcp_range_start": "10.0.0.100",
-        "dhcp_range_end": "10.0.0.200",
-        "dhcp_lease_hours": 24,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "enp5s0",
-        "tailscale_enabled": False,
-    })
+    await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "enp4s0",
+            "lan_ip": "10.0.0.1",
+            "lan_prefix": 8,
+            "dhcp_range_start": "10.0.0.100",
+            "dhcp_range_end": "10.0.0.200",
+            "dhcp_lease_hours": 24,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "enp5s0",
+            "tailscale_enabled": False,
+        },
+    )
     resp = await c.get("/api/network")
     assert resp.status_code == 200
     body = resp.json()
@@ -186,19 +189,22 @@ async def test_put_with_tailscale_auth_key_stores_encrypted(auth_client_with_tel
     """tailscale_auth_key を PUT すると暗号化されて保存され、平文が DB に残らないこと。"""
     c = auth_client_with_telephony
     plaintext_key = "tskey-abcdefghij1234567890"
-    resp = await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": True,
-        "tailscale_auth_key": plaintext_key,
-    })
+    resp = await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": True,
+            "tailscale_auth_key": plaintext_key,
+        },
+    )
     assert resp.status_code == 200
     body = resp.json()
     # レスポンスに平文キーは含まれない
@@ -208,6 +214,7 @@ async def test_put_with_tailscale_auth_key_stores_encrypted(auth_client_with_tel
 
     # DB カラムを直接確認して平文が保存されていないことを検証
     from millicall.models import NetworkConfig
+
     async with app.state.sessionmaker() as session:
         cfg = await session.get(NetworkConfig, 1)
     assert cfg is not None
@@ -223,34 +230,40 @@ async def test_put_null_auth_key_preserves_existing(auth_client_with_telephony, 
     """tailscale_auth_key を省略した PUT は既存のキーを変更しないこと。"""
     c = auth_client_with_telephony
     # まずキーを設定する
-    await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": True,
-        "tailscale_auth_key": "tskey-abcdefghij1234567890",
-    })
+    await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": True,
+            "tailscale_auth_key": "tskey-abcdefghij1234567890",
+        },
+    )
 
     # キーを省略して PUT（tailscale_auth_key フィールドを含めない）
-    await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": True,
-        # tailscale_auth_key は含まない
-    })
+    await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": True,
+            # tailscale_auth_key は含まない
+        },
+    )
 
     # キーはまだ設定済みのまま
     resp = await c.get("/api/network")
@@ -262,33 +275,39 @@ async def test_put_empty_string_auth_key_clears_it(auth_client_with_telephony, a
     """tailscale_auth_key="" を PUT するとキーが削除されること。"""
     c = auth_client_with_telephony
     # まずキーを設定する
-    await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": True,
-        "tailscale_auth_key": "tskey-abcdefghij1234567890",
-    })
+    await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": True,
+            "tailscale_auth_key": "tskey-abcdefghij1234567890",
+        },
+    )
     # 空文字列でクリア
-    resp = await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": True,
-        "tailscale_auth_key": "",
-    })
+    resp = await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": True,
+            "tailscale_auth_key": "",
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["tailscale_auth_key_set"] is False
 
@@ -302,18 +321,21 @@ async def test_put_empty_string_auth_key_clears_it(auth_client_with_telephony, a
 async def test_put_invalid_lan_interface_422(auth_client_with_telephony):
     """不正な lan_interface は 422 になること。"""
     c = auth_client_with_telephony
-    resp = await c.put("/api/network", json={
-        "lan_interface": "bad interface!",  # スペース・感嘆符は不正
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": False,
-    })
+    resp = await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "bad interface!",  # スペース・感嘆符は不正
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": False,
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -321,18 +343,21 @@ async def test_put_invalid_lan_interface_422(auth_client_with_telephony):
 async def test_put_invalid_lan_ip_422(auth_client_with_telephony):
     """不正な lan_ip（非 IPv4）は 422 になること。"""
     c = auth_client_with_telephony
-    resp = await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "not.an.ip",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": False,
-    })
+    resp = await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "not.an.ip",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": False,
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -340,18 +365,21 @@ async def test_put_invalid_lan_ip_422(auth_client_with_telephony):
 async def test_put_invalid_cidr_prefix_422(auth_client_with_telephony):
     """範囲外の lan_prefix（33）は 422 になること。"""
     c = auth_client_with_telephony
-    resp = await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 33,  # 0〜32 の範囲外
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": False,
-    })
+    resp = await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 33,  # 0〜32 の範囲外
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": False,
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -359,18 +387,21 @@ async def test_put_invalid_cidr_prefix_422(auth_client_with_telephony):
 async def test_put_invalid_dhcp_range_422(auth_client_with_telephony):
     """start > end の DHCP レンジは 422 になること。"""
     c = auth_client_with_telephony
-    resp = await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.200",  # start > end
-        "dhcp_range_end": "192.168.1.100",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": False,
-    })
+    resp = await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.200",  # start > end
+            "dhcp_range_end": "192.168.1.100",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": False,
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -378,18 +409,21 @@ async def test_put_invalid_dhcp_range_422(auth_client_with_telephony):
 async def test_put_invalid_wan_interface_422(auth_client_with_telephony):
     """不正な wan_interface は 422 になること。"""
     c = auth_client_with_telephony
-    resp = await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "bad if!",  # 不正
-        "tailscale_enabled": False,
-    })
+    resp = await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "bad if!",  # 不正
+            "tailscale_enabled": False,
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -397,19 +431,22 @@ async def test_put_invalid_wan_interface_422(auth_client_with_telephony):
 async def test_put_invalid_tailscale_authkey_422(auth_client_with_telephony):
     """tskey- で始まらない tailscale_auth_key は 422 になること。"""
     c = auth_client_with_telephony
-    resp = await c.put("/api/network", json={
-        "lan_interface": "eth0",
-        "lan_ip": "192.168.1.1",
-        "lan_prefix": 24,
-        "dhcp_range_start": "192.168.1.100",
-        "dhcp_range_end": "192.168.1.200",
-        "dhcp_lease_hours": 12,
-        "provisioning_base_url": "",
-        "nat_enabled": True,
-        "wan_interface": "",
-        "tailscale_enabled": True,
-        "tailscale_auth_key": "invalid-key-format",  # tskey- でない
-    })
+    resp = await c.put(
+        "/api/network",
+        json={
+            "lan_interface": "eth0",
+            "lan_ip": "192.168.1.1",
+            "lan_prefix": 24,
+            "dhcp_range_start": "192.168.1.100",
+            "dhcp_range_end": "192.168.1.200",
+            "dhcp_lease_hours": 12,
+            "provisioning_base_url": "",
+            "nat_enabled": True,
+            "wan_interface": "",
+            "tailscale_enabled": True,
+            "tailscale_auth_key": "invalid-key-format",  # tskey- でない
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -426,18 +463,21 @@ async def test_apply_calls_netd_with_correct_args(auth_client_with_telephony, ap
     try:
         c = auth_client_with_telephony
         # 設定を保存する
-        await c.put("/api/network", json={
-            "lan_interface": "eth0",
-            "lan_ip": "192.168.1.1",
-            "lan_prefix": 24,
-            "dhcp_range_start": "192.168.1.100",
-            "dhcp_range_end": "192.168.1.200",
-            "dhcp_lease_hours": 8,
-            "provisioning_base_url": "http://192.168.1.1:8000/provisioning/",
-            "nat_enabled": True,
-            "wan_interface": "eth1",
-            "tailscale_enabled": False,
-        })
+        await c.put(
+            "/api/network",
+            json={
+                "lan_interface": "eth0",
+                "lan_ip": "192.168.1.1",
+                "lan_prefix": 24,
+                "dhcp_range_start": "192.168.1.100",
+                "dhcp_range_end": "192.168.1.200",
+                "dhcp_lease_hours": 8,
+                "provisioning_base_url": "http://192.168.1.1:8000/provisioning/",
+                "nat_enabled": True,
+                "wan_interface": "eth1",
+                "tailscale_enabled": False,
+            },
+        )
         resp = await c.post("/api/network/apply")
         assert resp.status_code == 200
         assert resp.json() == {"ok": True}
@@ -471,18 +511,21 @@ async def test_apply_derives_provisioning_url_when_empty(auth_client_with_teleph
     _inject_fake_netd(app, fake)
     try:
         c = auth_client_with_telephony
-        await c.put("/api/network", json={
-            "lan_interface": "eth0",
-            "lan_ip": "10.10.10.1",
-            "lan_prefix": 24,
-            "dhcp_range_start": "10.10.10.100",
-            "dhcp_range_end": "10.10.10.200",
-            "dhcp_lease_hours": 12,
-            "provisioning_base_url": "",  # 空
-            "nat_enabled": False,
-            "wan_interface": "",
-            "tailscale_enabled": False,
-        })
+        await c.put(
+            "/api/network",
+            json={
+                "lan_interface": "eth0",
+                "lan_ip": "10.10.10.1",
+                "lan_prefix": 24,
+                "dhcp_range_start": "10.10.10.100",
+                "dhcp_range_end": "10.10.10.200",
+                "dhcp_lease_hours": 12,
+                "provisioning_base_url": "",  # 空
+                "nat_enabled": False,
+                "wan_interface": "",
+                "tailscale_enabled": False,
+            },
+        )
         resp = await c.post("/api/network/apply")
         assert resp.status_code == 200
         dhcp_args = fake.apply_dhcp_calls[0]
@@ -560,19 +603,22 @@ async def test_tailscale_up_calls_client_with_key(auth_client_with_telephony, ap
         c = auth_client_with_telephony
         plaintext_key = "tskey-validkey12345"
         # まずキーを設定する
-        await c.put("/api/network", json={
-            "lan_interface": "eth0",
-            "lan_ip": "192.168.1.1",
-            "lan_prefix": 24,
-            "dhcp_range_start": "192.168.1.100",
-            "dhcp_range_end": "192.168.1.200",
-            "dhcp_lease_hours": 12,
-            "provisioning_base_url": "",
-            "nat_enabled": True,
-            "wan_interface": "",
-            "tailscale_enabled": True,
-            "tailscale_auth_key": plaintext_key,
-        })
+        await c.put(
+            "/api/network",
+            json={
+                "lan_interface": "eth0",
+                "lan_ip": "192.168.1.1",
+                "lan_prefix": 24,
+                "dhcp_range_start": "192.168.1.100",
+                "dhcp_range_end": "192.168.1.200",
+                "dhcp_lease_hours": 12,
+                "provisioning_base_url": "",
+                "nat_enabled": True,
+                "wan_interface": "",
+                "tailscale_enabled": True,
+                "tailscale_auth_key": plaintext_key,
+            },
+        )
         resp = await c.post("/api/network/tailscale/up")
         assert resp.status_code == 200
         body = resp.json()
@@ -610,6 +656,7 @@ async def test_tailscale_up_corrupt_key_returns_400(auth_client_with_telephony, 
         c = auth_client_with_telephony
         # 復号できない不正な値を tailscale_auth_key_encrypted に直接書き込む
         from millicall.models import NetworkConfig
+
         async with app.state.sessionmaker() as session:
             cfg = await session.get(NetworkConfig, 1)
             if cfg is None:
@@ -635,19 +682,22 @@ async def test_tailscale_up_netd_error_returns_502(auth_client_with_telephony, a
     _inject_fake_netd(app, fake)
     try:
         c = auth_client_with_telephony
-        await c.put("/api/network", json={
-            "lan_interface": "eth0",
-            "lan_ip": "192.168.1.1",
-            "lan_prefix": 24,
-            "dhcp_range_start": "192.168.1.100",
-            "dhcp_range_end": "192.168.1.200",
-            "dhcp_lease_hours": 12,
-            "provisioning_base_url": "",
-            "nat_enabled": True,
-            "wan_interface": "",
-            "tailscale_enabled": True,
-            "tailscale_auth_key": "tskey-validkey12345",
-        })
+        await c.put(
+            "/api/network",
+            json={
+                "lan_interface": "eth0",
+                "lan_ip": "192.168.1.1",
+                "lan_prefix": 24,
+                "dhcp_range_start": "192.168.1.100",
+                "dhcp_range_end": "192.168.1.200",
+                "dhcp_lease_hours": 12,
+                "provisioning_base_url": "",
+                "nat_enabled": True,
+                "wan_interface": "",
+                "tailscale_enabled": True,
+                "tailscale_auth_key": "tskey-validkey12345",
+            },
+        )
         resp = await c.post("/api/network/tailscale/up")
         assert resp.status_code == 502
         # auth key はエラーレスポンスに含まれない
@@ -723,18 +773,21 @@ async def test_put_does_not_call_netd(auth_client_with_telephony, app):
     _inject_fake_netd(app, fake)
     try:
         c = auth_client_with_telephony
-        await c.put("/api/network", json={
-            "lan_interface": "eth0",
-            "lan_ip": "192.168.1.1",
-            "lan_prefix": 24,
-            "dhcp_range_start": "192.168.1.100",
-            "dhcp_range_end": "192.168.1.200",
-            "dhcp_lease_hours": 12,
-            "provisioning_base_url": "",
-            "nat_enabled": True,
-            "wan_interface": "",
-            "tailscale_enabled": False,
-        })
+        await c.put(
+            "/api/network",
+            json={
+                "lan_interface": "eth0",
+                "lan_ip": "192.168.1.1",
+                "lan_prefix": 24,
+                "dhcp_range_start": "192.168.1.100",
+                "dhcp_range_end": "192.168.1.200",
+                "dhcp_lease_hours": 12,
+                "provisioning_base_url": "",
+                "nat_enabled": True,
+                "wan_interface": "",
+                "tailscale_enabled": False,
+            },
+        )
         # PUT 後 apply は一度も呼ばれていないこと
         assert len(fake.apply_dhcp_calls) == 0
         assert len(fake.apply_nat_calls) == 0

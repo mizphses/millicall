@@ -11,7 +11,9 @@ def test_inbound_route_bridges_to_extension(tmp_path):
     w = _writer(tmp_path)
     w.write_all(
         [],
-        routes=[RouteConfig(match_number="0312345678", target_type="extension", target_value="1001")],
+        routes=[
+            RouteConfig(match_number="0312345678", target_type="extension", target_value="1001")
+        ],
     )
     pub = (tmp_path / "dialplan" / "public.xml").read_text()
     ET.fromstring(pub)
@@ -52,7 +54,7 @@ def test_inbound_workflow_route_renders_correctly(tmp_path):
     assert "millicall_workflow=42" in pub
     assert "verbose_events=true" in pub
     assert "ring_ready" not in pub  # ring_count=0, ring_ready なし
-    assert 'data="0"' not in pub    # sleep data=0 も生成されない
+    assert 'data="0"' not in pub  # sleep data=0 も生成されない
 
 
 def test_inbound_workflow_route_with_ring_count(tmp_path):

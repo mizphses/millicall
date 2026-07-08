@@ -15,8 +15,7 @@ class STTSession(Protocol):
 
 @runtime_checkable
 class STTProvider(Protocol):
-    def open_session(self) -> STTSession:
-        ...
+    def open_session(self) -> STTSession: ...
 
 
 class BatchSTTSession:

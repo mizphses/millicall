@@ -11,6 +11,7 @@
   - リカバリコードの平文は /verify レスポンスのみ。DB には Argon2 ハッシュのみ格納
   - audit detail にシークレット・コード・ハッシュ文字列を含めない
 """
+
 import json
 import secrets as secrets_mod
 

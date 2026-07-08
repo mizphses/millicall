@@ -48,9 +48,7 @@ def test_external_profile_written_even_without_trunks(tmp_path):
 
 
 def test_trunk_password_not_in_repr():
-    cfg = TrunkConfig(
-        name="hgw", display_name="HGW", host="h", username="u", password="topsecret"
-    )
+    cfg = TrunkConfig(name="hgw", display_name="HGW", host="h", username="u", password="topsecret")
     assert "topsecret" not in repr(cfg)
 
 

@@ -7,6 +7,7 @@
   - /login/totp と /totp/verify もスロットリング対象（H-2）
   - ロックアウト時に audit ログが記録される
 """
+
 import pyotp
 import pytest
 from fastapi import HTTPException
@@ -75,9 +76,7 @@ async def test_username_lockout_after_max_attempts(tmp_path):
                 assert resp.status_code == 401
 
             # 4 回目は 429
-            resp = await c.post(
-                "/api/auth/login", json={"username": "lu1", "password": "wrong"}
-            )
+            resp = await c.post("/api/auth/login", json={"username": "lu1", "password": "wrong"})
             assert resp.status_code == 429
             assert "Retry-After" in resp.headers
 
@@ -120,9 +119,7 @@ async def test_success_clears_failure_counter(tmp_path):
 
             # 再び 2 回失敗しても 429 にならない（カウンタがリセットされているため）
             for _ in range(2):
-                resp = await c.post(
-                    "/api/auth/login", json={"username": "lu3", "password": "bad"}
-                )
+                resp = await c.post("/api/auth/login", json={"username": "lu3", "password": "bad"})
                 assert resp.status_code == 401
 
 
@@ -183,9 +180,7 @@ async def test_login_attempt_rows_inserted_on_failure(tmp_path):
         sm = app.state.sessionmaker
         async with sm() as s:
             count = await s.scalar(
-                select(func.count()).select_from(LoginAttempt).where(
-                    LoginAttempt.username == "lu5"
-                )
+                select(func.count()).select_from(LoginAttempt).where(LoginAttempt.username == "lu5")
             )
         # 2 回の失敗 × 2 行（username キーと IP キー）
         assert count and count >= 2
@@ -237,9 +232,7 @@ async def test_login_totp_endpoint_rate_limited(tmp_path):
                 assert resp.status_code == 401
 
             # 4 回目は 429
-            resp = await c.post(
-                "/api/auth/login/totp", json={"ticket": ticket, "code": "000000"}
-            )
+            resp = await c.post("/api/auth/login/totp", json={"ticket": ticket, "code": "000000"})
             assert resp.status_code == 429
             assert "Retry-After" in resp.headers
 
@@ -285,9 +278,7 @@ async def test_totp_disable_endpoint_rate_limited(tmp_path):
             assert login_resp.status_code == 200
             ticket = login_resp.json()["ticket"]
             code = pyotp.TOTP(secret).now()
-            totp_resp = await c.post(
-                "/api/auth/login/totp", json={"ticket": ticket, "code": code}
-            )
+            totp_resp = await c.post("/api/auth/login/totp", json={"ticket": ticket, "code": code})
             assert totp_resp.status_code == 200
 
             # 誤ったコードで 3 回失敗
@@ -303,6 +294,7 @@ async def test_totp_disable_endpoint_rate_limited(tmp_path):
 # ---------------------------------------------------------------------------
 # IP・ユーザー名しきい値の分離（レビュー H-1 回帰）
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_username_threshold_decoupled_from_ip(app):
@@ -321,8 +313,12 @@ async def test_username_threshold_decoupled_from_ip(app):
 
         # username=victim, ip=None → username_count=15 < 30 なので通過（例外なし）
         await check_and_raise(
-            s, ip=None, username="victim",
-            ip_max_attempts=10, username_max_attempts=30, lockout_seconds=300,
+            s,
+            ip=None,
+            username="victim",
+            ip_max_attempts=10,
+            username_max_attempts=30,
+            lockout_seconds=300,
         )
 
         # さらに 20 回（計 35）失敗させると username しきい値 30 を超えてロック
@@ -331,7 +327,11 @@ async def test_username_threshold_decoupled_from_ip(app):
         await s.commit()
         with pytest.raises(HTTPException) as ei:
             await check_and_raise(
-                s, ip=None, username="victim",
-                ip_max_attempts=10, username_max_attempts=30, lockout_seconds=300,
+                s,
+                ip=None,
+                username="victim",
+                ip_max_attempts=10,
+                username_max_attempts=30,
+                lockout_seconds=300,
             )
         assert ei.value.status_code == 429

@@ -11,9 +11,7 @@ import json
 from millicall.ai.llm.base import ChatMessage
 
 
-def build_generate_content_payload(
-    messages: list[ChatMessage], temperature: float
-) -> dict:
+def build_generate_content_payload(messages: list[ChatMessage], temperature: float) -> dict:
     """ChatMessage 列を generateContent の JSON ペイロードへ変換する。
 
     system ロールは systemInstruction へまとめ、user/assistant は contents へ。

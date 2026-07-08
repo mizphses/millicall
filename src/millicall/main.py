@@ -38,7 +38,6 @@ from millicall.scim.router import api_router as scim_api_router
 from millicall.scim.router import scim_router
 from millicall.secrets_store import load_or_create_secrets
 from millicall.system.router import router as system_router
-from millicall.users.router import router as users_router
 from millicall.telephony.esl import ESLClient
 from millicall.telephony.events import CdrRecorder, EslEventListener
 from millicall.telephony.service import (
@@ -48,6 +47,7 @@ from millicall.telephony.service import (
 )
 from millicall.trunks.router import router as trunks_router
 from millicall.tts_cache.router import router as tts_cache_router
+from millicall.users.router import router as users_router
 from millicall.workflows.errors import WorkflowValidationError
 from millicall.workflows.router import router as workflows_router
 from millicall.workflows.runner import WorkflowRunner
@@ -201,7 +201,18 @@ async def lifespan(app: FastAPI):
 # SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。
 # これらに該当する未定義 GET は 404 を返し、API のセマンティクスを保つ。
 _SPA_EXCLUDED_PREFIXES = frozenset(
-    {"api", "media", "healthz", "openapi.json", "docs", "redoc", "mcp", ".well-known", "provisioning", "scim"}
+    {
+        "api",
+        "media",
+        "healthz",
+        "openapi.json",
+        "docs",
+        "redoc",
+        "mcp",
+        ".well-known",
+        "provisioning",
+        "scim",
+    }
 )
 
 

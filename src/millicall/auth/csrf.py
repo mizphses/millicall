@@ -16,6 +16,7 @@
 
 GET / HEAD / OPTIONS は常に免除する。
 """
+
 import hmac
 import secrets
 
@@ -29,11 +30,11 @@ from starlette.types import ASGIApp
 # `/api/auth/login-history` 等を意図せず免除してしまう。境界を意識した一致
 # （完全一致 または prefix + "/" で始まる）に限定する。
 _EXEMPT_PREFIXES = (
-    "/api/auth/login",      # POST /api/auth/login（完全一致）
+    "/api/auth/login",  # POST /api/auth/login（完全一致）
     "/api/auth/login/totp",  # 2 段階ログイン
-    "/saml",                # SAML IdP からの cross-origin POST（T4/T5）
-    "/scim",                # SCIM (Bearer auth); Cookie を使わない
-    "/mcp",                 # MCP OAuth Bearer
+    "/saml",  # SAML IdP からの cross-origin POST（T4/T5）
+    "/scim",  # SCIM (Bearer auth); Cookie を使わない
+    "/mcp",  # MCP OAuth Bearer
 )
 
 # CSRF チェック対象のメソッド（状態変更リクエスト）
@@ -42,9 +43,7 @@ _CHECKED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 def _is_exempt(path: str) -> bool:
     """パスが CSRF チェック除外対象かどうかを返す（境界一致）。"""
-    return any(
-        path == prefix or path.startswith(prefix + "/") for prefix in _EXEMPT_PREFIXES
-    )
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in _EXEMPT_PREFIXES)
 
 
 class CsrfMiddleware(BaseHTTPMiddleware):
@@ -68,7 +67,11 @@ class CsrfMiddleware(BaseHTTPMiddleware):
             csrf_header = request.headers.get("X-CSRF-Token")
 
             # どちらか欠けている、または値が一致しない場合は 403
-            if not csrf_cookie or not csrf_header or not hmac.compare_digest(csrf_cookie, csrf_header):
+            if (
+                not csrf_cookie
+                or not csrf_header
+                or not hmac.compare_digest(csrf_cookie, csrf_header)
+            ):
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "CSRF token missing or invalid"},

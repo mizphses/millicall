@@ -7,6 +7,7 @@
 - allowlist に載っていない国際番号は "international" 権限でも outbound_intl_block でブロック
 - 各権限の条件が XML として整形式である
 """
+
 import defusedxml.ElementTree as ET  # noqa: N817
 
 from millicall.telephony.fsconfig import ExtensionConfig, FreeswitchConfigWriter, TrunkConfig
@@ -34,12 +35,15 @@ def _trunk():
 
 def _ext(number, display_name, calling_permission="domestic"):
     return ExtensionConfig(
-        number=number, display_name=display_name, sip_password="pw",
+        number=number,
+        display_name=display_name,
+        sip_password="pw",
         calling_permission=calling_permission,
     )
 
 
 # ---- directory: user.xml 変数 ----
+
 
 def test_user_xml_sets_calling_permission_internal(tmp_path):
     w = _writer(tmp_path)
@@ -69,17 +73,20 @@ def test_user_xml_sets_calling_permission_international(tmp_path):
 def test_user_xml_each_extension_gets_own_permission(tmp_path):
     """複数内線がそれぞれ個別の calling_permission を持つ。"""
     w = _writer(tmp_path)
-    w.write_all([
-        _ext("1001", "A", calling_permission="internal"),
-        _ext("1002", "B", calling_permission="domestic"),
-        _ext("1003", "C", calling_permission="international"),
-    ])
+    w.write_all(
+        [
+            _ext("1001", "A", calling_permission="internal"),
+            _ext("1002", "B", calling_permission="domestic"),
+            _ext("1003", "C", calling_permission="international"),
+        ]
+    )
     for number, perm in [("1001", "internal"), ("1002", "domestic"), ("1003", "international")]:
         txt = (tmp_path / "directory" / "default" / f"{number}.xml").read_text()
         assert f'value="{perm}"' in txt
 
 
 # ---- dialplan: 発信権限ゲート ----
+
 
 def test_dialplan_domestic_permission_condition_in_outbound_external(tmp_path):
     """outbound_external に domestic|international の条件が含まれる。"""

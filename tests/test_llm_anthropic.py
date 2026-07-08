@@ -26,10 +26,7 @@ def _handler(request: httpx.Request) -> httpx.Response:
 async def test_anthropic_stream():
     llm = AnthropicLLM(api_key="ak", transport=httpx.MockTransport(_handler))
     tokens = [
-        t
-        async for t in llm.stream_chat(
-            [ChatMessage("system", "sys"), ChatMessage("user", "hi")]
-        )
+        t async for t in llm.stream_chat([ChatMessage("system", "sys"), ChatMessage("user", "hi")])
     ]
     assert tokens == ["こん", "にちは"]
 

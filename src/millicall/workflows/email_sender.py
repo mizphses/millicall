@@ -106,9 +106,7 @@ class SmtpEmailSender:
             aiosmtplib.SMTPException: SMTP レベルのエラー。
         """
         if not self._host:
-            raise ValueError(
-                "メール送信が無効です: MILLICALL_SMTP_HOST が設定されていません"
-            )
+            raise ValueError("メール送信が無効です: MILLICALL_SMTP_HOST が設定されていません")
 
         # ヘッダインジェクション対策
         _reject_header_injection(to, "to")

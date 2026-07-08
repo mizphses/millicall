@@ -99,19 +99,21 @@ class WorkflowRunner:
         try:
             tts, stt = await self._build_tts_stt(workflow, box)
         except Exception:
-            logger.exception("workflow runner: provider build failed for workflow_id=%d", workflow_id)
+            logger.exception(
+                "workflow runner: provider build failed for workflow_id=%d", workflow_id
+            )
 
         if tts is None or stt is None:
             logger.warning(
                 "workflow runner: could not build primitives (tts=%s, stt=%s) "
                 "for workflow_id=%d; call_control will still work",
-                tts, stt, workflow_id,
+                tts,
+                stt,
+                workflow_id,
             )
 
         # --- EslCallControl + CallPrimitives -------------------------------- #
-        call_control = EslCallControl(
-            self._esl, uuid, lock=self._lock, reconnect=self._reconnect
-        )
+        call_control = EslCallControl(self._esl, uuid, lock=self._lock, reconnect=self._reconnect)
 
         primitives: CallPrimitives | None = None
         if tts is not None and stt is not None:
@@ -160,7 +162,8 @@ class WorkflowRunner:
         except Exception:
             logger.exception(
                 "workflow runner: execution error for workflow_id=%d uuid=%s",
-                workflow_id, uuid,
+                workflow_id,
+                uuid,
             )
         finally:
             # ハングアップが済んでいなければ切断する（正常終了・例外どちらでも）。
@@ -192,7 +195,9 @@ class WorkflowRunner:
                         key = box.decrypt(p.api_key_encrypted) if p.api_key_encrypted else None
                         tts = _build_provider_from_row(p, key)
                     except Exception:
-                        logger.warning("workflow runner: TTS provider %d build failed", tts_pid, exc_info=True)
+                        logger.warning(
+                            "workflow runner: TTS provider %d build failed", tts_pid, exc_info=True
+                        )
             if tts is None:
                 p = await db.scalar(
                     select(Provider).where(Provider.type == "tts", Provider.enabled.is_(True))
@@ -258,4 +263,6 @@ class WorkflowRunner:
         try:
             await ctx.hangup()
         except Exception:
-            logger.warning("workflow runner: final hangup failed for uuid=%s", ctx.uuid, exc_info=True)
+            logger.warning(
+                "workflow runner: final hangup failed for uuid=%s", ctx.uuid, exc_info=True
+            )

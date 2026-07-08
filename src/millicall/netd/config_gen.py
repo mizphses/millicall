@@ -52,9 +52,7 @@ def _validate_provisioning_url(url: str, lan_ip: str) -> None:
         raise ValueError("provisioning_url は空にできません")
 
     if _DANGEROUS_CHARS_RE.search(url):
-        raise ValueError(
-            "provisioning_url にシェルメタ文字・改行・制御文字が含まれています"
-        )
+        raise ValueError("provisioning_url にシェルメタ文字・改行・制御文字が含まれています")
 
     m = _PROVISIONING_URL_RE.match(url)
     if not m:
@@ -67,8 +65,7 @@ def _validate_provisioning_url(url: str, lan_ip: str) -> None:
 
     if host_in_url != lan_ip:
         raise ValueError(
-            f"provisioning_url のホスト ({host_in_url!r}) が "
-            f"lan_ip ({lan_ip!r}) と一致しません"
+            f"provisioning_url のホスト ({host_in_url!r}) が lan_ip ({lan_ip!r}) と一致しません"
         )
 
     port = int(port_str)
@@ -127,7 +124,9 @@ def render_dnsmasq_conf(
     validate_ipv4_range(dhcp_range_start, dhcp_range_end)
     validate_cidr_prefix(lan_prefix)
     if not isinstance(dhcp_lease_hours, int) or dhcp_lease_hours < 1:
-        raise ValueError(f"dhcp_lease_hours は 1 以上の整数でなければなりません: {dhcp_lease_hours!r}")
+        raise ValueError(
+            f"dhcp_lease_hours は 1 以上の整数でなければなりません: {dhcp_lease_hours!r}"
+        )
     _validate_provisioning_url(provisioning_url, lan_ip)
 
     netmask = _cidr_to_netmask(lan_prefix)

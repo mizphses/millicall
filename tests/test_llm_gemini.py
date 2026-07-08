@@ -25,10 +25,7 @@ def _handler(request: httpx.Request) -> httpx.Response:
 async def test_gemini_stream():
     llm = GeminiLLM(api_key="gk", transport=httpx.MockTransport(_handler))
     tokens = [
-        t
-        async for t in llm.stream_chat(
-            [ChatMessage("system", "sys"), ChatMessage("user", "hi")]
-        )
+        t async for t in llm.stream_chat([ChatMessage("system", "sys"), ChatMessage("user", "hi")])
     ]
     assert tokens == ["こん", "にちは"]
 

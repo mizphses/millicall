@@ -84,9 +84,7 @@ async def create_provider(
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="name exists"
-        ) from None
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="name exists") from None
     await session.refresh(provider)
     return _to_read(provider, box)
 
@@ -122,17 +120,13 @@ async def update_provider(
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="name exists"
-        ) from None
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="name exists") from None
     await session.refresh(p)
     return _to_read(p, box)
 
 
 @router.delete("/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_provider(
-    provider_id: int, session: AsyncSession = Depends(get_session)
-) -> None:
+async def delete_provider(provider_id: int, session: AsyncSession = Depends(get_session)) -> None:
     p = await session.get(Provider, provider_id)
     if p is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")

@@ -1,4 +1,5 @@
 """ユーザー管理 API ルーター。"""
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
@@ -68,9 +69,12 @@ class ResetPasswordBody(BaseModel):
 
 
 async def _count_enabled_admins(session: AsyncSession) -> int:
-    return await session.scalar(
-        select(func.count()).select_from(User).where(User.role == "admin", User.enabled == True)  # noqa: E712
-    ) or 0
+    return (
+        await session.scalar(
+            select(func.count()).select_from(User).where(User.role == "admin", User.enabled == True)  # noqa: E712
+        )
+        or 0
+    )
 
 
 @router.get("", response_model=list[UserRead])
@@ -128,7 +132,9 @@ async def patch_user(
 ) -> User:
     user = await session.get(User, user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません"
+        )
 
     # Last-admin guard
     admin_count = await _count_enabled_admins(session)
@@ -210,7 +216,9 @@ async def reset_password(
 ) -> User:
     user = await session.get(User, user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません"
+        )
 
     if user.origin != "local":
         raise HTTPException(
@@ -251,7 +259,9 @@ async def delete_user(
 
     user = await session.get(User, user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません"
+        )
 
     # Last-admin guard
     if user.role == "admin" and user.enabled:

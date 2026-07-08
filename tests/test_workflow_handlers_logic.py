@@ -75,7 +75,9 @@ def make_time_condition_node(
         config=TimeConditionConfig(
             start_time=start_time,
             end_time=end_time,
-            days_of_week=days_of_week if days_of_week is not None else ["mon", "tue", "wed", "thu", "fri"],
+            days_of_week=days_of_week
+            if days_of_week is not None
+            else ["mon", "tue", "wed", "thu", "fri"],
             timezone=timezone,
         ),
     )
@@ -492,7 +494,9 @@ async def test_api_call_url_template_expanded() -> None:
 
     # 展開後の URL でリクエストが呼ばれること
     call_args = mock_client.request.call_args
-    assert "http://example.com/items/42" in call_args[0] or "http://example.com/items/42" in str(call_args)
+    assert "http://example.com/items/42" in call_args[0] or "http://example.com/items/42" in str(
+        call_args
+    )
 
 
 # --------------------------------------------------------------------------- #

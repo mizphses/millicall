@@ -111,7 +111,9 @@ async def test_greet_plays_greeting(tmp_path):
 @pytest.mark.asyncio
 async def test_turn_splits_sentences_and_plays_in_order(tmp_path):
     turns = []
-    s = _new_session(tmp_path, ["はい", "、", "承知", "しました。", "少々", "お待ちを。"], turns=turns)
+    s = _new_session(
+        tmp_path, ["はい", "、", "承知", "しました。", "少々", "お待ちを。"], turns=turns
+    )
     await s.on_utterance(b"\x00\x00" * 800)
     # 2文 → 2ファイル再生
     assert len(s._call_control.played) == 2

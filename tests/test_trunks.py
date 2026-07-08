@@ -80,14 +80,18 @@ async def test_update_without_password_keeps_existing(admin_client):
     """Create trunk with password, PATCH only display_name, verify password persists."""
     created = await admin_client.post(
         "/api/trunks",
-        json={"name": "hgw", "display_name": "Original", "host": "h", "username": "u", "password": "secret"},
+        json={
+            "name": "hgw",
+            "display_name": "Original",
+            "host": "h",
+            "username": "u",
+            "password": "secret",
+        },
     )
     assert created.status_code == 201
     tid = created.json()["id"]
 
-    patched = await admin_client.patch(
-        f"/api/trunks/{tid}", json={"display_name": "Renamed"}
-    )
+    patched = await admin_client.patch(f"/api/trunks/{tid}", json={"display_name": "Renamed"})
     assert patched.status_code == 200
     assert patched.json()["display_name"] == "Renamed"
     assert patched.json()["has_password"] is True

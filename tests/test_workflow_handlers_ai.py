@@ -76,9 +76,7 @@ class FakeLLM:
     def stream_chat(self, messages):
         """非同期ジェネレータとして canned チャンクを返す。"""
         chunks = (
-            self._responses[self._call_index]
-            if self._call_index < len(self._responses)
-            else []
+            self._responses[self._call_index] if self._call_index < len(self._responses) else []
         )
         self._call_index += 1
         return self._async_gen(chunks)
@@ -229,9 +227,9 @@ async def test_collect_info_confirmation_negative_reasks() -> None:
     ctx = make_ctx()
     ctx.primitives = make_fake_primitives(
         say_and_listen_returns=[
-            ("お名前を教えてください", "田中"),       # 初回質問
-            ("田中 でよろしいですか？", "いいえ"),     # 確認 → 否定
-            ("お名前を教えてください", "田中一郎"),    # 再質問
+            ("お名前を教えてください", "田中"),  # 初回質問
+            ("田中 でよろしいですか？", "いいえ"),  # 確認 → 否定
+            ("お名前を教えてください", "田中一郎"),  # 再質問
         ]
     )
     node = make_collect_info_node(
@@ -502,9 +500,7 @@ async def test_ai_conversation_max_turns_respected() -> None:
     fake_llm = FakeLLM([["応答1"], ["応答2"]])
     ctx.provider_resolver = AsyncMock(return_value=fake_llm)
 
-    ctx.primitives = make_fake_primitives(
-        listen_returns=["ユーザ発話1", "ユーザ発話2"]
-    )
+    ctx.primitives = make_fake_primitives(listen_returns=["ユーザ発話1", "ユーザ発話2"])
     ctx.call_control = MagicMock()
     ctx.call_control.hangup = AsyncMock()
 
@@ -553,10 +549,12 @@ async def test_ai_conversation_extract_variables_auto() -> None:
 
     # ターン応答 + 抽出応答の 2 回分
     extracted = json.dumps({"customer_name": "佐藤様", "issue": "ログインできない"})
-    fake_llm = FakeLLM([
-        ["[END_CALL]"],           # ターン: すぐ終話
-        [extracted],              # 抽出呼び出し
-    ])
+    fake_llm = FakeLLM(
+        [
+            ["[END_CALL]"],  # ターン: すぐ終話
+            [extracted],  # 抽出呼び出し
+        ]
+    )
     ctx.provider_resolver = AsyncMock(return_value=fake_llm)
 
     ctx.primitives = make_fake_primitives(listen_returns=["ログインできません"])
@@ -584,10 +582,12 @@ async def test_ai_conversation_extract_variables_malformed_json() -> None:
     fake_agent = make_fake_agent(greeting="")
     ctx.agent_resolver = AsyncMock(return_value=fake_agent)
 
-    fake_llm = FakeLLM([
-        ["[END_CALL]"],       # ターン応答
-        ["not json at all"],  # 不正な抽出応答
-    ])
+    fake_llm = FakeLLM(
+        [
+            ["[END_CALL]"],  # ターン応答
+            ["not json at all"],  # 不正な抽出応答
+        ]
+    )
     ctx.provider_resolver = AsyncMock(return_value=fake_llm)
 
     ctx.primitives = make_fake_primitives(listen_returns=["テスト"])

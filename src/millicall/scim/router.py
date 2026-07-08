@@ -211,7 +211,9 @@ def _parse_simple_filter(filter_str: str) -> tuple[str, str] | None:
 # ---------------------------------------------------------------------------
 
 
-async def _deactivate_user(user: User, session: AsyncSession, *, actor_label: str, ip: str | None, action: str) -> None:
+async def _deactivate_user(
+    user: User, session: AsyncSession, *, actor_label: str, ip: str | None, action: str
+) -> None:
     """ユーザーを無効化し、全セッションを即時失効させる。
 
     enabled=False + bump_session_epoch の両方を必ず実行する。
@@ -322,7 +324,10 @@ async def resource_types(request: Request, session: AsyncSession = Depends(get_s
                 "name": "User",
                 "endpoint": "/scim/v2/Users",
                 "schema": _SCHEMA_USER,
-                "meta": {"resourceType": "ResourceType", "location": f"{base}/scim/v2/ResourceTypes/User"},
+                "meta": {
+                    "resourceType": "ResourceType",
+                    "location": f"{base}/scim/v2/ResourceTypes/User",
+                },
             },
             {
                 "schemas": ["urn:ietf:params:scim:schemas:core:2.0:ResourceType"],
@@ -330,7 +335,10 @@ async def resource_types(request: Request, session: AsyncSession = Depends(get_s
                 "name": "Group",
                 "endpoint": "/scim/v2/Groups",
                 "schema": _SCHEMA_GROUP,
-                "meta": {"resourceType": "ResourceType", "location": f"{base}/scim/v2/ResourceTypes/Group"},
+                "meta": {
+                    "resourceType": "ResourceType",
+                    "location": f"{base}/scim/v2/ResourceTypes/Group",
+                },
             },
         ],
     }
@@ -548,14 +556,18 @@ async def put_user(
 
     # userName 重複チェック（自分以外）
     if new_username != user.username:
-        dup = await session.scalar(select(User).where(User.username == new_username, User.id != user_id))
+        dup = await session.scalar(
+            select(User).where(User.username == new_username, User.id != user_id)
+        )
         if dup is not None:
             return _scim_error(409, f"userName '{new_username}' already exists", "uniqueness")
         user.username = new_username
 
     # email 重複チェック（自分以外）
     if new_email and new_email != user.email:
-        dup_em = await session.scalar(select(User).where(User.email == new_email, User.id != user_id))
+        dup_em = await session.scalar(
+            select(User).where(User.email == new_email, User.id != user_id)
+        )
         if dup_em is not None:
             return _scim_error(409, f"email '{new_email}' already exists", "uniqueness")
 
@@ -566,7 +578,9 @@ async def put_user(
 
     if not new_active and was_active:
         # active が false に変わった → 即時セッション失効
-        await _deactivate_user(user, session, actor_label="scim", ip=ip, action="scim.user.deactivate")
+        await _deactivate_user(
+            user, session, actor_label="scim", ip=ip, action="scim.user.deactivate"
+        )
     else:
         user.enabled = new_active
         await record_audit(
@@ -668,7 +682,11 @@ async def patch_user(
                 else:
                     user.display_name = str(value)
                 changed = True
-            elif path == "emails" or path == "emails[type eq \"work\"].value" or path.startswith("emails"):
+            elif (
+                path == "emails"
+                or path == 'emails[type eq "work"].value'
+                or path.startswith("emails")
+            ):
                 if isinstance(value, list):
                     em = _extract_primary_email({"emails": value})
                     if em:

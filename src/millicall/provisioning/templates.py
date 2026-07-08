@@ -331,9 +331,9 @@ def render_panasonic_phonebook(contacts: list) -> bytes:
         entry = SubElement(root, "DirectoryEntry")
         SubElement(entry, "Name").text = name
         SubElement(entry, "Telephone").text = phone
-    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(
-        root, encoding="unicode"
-    ).encode("utf-8")
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode").encode(
+        "utf-8"
+    )
 
 
 def render_yealink_phonebook(contacts: list) -> bytes:
@@ -354,6 +354,6 @@ def render_yealink_phonebook(contacts: list) -> bytes:
         SubElement(entry, "Name").text = name
         tel = SubElement(entry, "Telephone")
         tel.text = phone
-    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(
-        root, encoding="unicode"
-    ).encode("utf-8")
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode").encode(
+        "utf-8"
+    )

@@ -78,9 +78,7 @@ class VertexAILLM:
                 "Vertex AI にはサービスアカウント JSON が必要です（api_key に SA JSON を設定してください）。"
             )
         info = json.loads(self._sa_json)
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=_SCOPES
-        )
+        creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
         creds.refresh(google.auth.transport.requests.Request())
         return creds.token
 

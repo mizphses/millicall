@@ -156,6 +156,7 @@ def test_re_escape_rejects_unsafe_input(tmp_path) -> None:
 
     # Unsafe inputs should raise ValueError
     import pytest
+
     with pytest.raises(ValueError, match="re_escape filter: unsafe input"):
         filter_func("<evil>")
 

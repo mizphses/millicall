@@ -67,9 +67,7 @@ class WhisperSTT:
             "response_format": "text",
             "prompt": "電話での会話です。",
         }
-        async with httpx.AsyncClient(
-            timeout=self._timeout, transport=self._transport
-        ) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             resp = await client.post(_API_URL, headers=headers, files=files, data=data)
             resp.raise_for_status()
             text = resp.text.strip()

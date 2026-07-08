@@ -83,6 +83,7 @@ def _q(ns: str, tag: str) -> str:
 # プロセスをまたぐリプレイ防御は行われない。シングルワーカーが推奨構成。
 # 本番環境でマルチプロセス運用が必要な場合は Redis 等の共有ストアへの移行が必要。
 
+
 class _ReplayCache:
     """消費済みアサーション ID の TTL 付きキャッシュ。"""
 
@@ -290,8 +291,10 @@ async def saml_login(request: Request, next: str = "/") -> RedirectResponse:
     redirect_url = (
         settings.saml_idp_sso_url
         + ("&" if "?" in settings.saml_idp_sso_url else "?")
-        + "SAMLRequest=" + encoded
-        + "&RelayState=" + urllib.parse.quote_plus(relay_state)
+        + "SAMLRequest="
+        + encoded
+        + "&RelayState="
+        + urllib.parse.quote_plus(relay_state)
     )
     return RedirectResponse(url=redirect_url, status_code=302)
 
@@ -368,8 +371,7 @@ async def saml_acs(
         # CRITICAL anti-wrapping: VerifyResult.signed_xml が実際に署名されたサブツリーを返すため、
         # location で見つかった Signature がどのデータを署名したかが確定し、
         # 攻撃者が別の要素を注入しても detected_xml は変わらない。
-        config = SignatureConfiguration(location=".//")\
-
+        config = SignatureConfiguration(location=".//")
         verify_result = XMLVerifier().verify(
             root,
             x509_cert=cert_pem,
@@ -422,9 +424,7 @@ async def saml_acs(
         raise HTTPException(status_code=400, detail="AudienceRestriction missing")
 
     audience_values = [
-        a.text.strip()
-        for a in audience_restriction.findall(_q(_NS_SAML, "Audience"))
-        if a.text
+        a.text.strip() for a in audience_restriction.findall(_q(_NS_SAML, "Audience")) if a.text
     ]
     if settings.saml_sp_entity_id not in audience_values:
         await _fail("audience_mismatch")
@@ -486,11 +486,7 @@ async def saml_acs(
     display_name = display_name_from_attr or email.split("@")[0]
 
     # ---- Step 7: Replay 防御 ----
-    assertion_id = (
-        verified_assertion.get("ID")
-        or verified_assertion.get("Id")
-        or ""
-    )
+    assertion_id = verified_assertion.get("ID") or verified_assertion.get("Id") or ""
     if not assertion_id:
         await _fail("assertion_id_missing")
         raise HTTPException(status_code=400, detail="Assertion ID missing")
@@ -508,9 +504,7 @@ async def saml_acs(
 
     # ---- Step 8: ユーザー upsert ----
     async with request.app.state.sessionmaker() as db_session:
-        existing_user = await db_session.scalar(
-            select(User).where(User.email == email)
-        )
+        existing_user = await db_session.scalar(select(User).where(User.email == email))
 
         if existing_user is not None:
             # セキュリティ（レビュー H-1）: SAML でローカル(または SCIM)由来アカウントへ
@@ -550,9 +544,7 @@ async def saml_acs(
         await db_session.flush()  # user.id を確定させる
 
         # ---- Step 9: セッション + CSRF Cookie 発行 ----
-        session_token = issue_session(
-            secrets_state.session_secret, user.id, user.session_epoch
-        )
+        session_token = issue_session(secrets_state.session_secret, user.id, user.session_epoch)
 
         # 監査ログ（アサーション内容は記録しない；ユーザー ID のみ）
         await record_audit(

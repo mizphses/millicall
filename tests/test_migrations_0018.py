@@ -2,6 +2,7 @@
 
 extensions.calling_permission カラムの追加・削除、およびデフォルト値を確認する。
 """
+
 import sqlite3
 
 from alembic.command import downgrade, upgrade

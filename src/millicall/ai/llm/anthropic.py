@@ -31,10 +31,7 @@ class AnthropicLLM:
 
     def __repr__(self) -> str:
         # api_key を平文で漏らさない
-        return (
-            f"AnthropicLLM(model={self._model!r}, "
-            f"api_key={'***' if self._api_key else None})"
-        )
+        return f"AnthropicLLM(model={self._model!r}, api_key={'***' if self._api_key else None})"
 
     async def stream_chat(self, messages: list[ChatMessage]) -> AsyncIterator[str]:
         system = "\n".join(m.content for m in messages if m.role == "system")

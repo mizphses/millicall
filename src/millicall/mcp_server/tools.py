@@ -160,8 +160,7 @@ def register_tools(mcp: FastMCP) -> None:
                 "channel_id": result.call_uuid,
                 "state": result.state,
                 "message": (
-                    f"{phone_number} が応答しました。"
-                    "say_and_listenで会話を始めてください。"
+                    f"{phone_number} が応答しました。say_and_listenで会話を始めてください。"
                 ),
             }
         )

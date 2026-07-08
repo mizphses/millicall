@@ -33,9 +33,10 @@ if TYPE_CHECKING:
 # SSRF ガード — ブロック対象 IP ネットワーク
 # --------------------------------------------------------------------------- #
 
-def _normalize_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> (
-    ipaddress.IPv4Address | ipaddress.IPv6Address
-):
+
+def _normalize_ip(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     """IPv4-mapped / IPv4-compatible IPv6 を素の IPv4 に畳み込む。
 
     ``::ffff:127.0.0.1`` のような IPv4-mapped IPv6 は、IPv6 として見ると
@@ -289,7 +290,11 @@ async def handle_api_call(node: object, ctx: ChannelContext) -> str:
         headers = {k: ctx.render(v) for k, v in config.headers.items()}
 
         # Content-Type ヘッダの自動付与（既に指定がない場合）
-        if body_str and "Content-Type" not in headers and "content-type" not in {k.lower() for k in headers}:
+        if (
+            body_str
+            and "Content-Type" not in headers
+            and "content-type" not in {k.lower() for k in headers}
+        ):
             if config.content_type == "json":
                 headers["Content-Type"] = "application/json"
             elif config.content_type == "form":

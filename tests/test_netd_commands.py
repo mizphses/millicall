@@ -327,6 +327,7 @@ class TestTailscaleUp:
     @pytest.mark.asyncio
     async def test_serve_enabled_runs_serve_after_up(self):
         """tailscale_serve_enabled=True のとき up 成功後に tailscale serve を張る。"""
+
         class ServeSettings(FakeSettings):
             tailscale_serve_enabled = True
             http_port = 80
@@ -348,6 +349,7 @@ class TestTailscaleUp:
     @pytest.mark.asyncio
     async def test_serve_failure_does_not_fail_up(self):
         """serve が失敗しても up 自体の成功は覆らない。"""
+
         class ServeSettings(FakeSettings):
             tailscale_serve_enabled = True
             http_port = 8000
@@ -356,7 +358,9 @@ class TestTailscaleUp:
         # serve が呼ばれることだけ確認（失敗系は run_rc をハンドラ内で個別制御できないため
         # ここでは serve が 2 コール目に出ることと ok=True を確認）。
         ops = FakeSystemOps()
-        resp = await dispatch({"cmd": "tailscale_up", "auth_key": self._VALID_KEY}, ops, ServeSettings())
+        resp = await dispatch(
+            {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}, ops, ServeSettings()
+        )
         assert resp["ok"] is True
         assert len(ops.run_calls) == 2
         assert "http://localhost:8000" in ops.run_calls[1][0]
@@ -452,27 +456,29 @@ class TestTailscaleDown:
 # ---------------------------------------------------------------------------
 
 
-_TAILSCALE_STATUS_JSON = json.dumps({
-    "BackendState": "Running",
-    "Self": {
-        "ID": "n123456789",
-        "HostName": "millicall-server",
-        "DNSName": "millicall-server.ts.net",
-        "TailscaleIPs": ["100.64.0.1"],
-        "Online": True,
-        # 認証キー等の機密情報（実際の出力には含まれないが念のため）
-        "AuthKey": "tskey-should-not-be-returned",
-    },
-    "Peer": {
-        "n987654321": {
-            "ID": "n987654321",
-            "HostName": "peer-device",
-            "DNSName": "peer-device.ts.net",
-            "TailscaleIPs": ["100.64.0.2"],
+_TAILSCALE_STATUS_JSON = json.dumps(
+    {
+        "BackendState": "Running",
+        "Self": {
+            "ID": "n123456789",
+            "HostName": "millicall-server",
+            "DNSName": "millicall-server.ts.net",
+            "TailscaleIPs": ["100.64.0.1"],
             "Online": True,
-        }
-    },
-})
+            # 認証キー等の機密情報（実際の出力には含まれないが念のため）
+            "AuthKey": "tskey-should-not-be-returned",
+        },
+        "Peer": {
+            "n987654321": {
+                "ID": "n987654321",
+                "HostName": "peer-device",
+                "DNSName": "peer-device.ts.net",
+                "TailscaleIPs": ["100.64.0.2"],
+                "Online": True,
+            }
+        },
+    }
+)
 
 
 class TestTailscaleStatus:

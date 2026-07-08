@@ -37,7 +37,9 @@ class Settings(BaseSettings):
     sip_ip: str = "auto"
     rtp_ip: str = "auto"
     sip_bind_ip: str | None = None  # env MILLICALL_SIP_BIND_IP; overrides sip_ip/rtp_ip when set
-    outbound_international_allow: str = ""  # env MILLICALL_OUTBOUND_INTERNATIONAL_ALLOW; comma-separated prefixes
+    outbound_international_allow: str = (
+        ""  # env MILLICALL_OUTBOUND_INTERNATIONAL_ALLOW; comma-separated prefixes
+    )
 
     esl_host: str = "127.0.0.1"
     esl_port: int = 8021

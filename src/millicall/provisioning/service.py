@@ -77,9 +77,7 @@ async def sync_devices_from_leases(
         hostname: str | None = raw_hostname if is_valid_hostname(raw_hostname) else None
 
         # 既存行を MAC で検索
-        existing = await session.scalar(
-            select(Device).where(Device.mac_address == mac)
-        )
+        existing = await session.scalar(select(Device).where(Device.mac_address == mac))
         if existing is not None:
             existing.ip_address = raw_ip
             existing.hostname = hostname
@@ -138,9 +136,7 @@ async def quick_provision(
         raise ValueError(f"Device not found: id={device_id}")
 
     # Extension を番号で検索、なければ新規作成
-    ext = await session.scalar(
-        select(Extension).where(Extension.number == extension_number)
-    )
+    ext = await session.scalar(select(Extension).where(Extension.number == extension_number))
     if ext is None:
         ext = Extension(
             number=extension_number,

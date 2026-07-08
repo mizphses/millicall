@@ -112,6 +112,7 @@ def test_panasonic_common_no_mac_or_hostname() -> None:
 
     # MAC アドレス形式（XX:XX:XX:XX:XX:XX）が含まれないことを確認
     import re
+
     assert not re.search(r"[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}", content)
 
 

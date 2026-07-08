@@ -163,15 +163,11 @@ async def apply_nat(
 
     # NAT 有効時は ip_forward を先に有効化する
     if enabled:
-        rc_fwd, _out, _err_str = await ops.run(
-            ["sysctl", "-w", "net.ipv4.ip_forward=1"]
-        )
+        rc_fwd, _out, _err_str = await ops.run(["sysctl", "-w", "net.ipv4.ip_forward=1"])
         if rc_fwd != 0:
             logger.warning("ip_forward の有効化に失敗しました (rc=%d)", rc_fwd)
 
-    rc, _stdout, stderr = await ops.run(
-        ["nft", "-f", "-"], input_text=ruleset
-    )
+    rc, _stdout, stderr = await ops.run(["nft", "-f", "-"], input_text=ruleset)
     if rc != 0:
         return _err(f"nft 適用失敗 (rc={rc}): {stderr[:200]}")
 
@@ -372,9 +368,7 @@ async def get_nat_status(
     レスポンス:
         enabled (bool): マスカレードが有効かどうか。
     """
-    rc, stdout, _stderr = await ops.run(
-        ["nft", "list", "table", "ip", settings.nftables_table]
-    )
+    rc, stdout, _stderr = await ops.run(["nft", "list", "table", "ip", settings.nftables_table])
 
     if rc != 0:
         # テーブルが存在しない場合は NAT 無効とみなす

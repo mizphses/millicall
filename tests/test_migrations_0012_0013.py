@@ -1,4 +1,5 @@
 """マイグレーション 0012 (network_config) / 0013 (devices) のスモークテスト。"""
+
 from pathlib import Path
 
 import pytest
@@ -79,9 +80,7 @@ async def test_devices_table(tmp_path):
     unique_mac = any(
         ix.get("unique") and ix.get("column_names") == ["mac_address"] for ix in indexes
     )
-    unique_mac = unique_mac or any(
-        uc.get("column_names") == ["mac_address"] for uc in uniques
-    )
+    unique_mac = unique_mac or any(uc.get("column_names") == ["mac_address"] for uc in uniques)
     assert unique_mac
 
 

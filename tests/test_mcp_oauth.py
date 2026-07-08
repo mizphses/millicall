@@ -79,7 +79,9 @@ async def _make_user(app, username="mcpadmin", password="Passw0rd1", role="admin
 
 def _pkce():
     verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    )
     return verifier, challenge
 
 
@@ -181,7 +183,9 @@ async def test_login_callback_rejects_disallowed_role(mcp_app, mcp_client):
 
 async def test_login_callback_rejects_disabled_user(mcp_app, mcp_client):
     """無効化されたユーザーは MCP OAuth ログインを 403 で拒否される（全体レビュー minor #1）。"""
-    await _make_user(mcp_app, username="disabled1", password="DisPass1", role="admin", enabled=False)
+    await _make_user(
+        mcp_app, username="disabled1", password="DisPass1", role="admin", enabled=False
+    )
     r = await mcp_client.post(
         "/mcp-login/callback",
         data={"ticket": _ticket(mcp_app), "username": "disabled1", "password": "DisPass1"},

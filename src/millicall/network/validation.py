@@ -3,6 +3,7 @@
 ネットワーク呼び出しを一切行わない純粋関数群。
 API (Phase 5 T4) と netd (Phase 5 T2) の双方から利用する単一の真実の源泉。
 """
+
 import ipaddress
 import re
 
@@ -57,9 +58,7 @@ def validate_ipv4_range(start: str, end: str) -> None:
     int_start = int(ipaddress.IPv4Address(start))
     int_end = int(ipaddress.IPv4Address(end))
     if int_start > int_end:
-        raise ValueError(
-            f"DHCP レンジの開始アドレス {start!r} が終了アドレス {end!r} より大きい"
-        )
+        raise ValueError(f"DHCP レンジの開始アドレス {start!r} が終了アドレス {end!r} より大きい")
 
 
 def validate_cidr_prefix(prefix: int) -> None:

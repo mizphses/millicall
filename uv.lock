@@ -1114,6 +1114,7 @@ dependencies = [
     { name = "argon2-cffi" },
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
     { name = "cryptography" },
+    { name = "defusedxml" },
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "httpx" },
@@ -1129,7 +1130,6 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "defusedxml" },
     { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1147,7 +1147,7 @@ requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "audioop-lts", marker = "python_full_version >= '3.13'", specifier = ">=0.2" },
     { name = "cryptography", specifier = ">=43" },
-    { name = "defusedxml", marker = "extra == 'dev'", specifier = ">=0.7" },
+    { name = "defusedxml", specifier = ">=0.7" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.139.0" },
     { name = "google-auth", specifier = ">=2" },
     { name = "google-cloud-speech", marker = "extra == 'stt-google'", specifier = ">=2.26" },

@@ -102,7 +102,8 @@ class GotoConfig(_Config):
 
 class DtmfInputConfig(_Config):
     prompt_mode: Literal["tts", "beep", "none"] = Field(
-        default="tts", json_schema_extra=_ui("プロンプト方式", "select", options=["tts", "beep", "none"])
+        default="tts",
+        json_schema_extra=_ui("プロンプト方式", "select", options=["tts", "beep", "none"]),
     )
     prompt_text: str = Field(default="", json_schema_extra=_ui("プロンプト文", "textarea"))
     tts_provider_id: int | None = Field(
@@ -116,7 +117,8 @@ class DtmfInputConfig(_Config):
 
 class MenuConfig(_Config):
     prompt_mode: Literal["tts", "beep", "none"] = Field(
-        default="tts", json_schema_extra=_ui("プロンプト方式", "select", options=["tts", "beep", "none"])
+        default="tts",
+        json_schema_extra=_ui("プロンプト方式", "select", options=["tts", "beep", "none"]),
     )
     prompt_text: str = Field(..., json_schema_extra=_ui("プロンプト文", "textarea"))
     tts_provider_id: int | None = Field(
@@ -156,9 +158,7 @@ class VoicemailConfig(_Config):
 
 
 class AiConversationConfig(_Config):
-    agent_id: int | None = Field(
-        default=None, json_schema_extra=_ui("AIエージェント", "agent_ref")
-    )
+    agent_id: int | None = Field(default=None, json_schema_extra=_ui("AIエージェント", "agent_ref"))
     system_prompt_override: str | None = Field(
         default=None, json_schema_extra=_ui("システムプロンプト上書き", "textarea")
     )
@@ -176,9 +176,7 @@ class AiConversationConfig(_Config):
         has_agent = self.agent_id is not None
         has_override = bool(self.system_prompt_override and self.system_prompt_override.strip())
         if not has_agent and not has_override:
-            raise ValueError(
-                "ai_conversation requires either agent_id or system_prompt_override"
-            )
+            raise ValueError("ai_conversation requires either agent_id or system_prompt_override")
         return self
 
 
@@ -189,7 +187,9 @@ class IntentDetectionConfig(_Config):
     llm_provider_id: int = Field(
         ..., json_schema_extra=_ui("LLMプロバイダ", "provider_ref", provider_type="llm")
     )
-    fallback_intent: str = Field(default="other", json_schema_extra=_ui("フォールバック意図", "string"))
+    fallback_intent: str = Field(
+        default="other", json_schema_extra=_ui("フォールバック意図", "string")
+    )
 
 
 class CollectInfoConfig(_Config):
@@ -214,7 +214,9 @@ class ApiCallConfig(_Config):
         default="json", json_schema_extra=_ui("Content-Type", "select", options=["json", "form"])
     )
     body_template: str = Field(default="", json_schema_extra=_ui("ボディテンプレート", "textarea"))
-    result_variable: str = Field(default="api_result", json_schema_extra=_ui("結果格納変数", "string"))
+    result_variable: str = Field(
+        default="api_result", json_schema_extra=_ui("結果格納変数", "string")
+    )
     timeout: int = Field(default=10, ge=1, json_schema_extra=_ui("タイムアウト秒", "number"))
 
 

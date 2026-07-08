@@ -57,6 +57,7 @@ def _safe_mailbox(mailbox: str) -> str:
     slug = _MAILBOX_SANITIZE_RE.sub("_", mailbox or "")[:64]
     return slug or "default"
 
+
 if TYPE_CHECKING:
     from millicall.workflows.context import ChannelContext
 

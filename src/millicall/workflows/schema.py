@@ -72,7 +72,9 @@ def validate_graph(
         result.errors.append("workflow must have exactly one start node (found 0)")
     elif len(starts) > 1:
         ids = ", ".join(n.id for n in starts)
-        result.errors.append(f"workflow must have exactly one start node (found {len(starts)}: {ids})")
+        result.errors.append(
+            f"workflow must have exactly one start node (found {len(starts)}: {ids})"
+        )
 
     # (b) + (c) edges
     for edge in definition.edges:
@@ -100,9 +102,7 @@ def validate_graph(
         if node.type == "goto":
             target = node.config.target_node_id
             if target not in node_map:
-                result.errors.append(
-                    f"goto node '{node.id}' targets unknown node '{target}'"
-                )
+                result.errors.append(f"goto node '{node.id}' targets unknown node '{target}'")
 
     _detect_goto_cycles(definition, node_map, result)
 
@@ -133,10 +133,10 @@ def _detect_goto_cycles(
         cur = node
         while cur is not None and cur.type == "goto":
             if cur.id in seen:
-                cycle = frozenset(seen[seen.index(cur.id):])
+                cycle = frozenset(seen[seen.index(cur.id) :])
                 if cycle not in reported:
                     reported.add(cycle)
-                    chain = " -> ".join(seen[seen.index(cur.id):] + [cur.id])
+                    chain = " -> ".join(seen[seen.index(cur.id) :] + [cur.id])
                     result.errors.append(f"goto cycle detected: {chain}")
                 break
             seen.append(cur.id)

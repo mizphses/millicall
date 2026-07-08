@@ -6,6 +6,7 @@
 - PATCH で更新できる
 - GET レスポンスに calling_permission が含まれる
 """
+
 import pytest_asyncio
 
 
@@ -17,6 +18,7 @@ async def auth_client(client, user_factory):
 
 
 # ---- 作成テスト ----
+
 
 async def test_create_with_domestic_permission(auth_client) -> None:
     resp = await auth_client.post(
@@ -83,6 +85,7 @@ async def test_create_permission_free_form_rejected(auth_client) -> None:
 
 # ---- 読み取りテスト ----
 
+
 async def test_get_returns_calling_permission(auth_client) -> None:
     created = await auth_client.post(
         "/api/extensions",
@@ -107,6 +110,7 @@ async def test_list_includes_calling_permission(auth_client) -> None:
 
 
 # ---- 更新テスト ----
+
 
 async def test_patch_calling_permission(auth_client) -> None:
     created = await auth_client.post(

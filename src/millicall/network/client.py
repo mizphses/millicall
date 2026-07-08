@@ -69,9 +69,7 @@ class NetdClient:
                 timeout=self._timeout,
             )
         except FileNotFoundError:
-            raise NetdError(
-                f"netd ソケットが見つかりません: {self._socket_path!r}"
-            ) from None
+            raise NetdError(f"netd ソケットが見つかりません: {self._socket_path!r}") from None
         except ConnectionRefusedError:
             raise NetdError(
                 f"netd ソケットへの接続が拒否されました: {self._socket_path!r}"

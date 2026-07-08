@@ -134,7 +134,7 @@ async def test_dtmf_input_single_digit_returns_digit_and_stores_var() -> None:
 
 @pytest.mark.asyncio
 async def test_dtmf_input_single_digit_all_valid_digits() -> None:
-    """"0".."9" の各桁が正しくハンドルとして返される。"""
+    """ "0".."9" の各桁が正しくハンドルとして返される。"""
     for digit in "0123456789":
         ctx = make_ctx()
         ctx.dtmf = FakeBoundDtmf(digit)

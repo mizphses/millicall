@@ -260,7 +260,9 @@ async def test_quick_provision_assigns_extension(app, auth_client_with_telephony
     assert "provision_token" not in body
 
 
-async def test_quick_provision_no_provision_token_in_response(app, auth_client_with_telephony) -> None:
+async def test_quick_provision_no_provision_token_in_response(
+    app, auth_client_with_telephony
+) -> None:
     """クイックプロビジョニングレスポンスに provision_token が含まれない。"""
     device_id = await _insert_device(app, mac_address="FF:EE:DD:CC:BB:AA")
 
@@ -272,7 +274,9 @@ async def test_quick_provision_no_provision_token_in_response(app, auth_client_w
     assert "provision_token" not in resp.json()
 
 
-async def test_quick_provision_creates_extension_if_not_exists(app, auth_client_with_telephony) -> None:
+async def test_quick_provision_creates_extension_if_not_exists(
+    app, auth_client_with_telephony
+) -> None:
     """存在しない内線番号を指定すると新規 Extension が作成される。"""
     device_id = await _insert_device(app, mac_address="11:22:33:44:55:01")
 
@@ -305,6 +309,7 @@ async def test_quick_provision_uses_existing_extension(app, auth_client_with_tel
     sm = app.state.sessionmaker
     async with sm() as session:
         from sqlalchemy import select as sa_select
+
         exts = list(await session.scalars(sa_select(Extension).where(Extension.number == "8001")))
     assert len(exts) == 1
 
@@ -348,7 +353,9 @@ async def test_delete_device_not_found(auth_client_with_telephony) -> None:
 
 async def test_list_devices_non_admin_forbidden(client, user_factory) -> None:
     """非管理者は /api/devices にアクセスできない（403）。"""
-    username, password = await user_factory(username="normaluser", password="NormalPass1", role="viewer")
+    username, password = await user_factory(
+        username="normaluser", password="NormalPass1", role="viewer"
+    )
     await client.post("/api/auth/login", json={"username": username, "password": password})
 
     resp = await client.get("/api/devices")

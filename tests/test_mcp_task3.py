@@ -11,6 +11,7 @@
   - say_and_listen が say → listen を合成する。
   - 実 FS 不要・実時間 sleep 回避（injectable sleep / tmp_path）。
 """
+
 import asyncio
 import wave
 from io import BytesIO
@@ -440,7 +441,9 @@ async def _make_db():
     async with sm() as db:
         db.add_all(
             [
-                Provider(id=10, name="llm1", type="llm", kind="openai_compatible", config_json="{}"),
+                Provider(
+                    id=10, name="llm1", type="llm", kind="openai_compatible", config_json="{}"
+                ),
                 Provider(id=20, name="tts1", type="tts", kind="voicevox", config_json="{}"),
                 Provider(id=30, name="stt1", type="stt", kind="google_stt", config_json="{}"),
             ]

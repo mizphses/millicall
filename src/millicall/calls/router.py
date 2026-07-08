@@ -43,6 +43,7 @@ async def create_call(
 
     client = esl_factory()
     try:
+
         async def _connect_and_originate():
             await client.connect()
             await client.bgapi(command)

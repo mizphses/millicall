@@ -35,10 +35,7 @@ class GeminiLLM:
 
     def __repr__(self) -> str:
         # api_key を平文で漏らさない
-        return (
-            f"GeminiLLM(model={self._model!r}, "
-            f"api_key={'***' if self._api_key else None})"
-        )
+        return f"GeminiLLM(model={self._model!r}, api_key={'***' if self._api_key else None})"
 
     async def stream_chat(self, messages: list[ChatMessage]) -> AsyncIterator[str]:
         payload = build_generate_content_payload(messages, self._temperature)
@@ -50,9 +47,7 @@ class GeminiLLM:
         }
         async with (
             httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client,
-            client.stream(
-                "POST", url, params=params, json=payload, headers=headers
-            ) as resp,
+            client.stream("POST", url, params=params, json=payload, headers=headers) as resp,
         ):
             resp.raise_for_status()
             async for line in resp.aiter_lines():

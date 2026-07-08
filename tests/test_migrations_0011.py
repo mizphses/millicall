@@ -14,12 +14,8 @@ async def test_workflows_table(tmp_path):
         cols = await conn.run_sync(
             lambda c: [col["name"] for col in inspect(c).get_columns("workflows")]
         )
-        indexes = await conn.run_sync(
-            lambda c: inspect(c).get_indexes("workflows")
-        )
-        uniques = await conn.run_sync(
-            lambda c: inspect(c).get_unique_constraints("workflows")
-        )
+        indexes = await conn.run_sync(lambda c: inspect(c).get_indexes("workflows"))
+        uniques = await conn.run_sync(lambda c: inspect(c).get_unique_constraints("workflows"))
     await engine.dispose()
     assert {
         "id",
@@ -34,7 +30,5 @@ async def test_workflows_table(tmp_path):
     } <= set(cols)
     # number must be unique (either via a unique index or a unique constraint)
     unique_number = any(ix.get("unique") and ix.get("column_names") == ["number"] for ix in indexes)
-    unique_number = unique_number or any(
-        uc.get("column_names") == ["number"] for uc in uniques
-    )
+    unique_number = unique_number or any(uc.get("column_names") == ["number"] for uc in uniques)
     assert unique_number

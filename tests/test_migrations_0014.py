@@ -1,4 +1,5 @@
 """マイグレーション0014のupgrade/downgradeスモークテスト。"""
+
 from alembic.command import downgrade, upgrade
 from alembic.config import Config
 

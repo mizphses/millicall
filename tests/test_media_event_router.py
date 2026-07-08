@@ -194,9 +194,7 @@ async def test_hangup_calls_dtmf_collector_unregister():
     reg.register("u1", session=object(), call_control=_CC())
     collector = _FakeDtmfCollector()
     router = MediaEventRouter(reg, dtmf_collector=collector)
-    await router.handle(
-        {"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "u1"}
-    )
+    await router.handle({"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "u1"})
     assert "u1" in collector.unregistered
 
 
@@ -206,9 +204,7 @@ async def test_hangup_without_dtmf_collector_still_removes_session():
     reg = SessionRegistry()
     reg.register("u1", session=object(), call_control=_CC())
     router = MediaEventRouter(reg)  # dtmf_collector=None
-    await router.handle(
-        {"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "u1"}
-    )
+    await router.handle({"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Channel-Call-UUID": "u1"})
     assert reg.get("u1") is None
 
 

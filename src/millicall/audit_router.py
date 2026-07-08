@@ -1,4 +1,5 @@
 """監査ログ参照 API。管理者専用。"""
+
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query

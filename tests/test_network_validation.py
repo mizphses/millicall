@@ -1,4 +1,5 @@
 """network/validation.py のユニットテスト。"""
+
 import pytest
 
 from millicall.network.validation import (

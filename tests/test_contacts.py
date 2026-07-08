@@ -7,8 +7,13 @@ async def test_create_and_list_contact(auth_client_with_telephony):
     c = auth_client_with_telephony
     resp = await c.post(
         "/api/contacts",
-        json={"name": "山田太郎", "phone_number": "09012345678", "company": "ACME",
-              "department": "営業", "notes": "重要"},
+        json={
+            "name": "山田太郎",
+            "phone_number": "09012345678",
+            "company": "ACME",
+            "department": "営業",
+            "notes": "重要",
+        },
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["name"] == "山田太郎"
