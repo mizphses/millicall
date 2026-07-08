@@ -82,7 +82,8 @@ millicallctl logs core | grep 初期管理者
 millicallctl up          # 起動
 millicallctl down        # 停止
 millicallctl restart     # 再起動
-millicallctl update      # イメージ更新（pull + up -d）
+millicallctl update      # 更新（compose 再取得 + イメージ pull + up -d、DBマイグレーションは自動）
+millicallctl self-update # millicallctl 自身を最新へ更新
 millicallctl logs core   # core ログ追尾
 millicallctl logs freeswitch  # freeswitch ログ追尾
 millicallctl ps          # コンテナ状態確認
@@ -90,4 +91,7 @@ millicallctl backup      # data/ と .env をバックアップ
 millicallctl version     # バージョン確認
 ```
 
-更新・ロールバック・バックアップの詳細手順は [ops/deployment.md](ops/deployment.md) を参照してください。
+**更新の基本**: `millicallctl backup` →  `millicallctl update` → `millicallctl ps` で確認。
+`update` は compose も再取得するため新サービス（netd 等）も取り込まれ、DB マイグレーションは
+core 起動時に自動実行されます。更新・ロールバック・移行注意（ポート 80 化等）の詳細手順は
+[ops/deployment.md](ops/deployment.md) を参照してください。
