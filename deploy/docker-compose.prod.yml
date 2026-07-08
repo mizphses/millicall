@@ -102,6 +102,12 @@ services:
       - ./data/freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml
       - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
       - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
+      # ACL (millicall_trusted)。マウントしないとイメージ標準の acl.conf.xml が使われ、
+      # apply-inbound-acl=millicall_trusted が未定義リスト参照となり全着信が CALL_REJECTED になる。
+      - ./data/freeswitch/autoload_configs/acl.conf.xml:/etc/freeswitch/autoload_configs/acl.conf.xml
+      # TTS 音声ファイルを core と同一絶対パスで共有（uuid_broadcast がこのパスを再生）。
+      # 無いと AI/ワークフロー応対の音声再生が本番で無音になる。
+      - ./data/freeswitch/tts:/app/data/freeswitch/tts
     # H3: FreeSWITCH は root + ネットワーク系 cap が必要なため cap_drop は行わない。
     # no-new-privileges とメモリ/PID 制限のみ適用する。
     security_opt:

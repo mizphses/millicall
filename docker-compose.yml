@@ -42,6 +42,9 @@ services:
       - ./data/freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml
       - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
       - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
+      # ACL (millicall_trusted)。マウントしないとイメージ標準の acl.conf.xml が使われ、
+      # apply-inbound-acl=millicall_trusted が未定義リスト参照となり全着信が CALL_REJECTED になる。
+      - ./data/freeswitch/autoload_configs/acl.conf.xml:/etc/freeswitch/autoload_configs/acl.conf.xml
       # TTS 音声ファイルを core と同一絶対パスで共有（uuid_broadcast がこのパスを再生）
       - ./data/freeswitch/tts:/app/data/freeswitch/tts
     # entrypoint はイメージに内蔵 (ENTRYPOINT) されているため compose では上書きしない
