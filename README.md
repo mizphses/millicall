@@ -6,7 +6,9 @@
 
 ## 概要
 
-フレッツ光回線の HGW（ホームゲートウェイ）に特化したローカル PBX システム。コアは **FastAPI**（ESL 制御・音声 AI・MCP サーバ）と **FreeSWITCH**（SIP/RTP 処理）で構成され、**React SPA** が管理 UI を担う。本番スタックは役割別 4 コンテナ（`core` / `freeswitch` / `netd` / `docker-proxy`）で動作し、GHCR のプリビルドイメージ（amd64）を `install.sh` ワンライナーで導入できる。
+フレッツ光回線の HGW（ホームゲートウェイ）に対応したローカル PBX システム。
+
+コアは FastAPI（ESL 制御・音声 AI・MCP サーバ）と FreeSWITCH（SIP/RTP 処理）で構成され、React SPAが管理 UI を担う。本番スタックは役割別 4 コンテナ（`core` / `freeswitch` / `netd` / `docker-proxy`）で動作し、GHCR のプリビルドイメージ（amd64）を `install.sh` ワンライナーで導入できる。
 
 ## 主な機能
 
@@ -57,7 +59,9 @@ millicallctl update
 
 ## ドキュメント
 
-以下のドキュメントは [GitHub Wiki](https://github.com/mizphses/millicall/wiki) にも同期される。
+`/docs` 以下のドキュメントは [GitHub Wiki](https://github.com/mizphses/millicall/wiki) にも同期される。
+
+### 主要ドキュメントのご紹介
 
 | ドキュメント | 内容 |
 |---|---|
@@ -74,7 +78,24 @@ millicallctl update
 
 全コンテナは `network_mode: host`（docker-proxy を除く）。`core` と `netd` は名前付き volume（`millicall-run`）で UNIX ソケットを共有する。
 
+```mermaid
+graph TD
+    Flets["フレッツ HGW"]
+    FS["freeswitch<br>SIP / RTP"]
+    Core["core (FastAPI)<br>├─ ESL 制御 / ルーティング<br>├─ 音声 AI (VAD/STT/TTS/LLM)<br>├─ MCP サーバ (15 tools)<br>├─ ワークフローランナー<br>├─ REST API / SPA サーバ<br>└─ 認証 (TOTP/SAML/SCIM)"]
+    Netd["netd<br>dnsmasq / nftables<br>NAT / Tailscale"]
+    DockerProxy["docker-proxy<br>socket-proxy<br>(read-only 仲介)"]
+    SPA["React SPA<br>管理画面 / ワーク<br>フローエディタ"]
+
+    Flets -->|"<a href='https://flets.com/denwa/hikaridenwa/smartphone/' target='_blank'>スマホ内線</a>の機能でSIP収容"| FS
+    FS <-->|"ESL"| Core
+    Core -->|"UNIX ソケット (/run/millicall)"| Netd
+    Netd -->|"HTTP (127.0.0.1:2375)"| DockerProxy
+    DockerProxy -->|"ブラウザ"| SPA
+```
+
 ## 開発
+以下のコマンド・ツールを使用している（察してください）
 
 ### バックエンド（Python / uv）
 
@@ -88,9 +109,9 @@ uv run ruff check .
 
 ```bash
 cd frontend
-npm install
-npm run build    # 本番ビルド
-npm run test     # vitest
+pnpm install
+pnpm run build    # 本番ビルド
+pnpm run test     # vitest
 ```
 
 ### ローカル起動（スタック全体）
@@ -98,7 +119,3 @@ npm run test     # vitest
 ```bash
 docker compose up -d --build
 ```
-
-## ライセンス
-
-準備中（LICENSE ファイル未設定）。
