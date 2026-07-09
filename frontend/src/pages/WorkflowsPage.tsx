@@ -69,8 +69,8 @@ function validateForm(form: CreateForm): Partial<Record<keyof CreateForm, string
   if (!form.name.trim()) errors.name = "名前は必須です";
   if (form.name.trim().length > 100) errors.name = "名前は100文字以内にしてください";
   if (!form.number.trim()) errors.number = "番号は必須です";
-  if (!/^[0-9*#]{1,30}$/.test(form.number.trim()))
-    errors.number = "番号は数字・*・# のみ（最大30文字）";
+  if (!/^\d{2,6}$/.test(form.number.trim()))
+    errors.number = "内線番号は2〜6桁の数字で入力してください";
   return errors;
 }
 
@@ -166,7 +166,7 @@ export function WorkflowsPage() {
   }
 
   const columns: Column<WorkflowRead>[] = [
-    { key: "number", header: "番号", width: "120px" },
+    { key: "number", header: "内線番号", width: "120px" },
     { key: "name", header: "名前" },
     {
       key: "description",
@@ -303,7 +303,7 @@ export function WorkflowsPage() {
             />
           </Field>
 
-          <Field label="番号（着信マッチ用）" error={fieldErrors.number}>
+          <Field label="内線番号" error={fieldErrors.number}>
             <input
               className={input({ invalid: fieldErrors.number ? true : undefined })}
               value={form.number}

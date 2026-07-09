@@ -18,7 +18,8 @@ class WorkflowUpsert(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str = Field(..., min_length=1, max_length=100)
-    number: str = Field(..., pattern=r"^[0-9*#]{1,30}$")
+    # 統一番号プランの内線番号（2〜6桁）。既存の長い番号は DB 上そのまま有効。
+    number: str = Field(..., pattern=r"^\d{2,6}$")
     description: str = ""
     default_tts_provider_id: int | None = None
     enabled: bool = True
