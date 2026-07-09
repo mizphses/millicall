@@ -61,11 +61,17 @@ describe("KIND_CATALOG / typeForKind", () => {
     expect(keys("openai_compatible")).toEqual(["base_url", "model", "temperature", "max_tokens"]);
     expect(keys("anthropic")).toEqual(["model", "max_tokens"]);
     expect(keys("gemini")).toEqual(["model", "temperature"]);
-    expect(keys("vertex_ai")).toEqual(["project", "location", "model", "temperature"]);
+    expect(keys("vertex_ai")).toEqual([
+      "auth_method",
+      "project",
+      "location",
+      "model",
+      "temperature",
+    ]);
     expect(keys("voicevox")).toEqual(["engine_url", "speaker"]);
     expect(keys("openjtalk")).toEqual(["dict_dir", "voice_path"]);
     expect(keys("whisper")).toEqual(["model", "language"]);
-    expect(keys("google_stt")).toEqual(["project", "location", "language", "model"]);
+    expect(keys("google_stt")).toEqual(["auth_method", "project", "location", "language", "model"]);
   });
 });
 
@@ -284,9 +290,15 @@ describe("vertex_ai / google_stt SA JSON マッピング", () => {
       enabled: true,
     };
     const kept = formFromProvider(original);
-    expect("api_key" in buildUpdatePayload(kept, original)).toBe(false);
+    // auth_method 未保存の既存プロバイダは、編集時に既定値 "sa" が config へ
+    // 明示的に永続化される(それ以外の config 差分は無し)。api_key は空なら据え置き。
+    const migratedConfig = { auth_method: "sa", project: "proj-x" };
+    expect(buildUpdatePayload(kept, original)).toEqual({ config: migratedConfig });
     const replaced = { ...kept, api_key: SA_JSON };
-    expect(buildUpdatePayload(replaced, original)).toEqual({ api_key: SA_JSON });
+    expect(buildUpdatePayload(replaced, original)).toEqual({
+      api_key: SA_JSON,
+      config: migratedConfig,
+    });
   });
 });
 
@@ -311,5 +323,26 @@ describe("validateSaJson", () => {
     const r = validateSaJson(text);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("service_account");
+  });
+});
+
+describe("google 系 auth_method セレクト", () => {
+  it("vertex_ai / google_stt に auth_method select があり既定は sa", () => {
+    for (const kind of ["vertex_ai", "google_stt"] as const) {
+      const field = KIND_CATALOG[kind].fields.find((f) => f.key === "auth_method");
+      expect(field?.valueType).toBe("select");
+      expect(field?.options?.[0]?.value).toBe("sa");
+      expect(field?.options?.map((o) => o.value)).toEqual(["sa", "api_key"]);
+      // 初期フォームは既定値 sa で、payload にも含まれる
+      const form = emptyForm(kind);
+      expect(form.config.auth_method).toBe("sa");
+      expect(buildConfig(form).auth_method).toBe("sa");
+    }
+  });
+
+  it("api_key 選択時は payload の config.auth_method が api_key になる", () => {
+    const form = emptyForm("vertex_ai");
+    form.config.auth_method = "api_key";
+    expect(buildConfig(form).auth_method).toBe("api_key");
   });
 });

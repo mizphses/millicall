@@ -215,6 +215,12 @@ export function ProvidersPage() {
 
   const providers = listQuery.data ?? [];
   const activeKind = KIND_CATALOG[form.kind];
+  // 認証方式セレクト(config.auth_method)による資格情報入力欄の切替。
+  // usesSaJson の kind でも "api_key" 選択時は通常の API キー入力欄を出す。
+  const authMethod = form.config.auth_method ?? "sa";
+  const showSaJsonInput = Boolean(activeKind.usesSaJson) && authMethod === "sa";
+  const showApiKeyInput =
+    activeKind.usesApiKey || (Boolean(activeKind.usesSaJson) && authMethod === "api_key");
 
   return (
     <PageLayout
@@ -357,7 +363,7 @@ export function ProvidersPage() {
             />
           </Field>
 
-          {activeKind.usesApiKey ? (
+          {showApiKeyInput ? (
             <div>
               <div className={css({ display: "flex", alignItems: "flex-end", gap: "2" })}>
                 <label className={css({ display: "block", flex: "1" })}>
@@ -392,7 +398,7 @@ export function ProvidersPage() {
             </div>
           ) : null}
 
-          {activeKind.usesSaJson ? (
+          {showSaJsonInput ? (
             <div>
               <span
                 className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
@@ -449,18 +455,37 @@ export function ProvidersPage() {
 
           {activeKind.fields.map((field) => (
             <Field key={field.key} label={field.label} error={errors.config[field.key]}>
-              <input
-                className={input({ invalid: errors.config[field.key] ? true : undefined })}
-                inputMode={field.valueType === "number" ? "decimal" : undefined}
-                value={form.config[field.key] ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    config: { ...f.config, [field.key]: e.target.value },
-                  }))
-                }
-                placeholder={field.placeholder}
-              />
+              {field.valueType === "select" ? (
+                <select
+                  className={input()}
+                  value={form.config[field.key] ?? field.options?.[0]?.value ?? ""}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      config: { ...f.config, [field.key]: e.target.value },
+                    }))
+                  }
+                >
+                  {(field.options ?? []).map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className={input({ invalid: errors.config[field.key] ? true : undefined })}
+                  inputMode={field.valueType === "number" ? "decimal" : undefined}
+                  value={form.config[field.key] ?? ""}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      config: { ...f.config, [field.key]: e.target.value },
+                    }))
+                  }
+                  placeholder={field.placeholder}
+                />
+              )}
             </Field>
           ))}
 

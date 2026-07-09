@@ -57,14 +57,18 @@ class GoogleStreamingSTT:
         model: str = "chirp_2",
         client: Any | None = None,
         api_key: str | None = None,
+        auth_method: str = "sa",
     ) -> None:
         self._project = project
         self._location = location
         self._language = language
         self._model = model
         self._client = client
-        # api_key はサービスアカウント JSON 文字列（GUI 登録用）。未設定なら ADC。
+        # api_key の実体は auth_method に依る:
+        #   "sa"      → サービスアカウント JSON 文字列（未設定なら ADC）
+        #   "api_key" → Google Cloud API キー文字列
         self._api_key = api_key
+        self._auth_method = auth_method
 
     def __repr__(self) -> str:
         # client オブジェクト（資格情報を保持しうる）を露出しない。
@@ -84,6 +88,9 @@ class GoogleStreamingSTT:
             from google.cloud.speech_v2 import SpeechClient
         except ImportError as exc:
             raise RuntimeError(_MISSING_MESSAGE) from exc
+        if self._auth_method == "api_key" and self._api_key:
+            self._client = SpeechClient(client_options={"api_key": self._api_key})
+            return self._client
         credentials = self._build_credentials()
         if credentials is not None:
             self._client = SpeechClient(credentials=credentials)

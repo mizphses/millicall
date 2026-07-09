@@ -203,3 +203,35 @@ def test_registry_passes_api_key_to_google_stt():
 def test_registry_unknown_kind_still_raises():
     with pytest.raises(UnknownProviderKind):
         build_stt("nope", {}, None)
+
+
+def test_auth_method_api_key_uses_client_options(monkeypatch):
+    """auth_method="api_key" のとき SpeechClient(client_options={"api_key": ...}) を生成する。"""
+    import sys
+    import types
+
+    captured: dict = {}
+
+    class _FakeSpeechClient:
+        def __init__(self, credentials=None, client_options=None):
+            captured["credentials"] = credentials
+            captured["client_options"] = client_options
+
+    speech_module = types.ModuleType("google.cloud.speech_v2")
+    speech_module.SpeechClient = _FakeSpeechClient
+    monkeypatch.setitem(sys.modules, "google.cloud.speech_v2", speech_module)
+
+    p = GoogleStreamingSTT(project="p", api_key="AIzaKEY", auth_method="api_key")
+    p._ensure_client()
+    assert captured["client_options"] == {"api_key": "AIzaKEY"}
+    assert captured["credentials"] is None
+
+
+def test_registry_passes_auth_method_to_google_stt():
+    provider = build_stt(
+        "google_stt",
+        {"project": "p", "auth_method": "api_key"},
+        "AIzaKEY",
+    )
+    assert isinstance(provider, GoogleStreamingSTT)
+    assert provider._auth_method == "api_key"

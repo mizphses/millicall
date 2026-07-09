@@ -67,8 +67,13 @@ def build_llm(kind: str, config: dict, api_key: str | None):
     if kind == "vertex_ai":
         from millicall.ai.llm.vertex import VertexAILLM
 
+        # auth_method="sa"(既定): api_key 欄 = SA JSON。"api_key": api_key 欄 = API キー
+        # (express mode)。
+        auth_method = config.get("auth_method", "sa")
         return VertexAILLM(
-            sa_json=api_key,
+            sa_json=api_key if auth_method == "sa" else None,
+            api_key=api_key if auth_method == "api_key" else None,
+            auth_method=auth_method,
             project=config.get("project", ""),
             location=config.get("location", "us-central1"),
             model=config.get("model", "gemini-2.0-flash"),
@@ -136,5 +141,7 @@ def build_stt(kind: str, config: dict, api_key: str | None):
             language=config.get("language", "ja-JP"),
             model=config.get("model", "chirp_2"),
             api_key=api_key,
+            # "sa"(既定) = SA JSON / ADC、"api_key" = client_options で API キー認証
+            auth_method=config.get("auth_method", "sa"),
         )
     raise UnknownProviderKind(kind)
