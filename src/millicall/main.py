@@ -102,6 +102,14 @@ async def lifespan(app: FastAPI):
     settings: Settings = app.state.settings
     settings.data_dir.mkdir(parents=True, exist_ok=True)
 
+    # alembic の fileConfig(disable_existing_loggers=True) によって millicall.* ロガーが
+    # 無効化されることがある。upgrade_to_head 実行前に ERROR レベルを明示的に保証する。
+    # basicConfig は呼ばず、既存のハンドラ（RichHandler 等）を破壊しない。
+    _mc_logger = logging.getLogger("millicall")
+    if _mc_logger.level == logging.NOTSET or _mc_logger.disabled:
+        _mc_logger.setLevel(logging.INFO)
+    _mc_logger.disabled = False
+
     if not settings.cookie_secure:
         logger.warning(
             "cookie_secure=False — HTTPS外でセッションCookieが平文送信されます（LAN内運用前提）"
