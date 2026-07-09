@@ -202,14 +202,28 @@ async def tailscale_up(
     """
     auth_key = payload.get("auth_key", "")
 
-    # 認証キーの検証（失敗時もキーをエラーに含めない）
-    if not isinstance(auth_key, str) or not is_valid_tailscale_authkey(auth_key):
-        # キーの値をエラーメッセージに含めない（秘密情報の漏洩防止）
-        return _err("無効な Tailscale 認証キー形式です")
+    # ログイン状態を確認し、未ログイン時のみ auth key を渡す。
+    # one-time キーは一度使うと無効になるため、切断→再接続のたびにキーを渡すと
+    # 二度と繋がらなくなる（「一回切れるとずっと切断中」）。ログイン済み
+    # (state 保持) なら `tailscale up` のみで再接続でき、キーを消費しない。
+    # status が読めない場合は安全側（未ログイン扱い）でキーを渡す。
+    needs_login = True
+    st_rc, st_out, _st_err = await ops.run(["tailscale", "status", "--json"])
+    if st_rc == 0:
+        try:
+            needs_login = json.loads(st_out).get("BackendState") == "NeedsLogin"
+        except json.JSONDecodeError:
+            needs_login = True
 
-    rc, _stdout, stderr = await ops.run(
-        ["tailscale", "up", "--authkey", auth_key, "--accept-dns=false"]
-    )
+    up_args = ["tailscale", "up", "--accept-dns=false"]
+    if needs_login:
+        # 認証キーの検証（失敗時もキーをエラーに含めない）
+        if not isinstance(auth_key, str) or not is_valid_tailscale_authkey(auth_key):
+            # キーの値をエラーメッセージに含めない（秘密情報の漏洩防止）
+            return _err("無効な Tailscale 認証キー形式です")
+        up_args += ["--authkey", auth_key]
+
+    rc, _stdout, stderr = await ops.run(up_args)
     if rc != 0:
         # 秘密情報保護: 切り詰める前に完全な stderr から tskey を除去する
         # （境界を跨ぐ部分一致漏洩を防ぐ。exact 一致だけでなく tskey-\S+ を正規表現で除去）。
