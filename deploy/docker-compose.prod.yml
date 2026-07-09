@@ -150,6 +150,10 @@ services:
       # UNIX ソケットはファイルシステム経由のため named volume での共有が必要。
       - millicall-run:/run/millicall
       - ./data:/app/data
+      # Tailscale のログイン状態・serve 設定・WantRunning を永続化する。
+      # 無いとコンテナ再作成のたびにログアウトされ、one-time 認証キーでは
+      # 再ログインできず「一回切れるとずっと切断中」になる。
+      - ./data/tailscale:/var/lib/tailscale
     restart: unless-stopped
     # netd は core の起動に依存しない (独立してネットワーク管理を担う)。
     # core の NetdClient は接続を per-call で試みるため、netd が後から起動しても動作する。

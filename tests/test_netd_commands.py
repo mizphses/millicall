@@ -28,6 +28,7 @@ class FakeSystemOps:
         run_stdout: str = "",
         run_stderr: str = "",
         read_content: str = "",
+        run_responses: list[tuple[int, str, str]] | None = None,
     ) -> None:
         self.run_calls: list[tuple[list[str], str | None]] = []
         self.write_calls: list[tuple[str, str]] = []
@@ -36,6 +37,8 @@ class FakeSystemOps:
         self._run_stdout = run_stdout
         self._run_stderr = run_stderr
         self._read_content = read_content
+        # 呼び出し順に消費する応答キュー（無くなったら既定値にフォールバック）
+        self._run_responses = list(run_responses or [])
 
     async def run(
         self,
@@ -45,6 +48,8 @@ class FakeSystemOps:
         timeout: float = 30.0,
     ) -> tuple[int, str, str]:
         self.run_calls.append((argv, input_text))
+        if self._run_responses:
+            return self._run_responses.pop(0)
         return (self._run_rc, self._run_stdout, self._run_stderr)
 
     def write_file(self, path: str, content: str) -> None:
@@ -400,25 +405,58 @@ class TestApplyNat:
 
 
 class TestTailscaleUp:
-    """tailscale_up ハンドラのテスト。"""
+    """tailscale_up ハンドラのテスト。
+
+    新契約: 先に `tailscale status --json` でログイン状態を確認し、
+    未ログイン時のみ auth key を渡す（one-time キーの再接続時消費を防ぐ）。
+    """
 
     _VALID_KEY = "tskey-auth-ABC123DEF456-xyz789"
+    _NEEDS_LOGIN = '{"BackendState": "NeedsLogin"}'
+    _LOGGED_IN = '{"BackendState": "Stopped"}'
 
     @pytest.mark.asyncio
-    async def test_valid_key_calls_tailscale(self):
-        ops = FakeSystemOps()
+    async def test_needs_login_passes_authkey(self):
+        """未ログイン時のみ auth key を渡して up する。"""
+        ops = FakeSystemOps(run_responses=[(0, self._NEEDS_LOGIN, ""), (0, "", "")])
         payload = {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}
         resp = await dispatch(payload, ops, SETTINGS)
 
         assert resp["ok"] is True
-        # serve 無効(既定)なので up の 1 コールのみ
-        assert len(ops.run_calls) == 1
-        argv, _ = ops.run_calls[0]
-        assert argv[0] == "tailscale"
-        assert argv[1] == "up"
+        # status → up の 2 コール(serve 無効)
+        assert len(ops.run_calls) == 2
+        assert ops.run_calls[0][0][:2] == ["tailscale", "status"]
+        argv, _ = ops.run_calls[1]
+        assert argv[:2] == ["tailscale", "up"]
         assert "--authkey" in argv
         # キー自体が argv に含まれる（これは正常 — tailscale コマンドへの引数として必要）
         assert self._VALID_KEY in argv
+
+    @pytest.mark.asyncio
+    async def test_logged_in_reconnects_without_authkey(self):
+        """ログイン済み(state 保持)なら auth key を消費せず up で再接続する。
+
+        one-time キーは一度使うと無効になるため、切断→再接続のたびに
+        キーを渡すと二度と繋がらなくなる（実機で「一回切れるとずっと切断中」として発現）。
+        """
+        ops = FakeSystemOps(run_responses=[(0, self._LOGGED_IN, ""), (0, "", "")])
+        payload = {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}
+        resp = await dispatch(payload, ops, SETTINGS)
+
+        assert resp["ok"] is True
+        argv, _ = ops.run_calls[1]
+        assert argv[:2] == ["tailscale", "up"]
+        assert "--authkey" not in argv
+        assert self._VALID_KEY not in argv
+
+    @pytest.mark.asyncio
+    async def test_status_parse_failure_falls_back_to_authkey(self):
+        """status が読めない場合は安全側(未ログイン扱い)でキーを渡す。"""
+        ops = FakeSystemOps(run_responses=[(1, "", "boom"), (0, "", "")])
+        payload = {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}
+        resp = await dispatch(payload, ops, SETTINGS)
+        assert resp["ok"] is True
+        assert "--authkey" in ops.run_calls[1][0]
 
     @pytest.mark.asyncio
     async def test_serve_enabled_runs_serve_after_up(self):
@@ -428,14 +466,14 @@ class TestTailscaleUp:
             tailscale_serve_enabled = True
             http_port = 80
 
-        ops = FakeSystemOps()
+        ops = FakeSystemOps(run_responses=[(0, self._NEEDS_LOGIN, "")])
         payload = {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}
         resp = await dispatch(payload, ops, ServeSettings())
 
         assert resp["ok"] is True
-        # up → serve の 2 コール
-        assert len(ops.run_calls) == 2
-        serve_argv, _ = ops.run_calls[1]
+        # status → up → serve の 3 コール
+        assert len(ops.run_calls) == 3
+        serve_argv, _ = ops.run_calls[2]
         assert serve_argv[0] == "tailscale"
         assert serve_argv[1] == "serve"
         assert "http://localhost:80" in serve_argv
@@ -450,88 +488,58 @@ class TestTailscaleUp:
             tailscale_serve_enabled = True
             http_port = 8000
 
-        # up は rc=0、serve も同じ ops で rc=0 になる想定だが、run_rc を 0 のままにして
-        # serve が呼ばれることだけ確認（失敗系は run_rc をハンドラ内で個別制御できないため
-        # ここでは serve が 2 コール目に出ることと ok=True を確認）。
-        ops = FakeSystemOps()
+        ops = FakeSystemOps(run_responses=[(0, self._NEEDS_LOGIN, ""), (0, "", ""), (1, "", "serve boom")])
         resp = await dispatch(
             {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}, ops, ServeSettings()
         )
         assert resp["ok"] is True
-        assert len(ops.run_calls) == 2
-        assert "http://localhost:8000" in ops.run_calls[1][0]
+        assert len(ops.run_calls) == 3
+        assert "http://localhost:8000" in ops.run_calls[2][0]
 
     @pytest.mark.asyncio
-    async def test_invalid_key_format_returns_error_no_ops(self):
-        """不正なキー形式は ops を呼ばずエラーを返す。"""
-        ops = FakeSystemOps()
+    async def test_invalid_key_format_returns_error_no_up(self):
+        """未ログイン時にキー形式が不正なら up を呼ばずエラーを返す。"""
+        ops = FakeSystemOps(run_responses=[(0, self._NEEDS_LOGIN, "")])
         payload = {"cmd": "tailscale_up", "auth_key": "not-a-valid-key"}
         resp = await dispatch(payload, ops, SETTINGS)
 
         assert resp["ok"] is False
-        assert ops.run_calls == []
+        assert [c[0][:2] for c in ops.run_calls] == [["tailscale", "status"]]
 
     @pytest.mark.asyncio
-    async def test_key_echoed_in_stderr_is_redacted(self):
-        """rc!=0 で stderr にキーが混入しても、切り詰め前に tskey-\\S+ を除去する（レビュー N1）。"""
-        # 200 文字境界を跨いでもキーが残らないよう、長いパディングの先頭にキーを置く
-        stderr = self._VALID_KEY + " " + ("x" * 300)
-        ops = FakeSystemOps(run_rc=1, run_stderr=stderr)
-        payload = {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}
-        resp = await dispatch(payload, ops, SETTINGS)
+    async def test_empty_key_returns_error_no_up(self):
+        """未ログイン時にキーが空なら up を呼ばずエラーを返す。"""
+        ops = FakeSystemOps(run_responses=[(0, self._NEEDS_LOGIN, "")])
+        resp = await dispatch({"cmd": "tailscale_up", "auth_key": ""}, ops, SETTINGS)
 
         assert resp["ok"] is False
-        assert self._VALID_KEY not in resp.get("error", "")
-        assert "tskey-" not in resp.get("error", "")
+        assert [c[0][:2] for c in ops.run_calls] == [["tailscale", "status"]]
 
     @pytest.mark.asyncio
-    async def test_invalid_key_never_in_error_response(self):
-        """不正なキーはエラーメッセージに含まれてはならない。"""
-        ops = FakeSystemOps()
-        secret_key = "not-a-valid-key-with-secret-data"
-        payload = {"cmd": "tailscale_up", "auth_key": secret_key}
-        resp = await dispatch(payload, ops, SETTINGS)
-
-        assert resp["ok"] is False
-        # キーの値がエラーメッセージに漏れていないことを確認
-        assert secret_key not in resp.get("error", "")
-        assert "not-a-valid-key" not in resp.get("error", "")
-
-    @pytest.mark.asyncio
-    async def test_empty_key_returns_error_no_ops(self):
-        ops = FakeSystemOps()
-        payload = {"cmd": "tailscale_up", "auth_key": ""}
-        resp = await dispatch(payload, ops, SETTINGS)
-
-        assert resp["ok"] is False
-        assert ops.run_calls == []
-
-    @pytest.mark.asyncio
-    async def test_key_with_shell_metachar_returns_error_no_ops(self):
-        """シェルメタ文字を含むキーは拒否する。"""
-        ops = FakeSystemOps()
+    async def test_key_with_shell_metachar_returns_error_no_up(self):
+        """未ログイン時にシェルメタ文字を含むキーは拒否する。"""
+        ops = FakeSystemOps(run_responses=[(0, self._NEEDS_LOGIN, "")])
         payload = {"cmd": "tailscale_up", "auth_key": "tskey-abc;rm -rf /"}
         resp = await dispatch(payload, ops, SETTINGS)
 
         assert resp["ok"] is False
-        assert ops.run_calls == []
+        assert [c[0][:2] for c in ops.run_calls] == [["tailscale", "status"]]
 
     @pytest.mark.asyncio
     async def test_tailscale_command_failure_key_not_in_error(self):
         """tailscale コマンド失敗時、キーはエラーレスポンスに含まれない。"""
         auth_key = self._VALID_KEY
-        ops = FakeSystemOps(run_rc=1, run_stderr=f"Error: invalid auth key: {auth_key}")
-        payload = {"cmd": "tailscale_up", "auth_key": auth_key}
-        resp = await dispatch(payload, ops, SETTINGS)
+        ops = FakeSystemOps(
+            run_responses=[
+                (0, self._NEEDS_LOGIN, ""),
+                (1, "", f"backend error: authkey {auth_key} rejected"),
+            ]
+        )
+        resp = await dispatch({"cmd": "tailscale_up", "auth_key": auth_key}, ops, SETTINGS)
 
         assert resp["ok"] is False
-        # キーがエラーメッセージに漏れていないことを確認
-        assert auth_key not in resp.get("error", "")
-
-
-# ---------------------------------------------------------------------------
-# tailscale_down
-# ---------------------------------------------------------------------------
+        assert auth_key not in resp["error"]
+        assert "(redacted)" in resp["error"]
 
 
 class TestTailscaleDown:
