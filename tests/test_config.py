@@ -60,11 +60,14 @@ def test_tts_cache_dir_explicit_absolute_unchanged(tmp_path: Path) -> None:
     assert s.tts_cache_dir == (tmp_path / "tts").resolve()
 
 
-@pytest.mark.parametrize("relative_path", [
-    "data/freeswitch/tts",
-    "tts",
-    "a/b/c/d",
-])
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "data/freeswitch/tts",
+        "tts",
+        "a/b/c/d",
+    ],
+)
 def test_tts_cache_dir_various_relative_paths_resolved(relative_path: str) -> None:
     """様々な相対パスが絶対パスに変換されることを確認する。"""
     s = Settings(tts_cache_dir=Path(relative_path))  # type: ignore[arg-type]

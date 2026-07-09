@@ -488,7 +488,9 @@ class TestTailscaleUp:
             tailscale_serve_enabled = True
             http_port = 8000
 
-        ops = FakeSystemOps(run_responses=[(0, self._NEEDS_LOGIN, ""), (0, "", ""), (1, "", "serve boom")])
+        ops = FakeSystemOps(
+            run_responses=[(0, self._NEEDS_LOGIN, ""), (0, "", ""), (1, "", "serve boom")]
+        )
         resp = await dispatch(
             {"cmd": "tailscale_up", "auth_key": self._VALID_KEY}, ops, ServeSettings()
         )

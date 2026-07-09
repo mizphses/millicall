@@ -92,7 +92,7 @@ class EslCallControl:
         try:
             timeout = self._playback_timeout if self._playback_timeout > 0 else None
             await asyncio.wait_for(self._playback_done.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "play_file: PLAYBACK_STOP が来ないままタイムアウト "
                 "(uuid=%s, path=%s, timeout=%.1fs)。会話ループを継続します。",

@@ -85,12 +85,7 @@ def _is_blocked_ip_lan_allowed(ip_str: str) -> bool:
         ip = _normalize_ip(ipaddress.ip_address(ip_str))
     except ValueError:
         return True  # パース不能 → 安全側でブロック
-    return (
-        ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
+    return ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
 
 
 # --------------------------------------------------------------------------- #
@@ -187,13 +182,7 @@ def _check_device_ip(ip_str: str) -> None:
     except ValueError as exc:
         raise ValueError(f"無効な IP アドレス: {ip_str!r}") from exc
 
-    if (
-        ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    ):
+    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
         raise ValueError(
             f"デバイス IP {ip_str!r} はループバック/リンクローカル/マルチキャスト/"
             "予約済み/未指定アドレスのため拒否されます"

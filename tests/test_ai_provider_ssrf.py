@@ -132,7 +132,10 @@ def test_build_tts_voicevox_rejects_link_local():
     """link-local (169.254.x.x = クラウドメタデータ) は voicevox engine_url でも拒否されること。"""
     from millicall.ai import registry
 
-    with _mock_getaddrinfo("169.254.169.254"), pytest.raises(ValueError, match="リンクローカル|SSRF"):
+    with (
+        _mock_getaddrinfo("169.254.169.254"),
+        pytest.raises(ValueError, match="リンクローカル|SSRF"),
+    ):
         registry.build_tts(
             "voicevox",
             {"engine_url": "http://metadata.local:50021", "speaker": 1},

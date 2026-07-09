@@ -94,9 +94,7 @@ def test_ring_group_bridges_all_members(tmp_path):
     ET.fromstring(dp)
     assert 'name="ring_group_200"' in dp
     # カンマ区切り = 一斉鳴動
-    assert (
-        "user/1001@192.168.1.10,user/1002@192.168.1.10,user/1003@192.168.1.10" in dp
-    )
+    assert "user/1001@192.168.1.10,user/1002@192.168.1.10,user/1003@192.168.1.10" in dp
 
 
 def test_ring_group_without_members_not_rendered(tmp_path):

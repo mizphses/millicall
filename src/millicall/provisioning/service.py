@@ -208,9 +208,7 @@ async def resync_phone(
     try:
         _check_device_ip(ip)
     except ValueError:
-        logger.warning(
-            "resync_phone: デバイス IP %r はブロック対象アドレスのため中断", ip
-        )
+        logger.warning("resync_phone: デバイス IP %r はブロック対象アドレスのため中断", ip)
         return False
 
     creds = base64.b64encode(f"{admin_username}:{admin_password}".encode()).decode()

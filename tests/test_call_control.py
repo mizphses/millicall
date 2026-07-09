@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 
 import pytest
 
@@ -182,10 +183,6 @@ async def test_play_file_normal_returns_immediately_on_playback_stop():
     # 警告ログが出ていないことを確認
     warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert not warning_msgs, f"正常系で予期しない警告が出た: {warning_msgs}"
-
-
-import contextlib
-import io
 
 
 @contextlib.contextmanager

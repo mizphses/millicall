@@ -98,9 +98,7 @@ async def update_agent(
             try:
                 await assert_number_free(session, body.number, exclude=(KIND_AI_AGENT, agent_id))
             except NumberConflictError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail=str(exc)
-                ) from None
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
             agent.number = body.number
     if body.llm_provider_id is not None:
         await _check_provider(session, body.llm_provider_id, "llm")

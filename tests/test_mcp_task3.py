@@ -147,7 +147,9 @@ def _make_service(
         sip_domain=sip_domain,
         fetch_enabled_trunks=_fetch_enabled_trunks,
         uuid_factory=lambda: "fixed-uuid",
-        international_allow_prefixes=international_allow_prefixes if international_allow_prefixes is not None else [],
+        international_allow_prefixes=international_allow_prefixes
+        if international_allow_prefixes is not None
+        else [],
     ), ans
 
 
@@ -378,9 +380,7 @@ async def test_c3_domestic_always_permitted():
 async def test_c3_internal_extension_always_permitted():
     """内線番号 (短縮) は allow-list が空でも常に許可される。"""
     esl = _FakeEsl()
-    svc, _ = _make_service(
-        esl, [_FakeTrunk("main")], international_allow_prefixes=[]
-    )
+    svc, _ = _make_service(esl, [_FakeTrunk("main")], international_allow_prefixes=[])
     dest, _ = await svc._resolve_target("800", "", "")
     assert dest == "user/800@millicall.local"
 
@@ -390,9 +390,7 @@ async def test_c3_caller_id_locked_to_trunk_not_caller_supplied():
     """外線発信の effective caller-id はトランク値固定（caller-supplied は上書き不可）。"""
     esl = _FakeEsl()
     trunk = _FakeTrunk("main", caller_id="0312345678")
-    svc, ans = _make_service(
-        esl, [trunk], international_allow_prefixes=[]
-    )
+    svc, ans = _make_service(esl, [trunk], international_allow_prefixes=[])
     asyncio.get_running_loop().create_task(_delayed_resolve(ans, "fixed-uuid"))
     # caller_id="0399999999" (spoofed) を渡す。
     await svc.dial("0901234567", "0399999999", "", timeout=1)
