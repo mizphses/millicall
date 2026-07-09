@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     esl_port: int = 8021
     esl_timeout_seconds: float = 5.0
     event_socket_ip: str = "127.0.0.1"
+    # play_file が PLAYBACK_STOP イベントを待つ最大秒数。
+    # FreeSWITCH 側で再生が失敗してイベントが来ない場合に無限ブロックするのを防ぐ。
+    # タイムアウト後は警告ログを出し、例外を出さずに return して会話ループを継続させる。
+    playback_timeout_sec: float = 30.0
 
     session_cookie_name: str = "millicall_session"
     session_max_age: int = 60 * 60 * 24 * 7
@@ -197,6 +201,13 @@ class Settings(BaseSettings):
     # http://localhost:<http_port> を HTTPS 公開する（管理画面/MCP のリモート公開）。
     # 閉域運用ではインターネット非接続のため無効のまま(平文 LAN のみ)。
     tailscale_serve_enabled: bool = False
+
+    @field_validator("tts_cache_dir", mode="after")
+    @classmethod
+    def _resolve_tts_cache_dir(cls, v: Path) -> Path:
+        # FreeSWITCH は相対パスに sound_prefix を前置するため、必ず絶対パスで渡す。
+        # 相対パスが渡された場合は cwd（本番: /app）基準で解決する。
+        return v.resolve()
 
     @field_validator("media_ws_base_url", mode="after")
     @classmethod

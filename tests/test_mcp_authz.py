@@ -216,9 +216,7 @@ async def test_tool_dial_denied_for_user_role(mcp_app):
         "millicall.mcp_server.tools.get_access_token",
         return_value=mock_token,
     ):
-        result = await mcp_app.state.mcp.call_tool(
-            "dial", {"phone_number": "09000000000"}
-        )
+        result = await mcp_app.state.mcp.call_tool("dial", {"phone_number": "09000000000"})
     data = json.loads(_extract_text(result))
     assert "error" in data
     assert "管理者権限" in data["error"]

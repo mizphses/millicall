@@ -36,6 +36,7 @@ def _admin_auth_context():
     with patch("millicall.mcp_server.tools.get_access_token", return_value=tok):
         yield
 
+
 # 契約 §1–§15 の 15 ツール名。
 EXPECTED_TOOLS = {
     "converse",

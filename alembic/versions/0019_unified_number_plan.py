@@ -74,9 +74,7 @@ def upgrade() -> None:
     conn = op.get_bind()
     trunks = conn.execute(sa.text("SELECT id, username, did_number FROM trunks")).fetchall()
     routes = conn.execute(
-        sa.text(
-            "SELECT match_number, target_type, target_value FROM routes WHERE enabled = 1"
-        )
+        sa.text("SELECT match_number, target_type, target_value FROM routes WHERE enabled = 1")
     ).fetchall()
 
     # 番号プラン全体の使用済み番号（AI 自動採番の衝突回避）

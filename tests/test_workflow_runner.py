@@ -64,6 +64,7 @@ class _FakeSecrets:
 
 class _FakeSettings:
     tts_cache_dir = Path("/tmp/test-tts")
+    playback_timeout_sec = 30.0
     smtp_host = ""
     smtp_port = 587
     smtp_username = ""

@@ -87,9 +87,7 @@ async def test_trunk_create_sends_gateway_sync(tmp_path) -> None:
         server.close()
         await server.wait_closed()
 
-    reload_idx = next(
-        (i for i, cmd in enumerate(received) if "reloadxml" in cmd), None
-    )
+    reload_idx = next((i for i, cmd in enumerate(received) if "reloadxml" in cmd), None)
     killgw_idx = next(
         (i for i, cmd in enumerate(received) if "sofia profile external killgw hgw" in cmd), None
     )

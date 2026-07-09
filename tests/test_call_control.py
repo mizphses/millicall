@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 
 import pytest
 
@@ -124,3 +125,83 @@ async def test_no_reconnect_reraises_on_closed():
     cc = EslCallControl(_DeadEsl(), "u1")
     with pytest.raises(ESLConnectionClosed):
         await cc.hangup()
+
+
+@pytest.mark.asyncio
+async def test_play_file_timeout_returns_and_logs_warning(caplog):
+    """PLAYBACK_STOP が来ない場合、タイムアウト後に例外を出さず return し警告ログが出る。"""
+    import logging
+
+    esl = _FakeEsl()
+    # タイムアウトを 0.3 秒に設定（フルスイート負荷下でも安定して発火する値）
+    cc = EslCallControl(esl, "uuid-timeout-test", playback_timeout=0.3)
+
+    # alembic fileConfig が disable_existing_loggers=True でロガーを無効化することがあるため
+    # 明示的に有効化してから caplog で捕捉する
+    target_logger = logging.getLogger("millicall.media.call_control")
+    target_logger.disabled = False
+
+    with caplog.at_level(logging.WARNING, logger="millicall.media.call_control"):
+        # 例外が出ないことを確認（正常 return）
+        await cc.play_file("/tmp/missing.wav")
+
+    # 警告ログに uuid と path が含まれていることを確認
+    assert any(
+        "uuid-timeout-test" in r.message and "/tmp/missing.wav" in r.message
+        for r in caplog.records
+        if r.levelno == logging.WARNING
+    ), f"期待した警告ログが見つからない。records={[r.message for r in caplog.records]}"
+
+
+@pytest.mark.asyncio
+async def test_play_file_timeout_does_not_raise():
+    """タイムアウト後も例外が外に出ないことを追加で確認する（回帰防止）。"""
+    esl = _FakeEsl()
+    cc = EslCallControl(esl, "u-timeout", playback_timeout=0.05)
+    # 例外が出ないことだけを確認する（AssertionError も TimeoutError も不可）
+    result = await cc.play_file("/tmp/x.wav")
+    assert result is None  # play_file は None を返す
+
+
+@pytest.mark.asyncio
+async def test_play_file_normal_returns_immediately_on_playback_stop():
+    """正常系: _notify_playback_done() が呼ばれれば即 return し、タイムアウトは発火しない。"""
+    import logging
+
+    esl = _FakeEsl()
+    # タイムアウトを短く設定してもイベントが来れば問題ないことを確認
+    cc = EslCallControl(esl, "u-normal", playback_timeout=1.0)
+
+    async def _fire_done():
+        await asyncio.sleep(0.01)
+        cc._notify_playback_done()
+
+    with caplog_ctx() as caplog:
+        asyncio.create_task(_fire_done())
+        await cc.play_file("/tmp/normal.wav")
+
+    # 警告ログが出ていないことを確認
+    warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert not warning_msgs, f"正常系で予期しない警告が出た: {warning_msgs}"
+
+
+@contextlib.contextmanager
+def caplog_ctx():
+    """pytest caplog の代替: logging.handlers.MemoryHandler でレコードを収集する。"""
+    import logging
+
+    class _Collector(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = _Collector()
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        yield handler
+    finally:
+        root.removeHandler(handler)
