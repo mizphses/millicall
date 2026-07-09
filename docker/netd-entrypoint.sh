@@ -39,8 +39,11 @@ install -d -m 0750 /run/millicall
 # dnsmasq が必要とするディレクトリ
 install -d -m 0755 /etc/dnsmasq.d
 install -d -m 0755 /var/lib/misc
-# tailscaled の状態ファイル置き場
-install -d -m 0700 /var/lib/tailscale
+# tailscaled の状態ファイル置き場。bind mount 済み(既存 dir)の場合、
+# cap_drop ALL の root は所有者が異なる dir を chmod できない(CAP_FOWNER 無し)ため、
+# chmod 失敗は許容する(set -e で entrypoint ごと死んで再起動ループになるのを防ぐ)。
+mkdir -p /var/lib/tailscale
+chmod 700 /var/lib/tailscale 2>/dev/null || true
 
 # --- 2. tailscaled 起動 ---
 echo "[netd-entrypoint] tailscaled を起動します..."
