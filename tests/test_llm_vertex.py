@@ -125,3 +125,42 @@ async def test_vertex_custom_location_and_model():
     )
     tokens = [t async for t in llm.stream_chat([ChatMessage("user", "hi")])]
     assert tokens == ["こん", "にちは"]
+
+
+# ---------------------------------------------------------------------------
+# auth_method="api_key" (Vertex AI express mode)
+# ---------------------------------------------------------------------------
+
+
+def _express_handler(request: httpx.Request) -> httpx.Response:
+    url = str(request.url)
+    # express mode: プロジェクト/ロケーション無しのグローバルエンドポイント
+    assert url.startswith("https://aiplatform.googleapis.com/v1/publishers/google/models/")
+    assert "projects/" not in url
+    assert "gemini-2.0-flash:streamGenerateContent" in url
+    assert request.url.params.get("alt") == "sse"
+    # API キーはヘッダーで渡し、URL クエリには載せない
+    assert request.headers["x-goog-api-key"] == "AIzaTESTKEY"
+    assert "AIzaTESTKEY" not in url
+    assert "authorization" not in request.headers
+    return httpx.Response(200, text=_SSE, headers={"content-type": "text/event-stream"})
+
+
+@pytest.mark.asyncio
+async def test_vertex_api_key_express_mode():
+    llm = VertexAILLM(
+        sa_json=None,
+        api_key="AIzaTESTKEY",
+        auth_method="api_key",
+        project="",
+        transport=httpx.MockTransport(_express_handler),
+    )
+    tokens = [
+        t async for t in llm.stream_chat([ChatMessage("system", "sys"), ChatMessage("user", "hi")])
+    ]
+    assert tokens == ["こん", "にちは"]
+
+
+def test_vertex_repr_does_not_leak_api_key():
+    llm = VertexAILLM(sa_json=None, api_key="AIzaSECRET", auth_method="api_key", project="")
+    assert "AIzaSECRET" not in repr(llm)

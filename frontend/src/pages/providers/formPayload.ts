@@ -17,8 +17,10 @@ export type ProviderType = components["schemas"]["ProviderType"];
 export interface ConfigFieldDef {
   key: string;
   label: string;
-  valueType: "string" | "number";
+  valueType: "string" | "number" | "select";
   placeholder?: string;
+  /** valueType === "select" のときの選択肢。先頭がデフォルト値になる。 */
+  options?: { value: string; label: string }[];
 }
 
 export interface KindDef {
@@ -99,10 +101,19 @@ export const KIND_CATALOG: Record<ProviderKind, KindDef> = {
     kind: "vertex_ai",
     type: "llm",
     label: "Vertex AI",
-    description: "Vertex AI 経由の Gemini（サービスアカウント認証）",
+    description: "Vertex AI 経由の Gemini（SA / API キー認証）",
     usesApiKey: false,
     usesSaJson: true,
     fields: [
+      {
+        key: "auth_method",
+        label: "認証方式",
+        valueType: "select",
+        options: [
+          { value: "sa", label: "サービスアカウント JSON" },
+          { value: "api_key", label: "API キー (express mode)" },
+        ],
+      },
       { key: "project", label: "プロジェクト", valueType: "string", placeholder: "my-gcp-project" },
       { key: "location", label: "ロケーション", valueType: "string", placeholder: "us-central1" },
       { key: "model", label: "モデル", valueType: "string", placeholder: "gemini-2.0-flash" },
@@ -169,10 +180,19 @@ export const KIND_CATALOG: Record<ProviderKind, KindDef> = {
     kind: "google_stt",
     type: "stt",
     label: "Google STT",
-    description: "Google Cloud Speech-to-Text（サービスアカウント認証）",
+    description: "Google Cloud Speech-to-Text（SA / API キー認証）",
     usesApiKey: false,
     usesSaJson: true,
     fields: [
+      {
+        key: "auth_method",
+        label: "認証方式",
+        valueType: "select",
+        options: [
+          { value: "sa", label: "サービスアカウント JSON" },
+          { value: "api_key", label: "API キー" },
+        ],
+      },
       { key: "project", label: "プロジェクト", valueType: "string", placeholder: "my-gcp-project" },
       { key: "location", label: "ロケーション", valueType: "string", placeholder: "global" },
       { key: "language", label: "言語", valueType: "string", placeholder: "ja-JP" },
@@ -220,7 +240,8 @@ export interface ProviderFormErrors {
 function emptyConfig(kind: ProviderKind): Record<string, string> {
   const config: Record<string, string> = {};
   for (const field of KIND_CATALOG[kind].fields) {
-    config[field.key] = "";
+    // select は先頭選択肢をデフォルトにする（空文字だと未選択状態になるため）
+    config[field.key] = field.valueType === "select" ? (field.options?.[0]?.value ?? "") : "";
   }
   return config;
 }

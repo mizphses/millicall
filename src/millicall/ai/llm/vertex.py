@@ -41,6 +41,8 @@ class VertexAILLM:
         timeout: float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
         token_provider=None,
+        api_key: str | None = None,
+        auth_method: str = "sa",
     ) -> None:
         self._sa_json = sa_json
         self._project = project
@@ -50,16 +52,27 @@ class VertexAILLM:
         self._timeout = timeout
         self._transport = transport
         self._token_provider = token_provider
+        self._api_key = api_key
+        self._auth_method = auth_method
 
     def __repr__(self) -> str:
-        # SA JSON（秘密鍵を含む）を平文で漏らさない。
+        # SA JSON（秘密鍵を含む）・API キーを平文で漏らさない。
         return (
             f"VertexAILLM(project={self._project!r}, location={self._location!r}, "
-            f"model={self._model!r}, sa_json={'***' if self._sa_json else None})"
+            f"model={self._model!r}, auth_method={self._auth_method!r}, "
+            f"sa_json={'***' if self._sa_json else None}, "
+            f"api_key={'***' if self._api_key else None})"
         )
 
     @property
     def _endpoint(self) -> str:
+        if self._auth_method == "api_key":
+            # Vertex AI express mode: プロジェクト/ロケーション無しのグローバルエンドポイント。
+            # API キーで認証するため project / location 設定は使わない。
+            return (
+                "https://aiplatform.googleapis.com/v1/"
+                f"publishers/google/models/{self._model}:streamGenerateContent"
+            )
         return (
             f"https://{self._location}-aiplatform.googleapis.com/v1/"
             f"projects/{self._project}/locations/{self._location}/"
@@ -92,11 +105,23 @@ class VertexAILLM:
 
     async def stream_chat(self, messages: list[ChatMessage]) -> AsyncIterator[str]:
         payload = build_generate_content_payload(messages, self._temperature)
-        token = await self._access_token()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+        if self._auth_method == "api_key":
+            if not self._api_key:
+                raise RuntimeError(
+                    "認証方式が API キーですが api_key が未設定です"
+                    "（プロバイダの API キー欄に設定してください）。"
+                )
+            # API キーはヘッダーで渡す（URL クエリに載せない — ログ露出防止）。
+            headers = {
+                "x-goog-api-key": self._api_key,
+                "Content-Type": "application/json",
+            }
+        else:
+            token = await self._access_token()
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
         params = {"alt": "sse"}
         async with (
             httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client,
