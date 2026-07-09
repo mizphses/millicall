@@ -13,6 +13,78 @@ cd "${MILLICALL_HOME}"
 
 dc() { docker compose "$@"; }
 
+# .env から指定キーの値を安全に読み出す。
+# - コメント行（# で始まる行）・空行を無視する
+# - 値前後のシングル/ダブルクォートを除去する
+# - grep/sed のみで実装（eval/source 不使用、変な文字が来ても安全）
+env_val() {
+  local key="$1"
+  local env_file="${MILLICALL_HOME}/.env"
+  if [ ! -f "${env_file}" ]; then
+    return 0
+  fi
+  # コメントでない行から KEY=VALUE を取り出し、クォートを除去する
+  grep -E "^${key}=" "${env_file}" 2>/dev/null \
+    | tail -n1 \
+    | sed "s/^${key}=//" \
+    | sed "s/^['\"]//;s/['\"]$//"
+}
+
+# 有効化すべき compose プロファイルをカンマ区切りで出力する。
+#
+# ルール:
+#   MILLICALL_CLOUDFLARE_TUNNEL_TOKEN が非空  → cloudflare プロファイルを強制追加
+#   MILLICALL_VOICEVOX_ENABLED が true/1/yes  → voicevox プロファイルを追加
+#
+# 検証: 以下 4 パターンの期待値
+#   トークン有 + VoiceVox=true  → "cloudflare,voicevox"
+#   トークン有 + VoiceVox=false → "cloudflare"
+#   トークン無 + VoiceVox=true  → "voicevox"
+#   トークン無 + VoiceVox=false → ""
+compose_profiles() {
+  local profiles=""
+  local token voicevox
+
+  token="$(env_val MILLICALL_CLOUDFLARE_TUNNEL_TOKEN)"
+  voicevox="$(env_val MILLICALL_VOICEVOX_ENABLED)"
+
+  if [ -n "${token}" ]; then
+    profiles="cloudflare"
+  fi
+
+  # true / 1 / yes を大文字小文字区別なしで許容する
+  case "$(printf '%s' "${voicevox}" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes)
+      if [ -n "${profiles}" ]; then
+        profiles="${profiles},voicevox"
+      else
+        profiles="voicevox"
+      fi
+      ;;
+  esac
+
+  printf '%s' "${profiles}"
+}
+
+# 有効プロファイルを COMPOSE_PROFILES に export し、起動内容をログに出す。
+# up / down / restart / update / ps の前に呼ぶ。
+apply_profiles() {
+  local p
+  p="$(compose_profiles)"
+  export COMPOSE_PROFILES="${p}"
+  if [ -n "${p}" ]; then
+    # Cloudflare トークン検出時は意図的な強制起動であることを明示する
+    case ",${p}," in
+      *,cloudflare,*)
+        log "Cloudflare Tunnel トークンを検出 → cloudflared を強制起動します"
+        ;;
+    esac
+    log "有効プロファイル: ${p}"
+  else
+    log "追加プロファイルなし（cloudflared / voicevox は起動しません）"
+  fi
+}
+
 # compose と .env.example を最新へ再取得する（新サービス追加・compose 変更を取り込むため）。
 # .env 本体は上書きしない（初回 install のみ生成）。.env.example は更新し、新設定変数を
 # 利用者が確認して .env に反映できるようにする。既存 compose は .bak に退避する。
@@ -56,12 +128,22 @@ cmd="${1:-help}"
 shift || true
 
 case "${cmd}" in
-  up)       dc up -d ;;
-  down)     dc down ;;
-  restart)  dc restart ;;
+  up)
+    apply_profiles
+    dc up -d
+    ;;
+  down)
+    apply_profiles
+    dc down
+    ;;
+  restart)
+    apply_profiles
+    dc restart
+    ;;
   update)
     # DB マイグレーションは core 起動時に自動実行される。更新前の backup を強く推奨。
     fetch_compose
+    apply_profiles
     dc pull
     dc up -d
     log "更新完了。'millicallctl ps' と 'millicallctl logs core' で確認してください。"
@@ -79,7 +161,10 @@ case "${cmd}" in
     fi
     ;;
   logs)     dc logs -f "$@" ;;
-  ps)       dc ps ;;
+  ps)
+    apply_profiles
+    dc ps
+    ;;
   backup)
     mkdir -p backups
     ts="$(date -u +%Y%m%dT%H%M%SZ)"

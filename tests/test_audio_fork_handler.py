@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import pytest
 from fastapi import FastAPI
@@ -225,3 +226,71 @@ async def test_ws_route_greet_failure_does_not_leak_registry(monkeypatch):
 
     assert sess.cleaned == 1
     assert registry.get("call-2") is None
+
+
+# ── 観測性: タスク例外の ERROR ログ検証 ──────────────────────────────────────
+
+
+class _ErrorSession:
+    """on_utterance が RuntimeError を送出するフェイクセッション（STT/LLM/TTS 失敗の再現）。"""
+
+    def __init__(self, exc: Exception | None = None):
+        self._speaking = False
+        self._call_uuid = "err-uuid-1"
+        self._exc = exc or RuntimeError("stt boom")
+
+    @property
+    def speaking(self):
+        return self._speaking
+
+    async def on_utterance(self, pcm):
+        raise self._exc
+
+    async def on_barge_in(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_spawn_logs_error_on_task_exception(caplog):
+    """on_utterance タスクが例外を投げた場合に ERROR ログ（uuid 含む, exc_info 付き）が出ること。"""
+    # alembic fileConfig が disable_existing_loggers=True でロガーを無効化することがあるため
+    # 明示的に有効化してから caplog で捕捉する（test_call_control.py の既存パターンに倣う）。
+    target_logger = logging.getLogger("millicall.media.audio_fork")
+    target_logger.disabled = False
+
+    sess = _ErrorSession(RuntimeError("stt boom"))
+    seg = _FakeSegmenter([[VadEvent("speech_end", b"AUDIO")], []])
+    ws = _FakeWS([b"frame1", b"frame2"])
+
+    with caplog.at_level(logging.ERROR, logger="millicall.media.audio_fork"):
+        await AudioForkHandler(sess, seg).run(ws)
+        # done_callback はタスク完了直後のイベントループ tick で呼ばれるため 1 tick 待つ。
+        await asyncio.sleep(0)
+
+    # ERROR レコードに uuid と例外メッセージが含まれること。
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert error_records, f"ERROR ログが出ていない。records={caplog.records}"
+    combined = " ".join(r.message for r in error_records)
+    assert "err-uuid-1" in combined, f"uuid が ERROR ログに含まれない: {combined!r}"
+    # exc_info が付いているか（exc_text にトレースバックが入る）を確認。
+    assert any(r.exc_info and r.exc_info[1] is not None for r in error_records), (
+        "exc_info が ERROR レコードに付いていない"
+    )
+
+
+@pytest.mark.asyncio
+async def test_spawn_does_not_log_on_cancelled_error(caplog):
+    """CancelledError は正常系（WS 切断時のキャンセル）なので ERROR ログを出さないこと。"""
+    target_logger = logging.getLogger("millicall.media.audio_fork")
+    target_logger.disabled = False
+
+    sess = _BlockingSession()  # WS 切断で cancel される
+    seg = _FakeSegmenter([[VadEvent("speech_end", b"AUDIO")]])
+    ws = _DisconnectAfterWS(sess.entered)
+
+    with caplog.at_level(logging.ERROR, logger="millicall.media.audio_fork"):
+        await asyncio.wait_for(AudioForkHandler(sess, seg).run(ws), timeout=1.0)
+        await asyncio.sleep(0)
+
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert not error_records, f"CancelledError で ERROR ログが出てはならない: {error_records}"

@@ -39,7 +39,9 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY src ./src
 
-RUN uv sync --no-dev --frozen
+# stt-google extra を含めて同期する。google_stt プロバイダ（google-cloud-speech）を
+# 出荷イメージに同梱し、管理画面で STT に google_stt を選んだ場合に動作させる。
+RUN uv sync --no-dev --frozen --extra stt-google
 
 # ビルド済み SPA を配置 (settings.static_dir の既定 /app/static)。
 # 存在すると main.py が StaticFiles + SPA fallback を自動で有効化する。

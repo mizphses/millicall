@@ -33,17 +33,24 @@ core 自身は証明書を持ちません。
 MILLICALL_CLOUDFLARE_TUNNEL_TOKEN=<発行されたトークン>
 ```
 
-### 3. cloudflared プロファイルで起動
+### 3. cloudflared の起動
 
-compose ファイルに `cloudflared` サービスが `profiles: [cloudflare]` で定義されています。
-通常の `docker compose up` では起動せず、以下のコマンドで有効化します。
+`.env` に `MILLICALL_CLOUDFLARE_TUNNEL_TOKEN` を設定すると、`millicallctl up`（または `millicallctl update`）の実行時に cloudflared が**自動で起動**します。
+
+```bash
+cd ~/millicall
+millicallctl up
+# → "Cloudflare Tunnel トークンを検出 → cloudflared を強制起動します" とログが出て自動起動する
+```
+
+手動でプロファイルを指定して起動することも引き続き可能です。
 
 ```bash
 cd ~/millicall
 docker compose --profile cloudflare up -d
 ```
 
-これにより `cloudflare/cloudflared:latest` が起動し、Cloudflare のエッジに接続します。
+これにより `cloudflare/cloudflared:2025.5.0` が起動し、Cloudflare のエッジに接続します。
 
 ### 4. パブリックホスト名の設定
 

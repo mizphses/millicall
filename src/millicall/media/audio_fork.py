@@ -39,7 +39,25 @@ class AudioForkHandler:
         task = asyncio.create_task(coro)
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
+        task.add_done_callback(self._log_task_error)
         return task
+
+    def _log_task_error(self, task: asyncio.Task) -> None:
+        """タスクが CancelledError 以外の例外で終了した場合に ERROR ログを出す。
+
+        CancelledError は WS 切断時のキャンセル（正常系）なのでログしない。
+        STT の RuntimeError（依存未同梱）、LLM の HTTP 400 など、
+        本来は切り分けが必要な例外を必ず stdout に出す。
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "on_utterance/on_barge_in タスクが例外で終了しました (uuid=%s)",
+                getattr(self._session, "_call_uuid", "unknown"),
+                exc_info=exc,
+            )
 
     async def run(self, ws) -> None:
         try:

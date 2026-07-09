@@ -187,6 +187,30 @@ services:
     pids_limit: 64
     restart: unless-stopped
 
+  # ------------------------------------------------------------------
+  # voicevox: VOICEVOX エンジン（任意・プロファイル起動）。
+  #
+  # .env に MILLICALL_VOICEVOX_ENABLED=true を設定すると
+  # millicallctl が自動起動する。手動起動は:
+  #
+  #   docker compose --profile voicevox up -d
+  #
+  # TTS プロバイダ設定のエンジン URL には http://127.0.0.1:50021 を指定する。
+  # GPU 版を使う場合は image を voicevox/voicevox_engine:nvidia-latest に変更すること。
+  # ------------------------------------------------------------------
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-latest
+    profiles:
+      - voicevox
+    ports:
+      - "127.0.0.1:50021:50021"
+    # H3: no-new-privileges + 軽量リソース制限のみ
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 1g
+    pids_limit: 64
+    restart: unless-stopped
+
 volumes:
   # netd と core が UNIX ソケットを共有するための named volume。
   # /run/millicall に mount され、netd.sock がここに作成される。
