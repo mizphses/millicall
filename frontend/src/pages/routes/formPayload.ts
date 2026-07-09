@@ -1,101 +1,80 @@
 import type { components } from "../../api/schema";
 
-export type RouteRead = components["schemas"]["RouteRead"];
-export type RouteCreate = components["schemas"]["RouteCreate"];
-export type RouteUpdate = components["schemas"]["RouteUpdate"];
-export type RouteTargetType = components["schemas"]["RouteTargetType"];
+export type NumberPlanEntryRead = components["schemas"]["NumberPlanEntryRead"];
+export type RingGroupRead = components["schemas"]["RingGroupRead"];
+export type RingGroupUpsert = components["schemas"]["RingGroupUpsert"];
+
+/** 番号プランの kind → 日本語ラベル。バッジ・トランクの着信先 select で共用する。 */
+export const NUMBER_PLAN_KIND_LABELS: Record<string, string> = {
+  extension: "内線",
+  ai_agent: "AI",
+  workflow: "ワークフロー",
+  ring_group: "グループ",
+};
+
+/** kind の日本語ラベルを引く（未知の kind はそのまま返す）。 */
+export function numberPlanKindLabel(kind: string): string {
+  return NUMBER_PLAN_KIND_LABELS[kind] ?? kind;
+}
 
 /** SlidePanel フォームが保持する値。API 型とは分離し、UI 都合の型に寄せる。 */
-export interface RouteFormValues {
-  /** 作成時のみ使用。数字・*・# で 1〜30 文字。 */
-  match_number: string;
-  target_type: RouteTargetType;
-  /**
-   * 転送先の識別子（文字列）。
-   * - extension の場合: extension.number（内線番号文字列）
-   * - ai_agent の場合:  String(agent.id)（数値 id を文字列化）
-   */
-  target_value: string;
+export interface RingGroupFormValues {
+  /** グループ番号。数字 2〜6 桁。 */
+  number: string;
+  name: string;
+  /** 鳴動メンバーの内線 id（チェックボックスで複数選択）。 */
+  member_extension_ids: number[];
   enabled: boolean;
 }
 
 /** 作成フォームの初期値。 */
-export function emptyForm(): RouteFormValues {
+export function emptyForm(): RingGroupFormValues {
   return {
-    match_number: "",
-    target_type: "extension",
-    target_value: "",
+    number: "",
+    name: "",
+    member_extension_ids: [],
     enabled: true,
   };
 }
 
-/** 既存ルートを編集フォーム値へ写像する。 */
-export function formFromRoute(route: RouteRead): RouteFormValues {
-  const targetType: RouteTargetType =
-    route.target_type === "ai_agent" ? "ai_agent" : "extension";
+/** 既存グループを編集フォーム値へ写像する。 */
+export function formFromGroup(group: RingGroupRead): RingGroupFormValues {
   return {
-    match_number: route.match_number,
-    target_type: targetType,
-    target_value: route.target_value,
-    enabled: route.enabled,
-  };
-}
-
-/** 作成 payload への変換。target_value は既に文字列（内線番号 or エージェント id 文字列）。 */
-export function buildCreatePayload(form: RouteFormValues): RouteCreate {
-  return {
-    match_number: form.match_number.trim(),
-    target_type: form.target_type,
-    target_value: form.target_value,
-    enabled: form.enabled,
+    number: group.number,
+    name: group.name,
+    member_extension_ids: [...group.member_extension_ids],
+    enabled: group.enabled,
   };
 }
 
 /**
- * 編集フォーム → PATCH payload 変換。
- *
- * - target_type / target_value: 片方でも変更があれば両方送る（バックエンドが一括検証するため）。
- * - enabled: boolean 比較。
- * - match_number は更新不可（backend の RouteUpdate に存在しない）。
+ * POST / PATCH 共通の payload 変換。
+ * バックエンドは Upsert 型（全フィールド送信）のため、差分計算は行わない。
  */
-export function buildUpdatePayload(
-  form: RouteFormValues,
-  original: RouteRead,
-): RouteUpdate {
-  const payload: RouteUpdate = {};
-
-  const targetTypeChanged = form.target_type !== original.target_type;
-  const targetValueChanged = form.target_value !== original.target_value;
-
-  if (targetTypeChanged || targetValueChanged) {
-    payload.target_type = form.target_type;
-    payload.target_value = form.target_value;
-  }
-
-  if (form.enabled !== original.enabled) {
-    payload.enabled = form.enabled;
-  }
-
-  return payload;
+export function buildUpsertPayload(form: RingGroupFormValues): RingGroupUpsert {
+  return {
+    number: form.number.trim(),
+    name: form.name.trim(),
+    member_extension_ids: [...form.member_extension_ids],
+    enabled: form.enabled,
+  };
 }
 
-const MATCH_NUMBER_PATTERN = /^[0-9*#]{1,30}$/;
+const NUMBER_PATTERN = /^[0-9]{2,6}$/;
 
 /** クライアント側のバリデーション。フィールド名 → エラーメッセージ。 */
 export function validateForm(
-  form: RouteFormValues,
-  mode: "create" | "edit",
-): Partial<Record<keyof RouteFormValues, string>> {
-  const errors: Partial<Record<keyof RouteFormValues, string>> = {};
+  form: RingGroupFormValues,
+): Partial<Record<keyof RingGroupFormValues, string>> {
+  const errors: Partial<Record<keyof RingGroupFormValues, string>> = {};
 
-  if (mode === "create") {
-    if (!MATCH_NUMBER_PATTERN.test(form.match_number.trim())) {
-      errors.match_number = "マッチ番号は数字・*・# で 1〜30 文字です";
-    }
+  if (!NUMBER_PATTERN.test(form.number.trim())) {
+    errors.number = "番号は数字 2〜6 桁で入力してください";
   }
 
-  if (form.target_value.trim() === "") {
-    errors.target_value = "転送先を選択してください";
+  const name = form.name.trim();
+  if (name.length < 1 || name.length > 100) {
+    errors.name = "名前は 1〜100 文字で入力してください";
   }
 
   return errors;

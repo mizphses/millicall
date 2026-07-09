@@ -19,6 +19,8 @@ export interface TrunkFormValues {
   password: string;
   did_number: string;
   caller_id: string;
+  /** 着信先内線番号。空文字 = 着信しない（番号プランへ振り分けない）。 */
+  inbound_extension: string;
   enabled: boolean;
 }
 
@@ -32,6 +34,7 @@ export function emptyForm(): TrunkFormValues {
     password: "",
     did_number: "",
     caller_id: "",
+    inbound_extension: "",
     enabled: true,
   };
 }
@@ -46,6 +49,7 @@ export function formFromTrunk(trunk: TrunkRead): TrunkFormValues {
     password: "",         // write-only: サーバから取得不可
     did_number: trunk.did_number,
     caller_id: trunk.caller_id,
+    inbound_extension: trunk.inbound_extension,
     enabled: trunk.enabled,
   };
 }
@@ -60,6 +64,7 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
     password: form.password,
     did_number: form.did_number.trim(),
     caller_id: form.caller_id.trim(),
+    inbound_extension: form.inbound_extension.trim(),
     enabled: form.enabled,
   };
 }
@@ -72,7 +77,7 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
  *
  * - display_name / host / username: 空か unchanged なら含めない
  * - password: 書き込み専用。空なら据え置き（含めない）、非空なら含める（original との比較なし）
- * - did_number / caller_id: 空文字も有効値。変更があれば含める
+ * - did_number / caller_id / inbound_extension: 空文字も有効値。変更があれば含める
  * - enabled: boolean 比較
  */
 export function buildUpdatePayload(
@@ -109,6 +114,12 @@ export function buildUpdatePayload(
   const callerId = form.caller_id.trim();
   if (callerId !== original.caller_id) {
     payload.caller_id = callerId;
+  }
+
+  // inbound_extension: 空文字 = 着信しない（有効値）。変更があれば含める。
+  const inboundExtension = form.inbound_extension.trim();
+  if (inboundExtension !== original.inbound_extension) {
+    payload.inbound_extension = inboundExtension;
   }
 
   if (form.enabled !== original.enabled) {

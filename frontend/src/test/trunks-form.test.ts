@@ -16,6 +16,7 @@ const original: TrunkRead = {
   username: "trunk-user",
   did_number: "0312345678",
   caller_id: "0312345678",
+  inbound_extension: "200",
   enabled: true,
   has_password: true,
 };
@@ -29,6 +30,7 @@ function formOf(overrides: Partial<TrunkFormValues>): TrunkFormValues {
     password: "",
     did_number: "0312345678",
     caller_id: "0312345678",
+    inbound_extension: "200",
     enabled: true,
     ...overrides,
   };
@@ -50,6 +52,11 @@ describe("buildCreatePayload", () => {
     const payload = buildCreatePayload(formOf({ did_number: "", caller_id: "", password: "secret" }));
     expect(payload.did_number).toBe("");
     expect(payload.caller_id).toBe("");
+  });
+
+  it("inbound_extension を含める（trim あり・空文字 = 着信しない も送る）", () => {
+    expect(buildCreatePayload(formOf({ inbound_extension: " 200 ", password: "x" })).inbound_extension).toBe("200");
+    expect(buildCreatePayload(formOf({ inbound_extension: "", password: "x" })).inbound_extension).toBe("");
   });
 });
 
@@ -96,6 +103,21 @@ describe("buildUpdatePayload（編集フォーム → PATCH payload 変換）", 
   it("caller_id が変更されたら含める（空文字への変更も含める）", () => {
     const payload = buildUpdatePayload(formOf({ caller_id: "" }), original);
     expect(payload.caller_id).toBe("");
+  });
+
+  it("inbound_extension が変更されたら含める", () => {
+    const payload = buildUpdatePayload(formOf({ inbound_extension: "300" }), original);
+    expect(payload.inbound_extension).toBe("300");
+  });
+
+  it("inbound_extension を空文字（着信しない）に変更したら含める", () => {
+    const payload = buildUpdatePayload(formOf({ inbound_extension: "" }), original);
+    expect(payload.inbound_extension).toBe("");
+  });
+
+  it("inbound_extension が unchanged なら含めない", () => {
+    const payload = buildUpdatePayload(formOf({ inbound_extension: "200" }), original);
+    expect(payload.inbound_extension).toBeUndefined();
   });
 
   it("enabled を切り替えたら含める", () => {
