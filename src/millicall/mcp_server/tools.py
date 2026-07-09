@@ -217,6 +217,7 @@ def register_tools(mcp: FastMCP) -> None:
             channel_id,
             lock=state.esl_command_lock,
             reconnect=state.esl_reconnect,
+            playback_timeout=state.settings.playback_timeout_sec,
         )
         return CallPrimitives(
             esl=state.esl_command,

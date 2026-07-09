@@ -113,7 +113,13 @@ class WorkflowRunner:
             )
 
         # --- EslCallControl + CallPrimitives -------------------------------- #
-        call_control = EslCallControl(self._esl, uuid, lock=self._lock, reconnect=self._reconnect)
+        call_control = EslCallControl(
+            self._esl,
+            uuid,
+            lock=self._lock,
+            reconnect=self._reconnect,
+            playback_timeout=self._settings.playback_timeout_sec,
+        )
 
         primitives: CallPrimitives | None = None
         if tts is not None and stt is not None:

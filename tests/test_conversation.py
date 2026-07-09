@@ -237,3 +237,20 @@ async def test_tts_error_does_not_hang(tmp_path):
     s._tts = _FakeTTS()
     await asyncio.wait_for(s.on_utterance(b"\x00\x00" * 800), timeout=2.0)
     assert len(s._call_control.played) == 1
+
+
+@pytest.mark.asyncio
+async def test_play_file_path_is_absolute(tmp_path):
+    """play_file に渡るパスが絶対パスであることを確認する。
+
+    FreeSWITCH は相対パスに sound_prefix を前置してしまうため、uuid_broadcast に
+    渡すパスは必ず絶対パスでなければならない。tts_cache_dir を絶対パスにすることで
+    全 TTS 再生経路のパスが絶対パスになることをここで担保する。
+    """
+    s = _new_session(tmp_path, ["はい。"])
+    await s.on_utterance(b"\x00\x00" * 800)
+    assert s._call_control.played, "少なくとも 1 回 play_file が呼ばれるべき"
+    for played_path in s._call_control.played:
+        assert Path(played_path).is_absolute(), (
+            f"play_file に渡るパスは絶対パスでなければならない: {played_path!r}"
+        )
