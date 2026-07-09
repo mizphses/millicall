@@ -8,14 +8,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.config import Settings
-from millicall.models import Extension, Route, Trunk, Workflow
+from millicall.models import AiAgent, Extension, Trunk, Workflow
+from millicall.numberplan import load_ring_groups_with_members
 from millicall.secrets_store import Secrets
 from millicall.telephony.esl import ESLClient, ESLError
 from millicall.telephony.fsconfig import (
+    AiAgentConfig,
     ExtensionConfig,
     FreeswitchConfigWriter,
-    RouteConfig,
+    RingGroupConfig,
     TrunkConfig,
+    WorkflowConfig,
 )
 
 logger = logging.getLogger("millicall.telephony.service")
@@ -97,43 +100,62 @@ class TelephonyChangeListener:
                 password=t.password,
                 did_number=t.did_number,
                 caller_id=t.caller_id,
+                inbound_extension=t.inbound_extension,
             )
             for t in result
         ]
 
-    async def _load_routes(self, session: AsyncSession) -> list[RouteConfig]:
-        # FreeSWITCHは文書順で評価（first match wins）。決定性のためmatch_number昇順
-        result = await session.scalars(
-            select(Route).where(Route.enabled.is_(True)).order_by(Route.match_number)
-        )
-        routes: list[RouteConfig] = []
-        for r in result:
-            ring_count = 0
-            if r.target_type == "workflow":
-                try:
-                    wf = await session.get(Workflow, int(r.target_value))
-                    if wf is not None:
-                        defn = json.loads(wf.definition_json)
-                        start_nodes = [n for n in defn.get("nodes", []) if n.get("type") == "start"]
-                        if start_nodes:
-                            ring_count = int(start_nodes[0].get("config", {}).get("ring_count", 0))
-                except Exception:
-                    ring_count = 0  # any parse error -> default 0, never raise
-            routes.append(
-                RouteConfig(
-                    match_number=r.match_number,
-                    target_type=r.target_type,
-                    target_value=r.target_value,
-                    ring_count=ring_count,
-                )
+    async def _load_ring_groups(self, session: AsyncSession) -> list[RingGroupConfig]:
+        groups = await load_ring_groups_with_members(session)
+        return [
+            RingGroupConfig(
+                number=g.number,
+                name=g.name,
+                member_numbers=[m.number for m in members],
             )
-        return routes
+            for g, members in groups
+        ]
+
+    async def _load_ai_agents(self, session: AsyncSession) -> list[AiAgentConfig]:
+        result = await session.scalars(
+            select(AiAgent)
+            .where(AiAgent.enabled.is_(True), AiAgent.number.is_not(None))
+            .order_by(AiAgent.number)
+        )
+        return [AiAgentConfig(number=a.number or "", agent_id=a.id) for a in result]
+
+    async def _load_workflows(self, session: AsyncSession) -> list[WorkflowConfig]:
+        result = await session.scalars(
+            select(Workflow).where(Workflow.enabled.is_(True)).order_by(Workflow.number)
+        )
+        workflows: list[WorkflowConfig] = []
+        for wf in result:
+            ring_count = 0
+            try:
+                defn = json.loads(wf.definition_json)
+                start_nodes = [n for n in defn.get("nodes", []) if n.get("type") == "start"]
+                if start_nodes:
+                    ring_count = int(start_nodes[0].get("config", {}).get("ring_count", 0))
+            except Exception:
+                ring_count = 0  # any parse error -> default 0, never raise
+            workflows.append(
+                WorkflowConfig(number=wf.number, workflow_id=wf.id, ring_count=ring_count)
+            )
+        return workflows
 
     async def regenerate(self, session: AsyncSession) -> None:
         configs = await self._load_configs(session)
         trunks = await self._load_trunks(session)
-        routes = await self._load_routes(session)
-        self._writer.write_all(configs, trunks, routes)
+        ring_groups = await self._load_ring_groups(session)
+        ai_agents = await self._load_ai_agents(session)
+        workflows = await self._load_workflows(session)
+        self._writer.write_all(
+            configs,
+            trunks,
+            ring_groups=ring_groups,
+            ai_agents=ai_agents,
+            workflows=workflows,
+        )
 
     @staticmethod
     async def _esl_connect_and_reload(client: ESLClient, sync_gateway: str | None = None) -> None:

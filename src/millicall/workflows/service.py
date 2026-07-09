@@ -1,11 +1,8 @@
-"""Workflow persistence helpers: definition validation, Route auto-provisioning,
+"""Workflow persistence helpers: definition validation,
 and LLM-backed definition generation (Phase 4b Task 2).
 
-Route auto-provisioning (裁定#9): each workflow owns a ``Route`` whose
-``target_type='workflow'`` and ``target_value=str(workflow.id)`` with
-``match_number=workflow.number``. Created/updated/removed in lock-step with the
-workflow so inbound routing flows through the existing routes_config + dialplan
-path (dialplan ``workflow`` branch is added by Task 9).
+統一番号プラン移行後: workflow.number は番号プランの実体で、dialplan は
+workflows テーブルから直接生成される（Route プロビジョニングは廃止）。
 """
 
 import json
@@ -17,12 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.ai import registry
 from millicall.crypto import SecretBox
-from millicall.models import Provider, Route, Workflow
+from millicall.models import Provider
 from millicall.workflows.errors import WorkflowValidationError
 from millicall.workflows.nodes import node_type_catalog
 from millicall.workflows.schema import WorkflowDefinition, validate_graph
-
-_WORKFLOW_TARGET = "workflow"
 
 
 class NoLlmProviderError(Exception):
@@ -48,38 +43,6 @@ def validate_definition(definition: dict[str, Any], workflow_id: int | None = No
 def _format_pydantic_error(err: dict[str, Any]) -> str:
     loc = ".".join(str(p) for p in err.get("loc", ()))
     return f"{loc}: {err.get('msg', 'invalid')}" if loc else str(err.get("msg", "invalid"))
-
-
-async def _find_route(session: AsyncSession, workflow: Workflow) -> Route | None:
-    return await session.scalar(
-        select(Route).where(
-            Route.target_type == _WORKFLOW_TARGET,
-            Route.target_value == str(workflow.id),
-        )
-    )
-
-
-async def provision_route(session: AsyncSession, workflow: Workflow) -> None:
-    """Create or update the workflow's inbound Route (match_number == number)."""
-    route = await _find_route(session, workflow)
-    if route is None:
-        session.add(
-            Route(
-                match_number=workflow.number,
-                target_type=_WORKFLOW_TARGET,
-                target_value=str(workflow.id),
-                enabled=workflow.enabled,
-            )
-        )
-    else:
-        route.match_number = workflow.number
-        route.enabled = workflow.enabled
-
-
-async def remove_route(session: AsyncSession, workflow: Workflow) -> None:
-    route = await _find_route(session, workflow)
-    if route is not None:
-        await session.delete(route)
 
 
 # --------------------------------------------------------------------------- #

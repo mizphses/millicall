@@ -13,6 +13,8 @@ class TrunkCreate(BaseModel):
     password: str = Field(..., min_length=1, max_length=128)
     did_number: str = Field(default="", max_length=30)
     caller_id: str = Field(default="", max_length=30)
+    # 着信転送先の内線番号（統一番号プラン）。空 = 着信を受けない。
+    inbound_extension: str = Field(default="", pattern=r"^(\d{2,6})?$")
     enabled: bool = True
 
 
@@ -25,6 +27,8 @@ class TrunkUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=1, max_length=128)
     did_number: str | None = Field(default=None, max_length=30)
     caller_id: str | None = Field(default=None, max_length=30)
+    # None = 変更しない / "" = 着信を受けない / "NNN" = その内線へ転送
+    inbound_extension: str | None = Field(default=None, pattern=r"^(\d{2,6})?$")
     enabled: bool | None = None
 
 
@@ -38,6 +42,7 @@ class TrunkRead(BaseModel):
     username: str
     did_number: str
     caller_id: str
+    inbound_extension: str
     enabled: bool
     has_password: bool
 
@@ -51,6 +56,7 @@ class TrunkRead(BaseModel):
             username=t.username,
             did_number=t.did_number,
             caller_id=t.caller_id,
+            inbound_extension=t.inbound_extension,
             enabled=t.enabled,
             has_password=bool(t.password),
         )

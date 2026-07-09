@@ -1,5 +1,52 @@
 <include>
   <context name="default">
+{#
+  【統一番号プラン】順序が重要:
+    1. グループ着信（一斉鳴動） 2. AIエージェント 3. ワークフロー 4. 汎用（電話機）
+  1〜3 に一致しない 2〜6 桁のみ 4 の bridge user/N に到達する。
+  外線着信も public コンテキストから transfer でここに入るため、
+  内線発信・外線着信のどちらも同じ番号解決になる。
+#}
+{% for group in ring_groups %}
+{% if group.member_numbers %}
+    <extension name="ring_group_{{ group.number }}">
+      <condition field="destination_number" expression="^{{ group.number | re_escape }}$">
+        <action application="log" data="INFO ===== RING GROUP {{ group.number }} ({{ group.member_numbers | length }} members) ====="/>
+        <action application="set" data="ignore_early_media=true"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="bridge" data="{% for m in group.member_numbers %}user/{{ m }}@{{ sip_domain }}{% if not loop.last %},{% endif %}{% endfor %}"/>
+        <action application="hangup" data="NO_ANSWER"/>
+      </condition>
+    </extension>
+{% endif %}
+{% endfor %}
+{% for agent in ai_agents %}
+    <extension name="ai_agent_{{ agent.number }}">
+      <condition field="destination_number" expression="^{{ agent.number | re_escape }}$">
+        <action application="log" data="INFO ===== AI AGENT {{ agent.number }} -> agent {{ agent.agent_id }} ====="/>
+        {#- verbose_events は必須: CHANNEL_ANSWER に variable_millicall_ai_agent を載せるため -#}
+        <action application="set" data="verbose_events=true"/>
+        <action application="set" data="millicall_ai_agent={{ agent.agent_id }}"/>
+        <action application="answer"/>
+        <action application="park"/>
+      </condition>
+    </extension>
+{% endfor %}
+{% for wf in workflows %}
+    <extension name="workflow_{{ wf.number }}">
+      <condition field="destination_number" expression="^{{ wf.number | re_escape }}$">
+        <action application="log" data="INFO ===== WORKFLOW {{ wf.number }} -> workflow {{ wf.workflow_id }} ====="/>
+        <action application="set" data="verbose_events=true"/>
+        <action application="set" data="millicall_workflow={{ wf.workflow_id }}"/>
+        {% if wf.ring_count > 0 %}
+        <action application="ring_ready"/>
+        <action application="sleep" data="{{ wf.ring_count * 6000 }}"/>
+        {% endif %}
+        <action application="answer"/>
+        <action application="park"/>
+      </condition>
+    </extension>
+{% endfor %}
     <extension name="internal_extensions">
       <condition field="destination_number" expression="^(\d{2,6})$">
         <action application="set" data="hangup_after_bridge=true"/>

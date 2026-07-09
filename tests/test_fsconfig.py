@@ -164,42 +164,49 @@ def test_re_escape_rejects_unsafe_input(tmp_path) -> None:
         filter_func("123; DROP TABLE")
 
 
-def test_match_number_with_star_and_hash(tmp_path) -> None:
-    """match_number with * and # must be properly escaped in regex expression."""
-    from millicall.telephony.fsconfig import RouteConfig
+def test_trunk_username_with_star_and_hash_escaped(tmp_path) -> None:
+    """trunk username の * / # は正規表現エスケープされて public.xml に載る。"""
+    from millicall.telephony.fsconfig import TrunkConfig
 
     writer = _writer(tmp_path)
     writer.write_all(
         [],
-        routes=[RouteConfig(match_number="*100#", target_type="extension", target_value="1001")],
+        trunks=[
+            TrunkConfig(
+                name="hgw",
+                display_name="HGW",
+                host="h",
+                username="*100#",
+                password="pw",
+                inbound_extension="1001",
+            )
+        ],
     )
     pub = (tmp_path / "dialplan" / "public.xml").read_text()
-    # Verify the regex is escaped: * and # become \* and \#
-    assert 'expression="^\\*100\\#$"' in pub
-    # Verify the XML parses correctly
+    assert 'expression="^(\\*100\\#)$"' in pub
     ET.fromstring(pub)
 
 
-def test_disabled_route_excluded_from_public_xml(tmp_path) -> None:
-    """Disabled route must not appear in the generated public.xml."""
-    from millicall.telephony.fsconfig import RouteConfig
+def test_trunk_without_inbound_extension_excluded(tmp_path) -> None:
+    """inbound_extension が空のトランクは public.xml に着信ルールを出力しない。"""
+    from dataclasses import replace
+
+    from millicall.telephony.fsconfig import TrunkConfig
 
     writer = _writer(tmp_path)
-    # Create a route with match_number 0312345678 (enabled)
-    # This tests the unit-level variant via write_all
-    enabled_route = RouteConfig(
-        match_number="0312345678", target_type="extension", target_value="1001"
+    trunk = TrunkConfig(
+        name="hgw",
+        display_name="HGW",
+        host="h",
+        username="30",
+        password="pw",
+        inbound_extension="1001",
     )
-    writer.write_all([], routes=[enabled_route])
+    writer.write_all([], trunks=[trunk])
     pub = (tmp_path / "dialplan" / "public.xml").read_text()
+    assert 'name="inbound_trunk_hgw"' in pub
 
-    # Enabled route should be in the XML
-    assert 'name="inbound_0312345678"' in pub
-
-    # Now write with empty routes (simulating disabled route)
-    writer.write_all([], routes=[])
+    # 着信先を外した状態で再生成すると出力されない
+    writer.write_all([], trunks=[replace(trunk, inbound_extension="")])
     pub = (tmp_path / "dialplan" / "public.xml").read_text()
-
-    # Disabled route should NOT be in the XML
-    assert 'name="inbound_0312345678"' not in pub
-    assert 'expression="^0312345678$"' not in pub
+    assert "inbound_trunk_hgw" not in pub

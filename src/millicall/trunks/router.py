@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.deps import get_change_listener, get_esl_factory, get_session, require_admin
 from millicall.models import Trunk
+from millicall.numberplan import find_number
 from millicall.telephony.esl import ESLError
 from millicall.telephony.hooks import ExtensionChangeListener
 from millicall.trunks.schemas import TrunkCreate, TrunkRead, TrunkUpdate
@@ -34,6 +35,17 @@ class TrunkStatusResult(BaseModel):
     state: str
 
 
+async def _validate_inbound_extension(session: AsyncSession, number: str) -> None:
+    """着信転送先が番号プラン（内線/AI/ワークフロー/グループ）に存在することを検証する。"""
+    if number == "":
+        return
+    if await find_number(session, number) is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"着信先内線番号 {number} は番号プランに存在しません",
+        )
+
+
 @router.post("", response_model=TrunkRead, status_code=status.HTTP_201_CREATED)
 async def create_trunk(
     body: TrunkCreate,
@@ -45,6 +57,7 @@ async def create_trunk(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Trunk name already exists"
         )
+    await _validate_inbound_extension(session, body.inbound_extension)
     trunk = Trunk(
         name=body.name,
         display_name=body.display_name,
@@ -53,6 +66,7 @@ async def create_trunk(
         password=body.password,
         did_number=body.did_number,
         caller_id=body.caller_id,
+        inbound_extension=body.inbound_extension,
         enabled=body.enabled,
     )
     session.add(trunk)
@@ -126,6 +140,8 @@ async def update_trunk(
     trunk = await session.get(Trunk, trunk_id)
     if trunk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if body.inbound_extension is not None:
+        await _validate_inbound_extension(session, body.inbound_extension)
     for fld in (
         "display_name",
         "host",
@@ -133,6 +149,7 @@ async def update_trunk(
         "password",
         "did_number",
         "caller_id",
+        "inbound_extension",
         "enabled",
     ):
         val = getattr(body, fld)

@@ -36,7 +36,7 @@ from millicall.network.router import router as network_router
 from millicall.providers.router import router as providers_router
 from millicall.provisioning.devices_router import router as devices_router
 from millicall.provisioning.router import router as provisioning_router
-from millicall.routes_config.router import router as routes_router
+from millicall.ring_groups.router import router as ring_groups_router
 from millicall.scim.router import api_router as scim_api_router
 from millicall.scim.router import scim_router
 from millicall.secrets_store import load_or_create_secrets
@@ -298,7 +298,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(contacts_router)
     app.include_router(extensions_router)
     app.include_router(trunks_router)
-    app.include_router(routes_router)
+    app.include_router(ring_groups_router)
     app.include_router(cdr_router)
     app.include_router(call_messages_router)
     app.include_router(calls_router)

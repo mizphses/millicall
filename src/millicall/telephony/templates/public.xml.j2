@@ -1,8 +1,12 @@
 {#
-  【着信番号について】
-  ひかり電話HGWでは、着信INVITEのdestination_numberはDID（公開番号）ではなく
-  HGWの内線設定で登録された番号（trunk.username等）が届く場合がある。
-  routesのmatch_numberは実際に観測されるdestination_numberに合わせて登録すること。
+  【外線着信 = 内線への自動転送】
+  トランクごとに inbound_extension（着信転送先の内線番号）を持つ。
+  ひかり電話HGWでは着信INVITEのdestination_numberはDID（公開番号）ではなく
+  HGWの内線設定で登録された番号（trunk.username）が届くため、
+  username / did_number のどちらに一致しても同じトランクの着信とみなし、
+  default コンテキストの inbound_extension へ transfer する。
+  転送先の実体（電話機/AIエージェント/ワークフロー/グループ着信）の解決は
+  default コンテキスト側の統一番号プランに委ねる。
 #}
 <include>
   <context name="public">
@@ -23,51 +27,12 @@
       </condition>
     </extension>
 {% endif %}
-{% for route in routes %}
-{% if route.target_type == 'extension' %}
-    <extension name="inbound_{{ route.match_number }}">
-      <condition field="destination_number" expression="^{{ route.match_number | re_escape }}$">
-        <action application="log" data="INFO ===== INBOUND {{ route.match_number }} -> ext {{ route.target_value }} ====="/>
-        <action application="set" data="hangup_after_bridge=true"/>
-        <action application="bridge" data="user/{{ route.target_value }}@{{ sip_domain }}"/>
-        <action application="hangup" data="NORMAL_CLEARING"/>
-      </condition>
-    </extension>
-{% elif route.target_type == 'ai_agent' %}
-    {#
-      AI 応対: dialplan は answer→park までに留め、mod_audio_stream の起動は
-      core が ESL API `uuid_audio_stream <uuid> start ws://.../media/audio-fork/<uuid>?agent=<id> mono 8k`
-      で行う（mod_audio_stream は dialplan app ではなく ESL API のため）。
-      対象エージェント id はチャネル変数 millicall_ai_agent に載せ、
-      core が CHANNEL_ANSWER イベントの variable_millicall_ai_agent から読み取る。
-    #}
-    <extension name="inbound_ai_{{ route.match_number }}">
-      <condition field="destination_number" expression="^{{ route.match_number | re_escape }}$">
-        <action application="log" data="INFO ===== INBOUND {{ route.match_number }} -> ai_agent {{ route.target_value }} ====="/>
-        {#-
-          verbose_events は必須: FreeSWITCH はデフォルトで CHANNEL_ANSWER 等の
-          イベントに任意のチャネル変数 (variable_*) を含めない。これが無いと
-          core は variable_millicall_ai_agent を読めず AI 応対が起動しない
-          (実機で無音着信として発現)。
-        -#}
-        <action application="set" data="verbose_events=true"/>
-        <action application="set" data="millicall_ai_agent={{ route.target_value }}"/>
-        <action application="answer"/>
-        <action application="park"/>
-      </condition>
-    </extension>
-{% elif route.target_type == 'workflow' %}
-    <extension name="inbound_wf_{{ route.match_number }}">
-      <condition field="destination_number" expression="^{{ route.match_number | re_escape }}$">
-        <action application="log" data="INFO ===== INBOUND {{ route.match_number }} -> workflow {{ route.target_value }} ====="/>
-        <action application="set" data="verbose_events=true"/>
-        <action application="set" data="millicall_workflow={{ route.target_value }}"/>
-        {% if route.ring_count > 0 %}
-        <action application="ring_ready"/>
-        <action application="sleep" data="{{ route.ring_count * 6000 }}"/>
-        {% endif %}
-        <action application="answer"/>
-        <action application="park"/>
+{% for trunk in trunks %}
+{% if trunk.inbound_extension %}
+    <extension name="inbound_trunk_{{ trunk.name }}">
+      <condition field="destination_number" expression="^({{ trunk.username | re_escape }}{% if trunk.did_number and trunk.did_number != trunk.username %}|{{ trunk.did_number | re_escape }}{% endif %})$">
+        <action application="log" data="INFO ===== INBOUND trunk {{ trunk.name }} -> ext {{ trunk.inbound_extension }} ====="/>
+        <action application="transfer" data="{{ trunk.inbound_extension }} XML default"/>
       </condition>
     </extension>
 {% endif %}
