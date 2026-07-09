@@ -20,7 +20,7 @@ async def _make_provider(c, name, ptype, kind):
     return r.json()["id"]
 
 
-async def _create_workflow(c, number="0501112222", name="受付フロー", definition=None):
+async def _create_workflow(c, number="3001", name="受付フロー", definition=None):
     return await c.post(
         "/api/workflows",
         json={
@@ -43,7 +43,7 @@ async def test_create_workflow_valid(auth_client_with_telephony):
     resp = await _create_workflow(c)
     assert resp.status_code == 201
     body = resp.json()
-    assert body["number"] == "0501112222"
+    assert body["number"] == "3001"
     assert body["name"] == "受付フロー"
     assert body["warnings"] == []
     assert body["definition"]["nodes"][0]["type"] == "start"
@@ -59,7 +59,7 @@ async def test_create_workflow_gui_minimal_definition(auth_client_with_telephony
     c = auth_client_with_telephony
     resp = await _create_workflow(
         c,
-        number="0503334444",
+        number="3002",
         name="新規フロー",
         definition={
             "nodes": [
@@ -154,8 +154,8 @@ async def test_unreachable_node_returns_warnings(auth_client_with_telephony):
 @pytest.mark.asyncio
 async def test_duplicate_number_conflict(auth_client_with_telephony):
     c = auth_client_with_telephony
-    assert (await _create_workflow(c, number="0500000001", name="a")).status_code == 201
-    dup = await _create_workflow(c, number="0500000001", name="b")
+    assert (await _create_workflow(c, number="3003", name="a")).status_code == 201
+    dup = await _create_workflow(c, number="3003", name="b")
     assert dup.status_code == 409
 
 
@@ -167,9 +167,9 @@ async def test_duplicate_number_conflict(auth_client_with_telephony):
 @pytest.mark.asyncio
 async def test_workflow_appears_in_number_plan(auth_client_with_telephony):
     c = auth_client_with_telephony
-    wid = (await _create_workflow(c, number="0509998888")).json()["id"]
+    wid = (await _create_workflow(c, number="3004")).json()["id"]
     plan = (await c.get("/api/number-plan")).json()
-    match = [p for p in plan if p["number"] == "0509998888"]
+    match = [p for p in plan if p["number"] == "3004"]
     assert len(match) == 1
     assert match[0]["kind"] == "workflow"
     assert match[0]["id"] == wid
@@ -178,30 +178,30 @@ async def test_workflow_appears_in_number_plan(auth_client_with_telephony):
 @pytest.mark.asyncio
 async def test_update_number_updates_number_plan(auth_client_with_telephony):
     c = auth_client_with_telephony
-    wid = (await _create_workflow(c, number="0501010101")).json()["id"]
+    wid = (await _create_workflow(c, number="3005")).json()["id"]
     resp = await c.put(
         f"/api/workflows/{wid}",
         json={
             "name": "受付フロー",
-            "number": "0502020202",
+            "number": "3006",
             "definition": _valid_definition(),
         },
     )
     assert resp.status_code == 200
     plan = (await c.get("/api/number-plan")).json()
     numbers = {p["number"] for p in plan if p["kind"] == "workflow"}
-    assert numbers == {"0502020202"}
+    assert numbers == {"3006"}
 
 
 @pytest.mark.asyncio
 async def test_delete_removes_from_number_plan(auth_client_with_telephony):
     c = auth_client_with_telephony
-    wid = (await _create_workflow(c, number="0503030303")).json()["id"]
+    wid = (await _create_workflow(c, number="3007")).json()["id"]
     resp = await c.delete(f"/api/workflows/{wid}")
     assert resp.status_code == 204
     assert (await c.get(f"/api/workflows/{wid}")).status_code == 404
     plan = (await c.get("/api/number-plan")).json()
-    assert not [p for p in plan if p["number"] == "0503030303"]
+    assert not [p for p in plan if p["number"] == "3007"]
 
 
 @pytest.mark.asyncio
