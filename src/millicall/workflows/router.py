@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from millicall.crypto import SecretBox
 from millicall.deps import get_change_listener, get_secret_box, get_session, require_admin
 from millicall.models import Workflow
+from millicall.numberplan import NumberConflictError, assert_number_free
 from millicall.telephony.hooks import ExtensionChangeListener
 from millicall.workflows.handles import HANDLE_VOCAB
 from millicall.workflows.nodes import node_type_catalog
@@ -27,8 +28,6 @@ from millicall.workflows.schemas import (
 )
 from millicall.workflows.service import (
     generate_definition,
-    provision_route,
-    remove_route,
     validate_definition,
 )
 
@@ -97,10 +96,14 @@ async def create_workflow(
         definition_json=json.dumps(body.definition, ensure_ascii=False),
         enabled=body.enabled,
     )
+    try:
+        # 統一番号プラン: 4テーブル横断の番号一意チェック
+        await assert_number_free(session, body.number)
+    except NumberConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     session.add(wf)
     try:
         await session.flush()  # assign wf.id (and catch number UNIQUE)
-        await provision_route(session, wf)
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -139,6 +142,10 @@ async def update_workflow(
     if wf is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     warnings = validate_definition(body.definition, workflow_id=workflow_id)
+    try:
+        await assert_number_free(session, body.number, exclude=("workflow", workflow_id))
+    except NumberConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     wf.name = body.name
     wf.number = body.number
     wf.description = body.description
@@ -146,7 +153,6 @@ async def update_workflow(
     wf.enabled = body.enabled
     wf.definition_json = json.dumps(body.definition, ensure_ascii=False)
     try:
-        await provision_route(session, wf)
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -167,7 +173,6 @@ async def delete_workflow(
     wf = await session.get(Workflow, workflow_id)
     if wf is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    await remove_route(session, wf)
     await session.delete(wf)
     await session.commit()
     await listener.notify(session)

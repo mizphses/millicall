@@ -32,10 +32,28 @@ class ExtensionConfig:
 
 
 @dataclass(frozen=True)
-class RouteConfig:
-    match_number: str
-    target_type: str
-    target_value: str
+class RingGroupConfig:
+    """グループ着信（一斉鳴動）。member_numbers はメンバー内線番号のリスト。"""
+
+    number: str
+    name: str
+    member_numbers: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AiAgentConfig:
+    """内線番号を持つ AI エージェント（default コンテキストで answer+park する）。"""
+
+    number: str
+    agent_id: int
+
+
+@dataclass(frozen=True)
+class WorkflowConfig:
+    """内線番号を持つワークフロー（default コンテキストで answer+park する）。"""
+
+    number: str
+    workflow_id: int
     ring_count: int = 0
 
 
@@ -48,6 +66,8 @@ class TrunkConfig:
     password: str = field(repr=False)
     did_number: str = ""
     caller_id: str = ""
+    # 着信転送先の内線番号（統一番号プラン）。空 = 着信を受けない。
+    inbound_extension: str = ""
 
 
 class FreeswitchConfigWriter:
@@ -129,10 +149,14 @@ class FreeswitchConfigWriter:
         self,
         extensions: list[ExtensionConfig],
         trunks: list["TrunkConfig"] | None = None,
-        routes: list["RouteConfig"] | None = None,
+        ring_groups: list["RingGroupConfig"] | None = None,
+        ai_agents: list["AiAgentConfig"] | None = None,
+        workflows: list["WorkflowConfig"] | None = None,
     ) -> list[Path]:
         trunks = trunks or []
-        routes = routes or []
+        ring_groups = ring_groups or []
+        ai_agents = ai_agents or []
+        workflows = workflows or []
         (self.output_dir / "directory" / "default").mkdir(parents=True, exist_ok=True)
         self._clear_user_files()
 
@@ -166,12 +190,18 @@ class FreeswitchConfigWriter:
                 "dialplan/default.xml",
                 self._render(
                     "dialplan_default.xml.j2",
-                    {"outbound_trunk": outbound_trunk, "extensions": extensions},
+                    {
+                        "outbound_trunk": outbound_trunk,
+                        "extensions": extensions,
+                        "ring_groups": ring_groups,
+                        "ai_agents": ai_agents,
+                        "workflows": workflows,
+                    },
                 ),
             )
         )
         written.append(
-            self._write("dialplan/public.xml", self._render("public.xml.j2", {"routes": routes}))
+            self._write("dialplan/public.xml", self._render("public.xml.j2", {"trunks": trunks}))
         )
         written.append(
             self._write(

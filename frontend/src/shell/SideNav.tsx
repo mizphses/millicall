@@ -2,7 +2,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 
 import { css } from "styled-system/css";
 
-import { NAV_ITEMS } from "./nav";
+import { NAV_SECTIONS } from "./nav";
 
 export function SideNav() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -37,37 +37,57 @@ export function SideNav() {
       >
         millicall
       </div>
-      <ul className={css({ listStyle: "none", m: 0, p: "2", display: "flex", flexDirection: "column", gap: "1" })}>
-        {NAV_ITEMS.map((item) => {
-          const active = item.path === "/" ? pathname === "/" : pathname.startsWith(item.path);
-          return (
-            <li key={item.path}>
-              <Link
-                to={item.path}
+      <div className={css({ p: "2", overflowY: "auto" })}>
+        {NAV_SECTIONS.map((section, i) => (
+          <div key={section.title ?? `section-${i}`}>
+            {section.title ? (
+              <div
                 className={css({
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "3",
+                  fontSize: "xs",
+                  fontWeight: "600",
+                  color: "text.subtle",
                   px: "3",
-                  py: "2",
-                  borderRadius: "md",
-                  fontSize: "md",
-                  color: active ? "accent.text" : "text.muted",
-                  bg: active ? "accent.soft" : "transparent",
-                  fontWeight: active ? "600" : "400",
-                  textDecoration: "none",
-                  _hover: { bg: active ? "accent.soft" : "gray.50", color: active ? "accent.text" : "text" },
+                  mt: "4",
+                  mb: "1",
                 })}
               >
-                <span className={css({ display: "flex", alignItems: "center", width: "20px" })} aria-hidden>
-                  {item.icon}
-                </span>
-                {item.label}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
+                {section.title}
+              </div>
+            ) : null}
+            <ul className={css({ listStyle: "none", m: 0, p: 0, display: "flex", flexDirection: "column", gap: "1" })}>
+              {section.items.map((item) => {
+                const active = item.path === "/" ? pathname === "/" : pathname.startsWith(item.path);
+                return (
+                  <li key={item.path}>
+                    <Link
+                      to={item.path}
+                      className={css({
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "3",
+                        px: "3",
+                        py: "2",
+                        borderRadius: "md",
+                        fontSize: "md",
+                        color: active ? "accent.text" : "text.muted",
+                        bg: active ? "accent.soft" : "transparent",
+                        fontWeight: active ? "600" : "400",
+                        textDecoration: "none",
+                        _hover: { bg: active ? "accent.soft" : "gray.50", color: active ? "accent.text" : "text" },
+                      })}
+                    >
+                      <span className={css({ display: "flex", alignItems: "center", width: "20px" })} aria-hidden>
+                        {item.icon}
+                      </span>
+                      {item.label}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
     </nav>
   );
 }

@@ -118,6 +118,12 @@ class Trunk(Base):
     caller_id: Mapped[str] = mapped_column(  # 表示番号（自局番号）
         String(30), nullable=False, default="", server_default=""
     )
+    # 着信先内線番号（統一番号プラン）。空 = このトランクの着信を受けない。
+    # public コンテキストで destination_number(username/did_number) 一致時に
+    # この番号へ transfer する。番号の実体は extension/ai_agent/workflow/ring_group のいずれか。
+    inbound_extension: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="", server_default=""
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )
@@ -135,20 +141,36 @@ class Trunk(Base):
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
 
 
-class Route(Base):
-    __tablename__ = "routes"
+class RingGroup(Base):
+    """グループ着信（一斉鳴動）。統一番号プランの一員として内線番号を持つ。
+
+    この番号への着信（内線発信・トランク着信の transfer どちらも）で
+    メンバー内線が一斉に鳴る。鳴動戦略は一斉のみ。
+    """
+
+    __tablename__ = "ring_groups"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    match_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
-    # RouteTargetType の値。Phase 2 は "extension" のみ。将来 ring_group/workflow/ai_agent。
-    target_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    # extensions への FK は意図的に張らない: 参照整合性は書き込み時検証のみ（内線削除でダングリングになり得る — dialplan生成側は存在しないターゲットを無視する前提。Phase 5でUI警告を検討）
-    target_value: Mapped[str] = mapped_column(String(64), nullable=False)
+    number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
+    )
+
+
+class RingGroupMember(Base):
+    __tablename__ = "ring_group_members"
+    __table_args__ = (Index("ux_ring_group_member", "group_id", "extension_id", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("ring_groups.id", ondelete="CASCADE"), nullable=False
+    )
+    extension_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("extensions.id", ondelete="CASCADE"), nullable=False
     )
 
 
@@ -238,6 +260,9 @@ class AiAgent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    # 内線番号（統一番号プラン・任意）。NULL = 番号なし（ワークフロー内部からのみ使用）。
+    # 一意性は numberplan.assert_number_free で4テーブル横断チェックする。
+    number: Mapped[str | None] = mapped_column(String(20), nullable=True, unique=True)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     greeting: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     llm_provider_id: Mapped[int] = mapped_column(Integer, nullable=False)

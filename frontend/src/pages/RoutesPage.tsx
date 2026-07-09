@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 
 import { css } from "styled-system/css";
@@ -7,31 +7,37 @@ import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import type { components } from "../api/schema";
-import { ROUTES_KEY, EXTENSIONS_KEY, AGENTS_KEY } from "../queryKeys";
+import { NUMBER_PLAN_KEY, RING_GROUPS_KEY, EXTENSIONS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
 import { SlidePanel } from "../components/SlidePanel";
 import { useToast } from "../toast/ToastProvider";
 import {
-  buildCreatePayload,
-  buildUpdatePayload,
+  buildUpsertPayload,
   emptyForm,
-  formFromRoute,
+  formFromGroup,
+  numberPlanKindLabel,
   validateForm,
-  type RouteFormValues,
-  type RouteRead,
+  type NumberPlanEntryRead,
+  type RingGroupFormValues,
+  type RingGroupRead,
 } from "./routes/formPayload";
 
 type ExtensionRead = components["schemas"]["ExtensionRead"];
-type AiAgentRead = components["schemas"]["AiAgentRead"];
 
-/** マッチ番号の重複（409）を型で区別するためのエラー。 */
-class MatchNumberConflictError extends Error {}
+/** グループ番号の重複（409）を型で区別するためのエラー。フォームのインライン表示に使う。 */
+class GroupNumberConflictError extends Error {}
 
-async function fetchRoutes(): Promise<RouteRead[]> {
-  const { data, error } = await api.GET("/api/routes");
-  if (error) throw new Error("ルーティング一覧の取得に失敗しました");
+async function fetchNumberPlan(): Promise<NumberPlanEntryRead[]> {
+  const { data, error } = await api.GET("/api/number-plan");
+  if (error) throw new Error("番号プランの取得に失敗しました");
+  return data ?? [];
+}
+
+async function fetchRingGroups(): Promise<RingGroupRead[]> {
+  const { data, error } = await api.GET("/api/ring-groups");
+  if (error) throw new Error("グループ着信一覧の取得に失敗しました");
   return data ?? [];
 }
 
@@ -41,82 +47,79 @@ async function fetchExtensions(): Promise<ExtensionRead[]> {
   return data ?? [];
 }
 
-async function fetchAiAgents(): Promise<AiAgentRead[]> {
-  const { data, error } = await api.GET("/api/ai-agents");
-  if (error) throw new Error("AI エージェント一覧の取得に失敗しました");
-  return data ?? [];
-}
-
-async function createRoute(form: RouteFormValues): Promise<RouteRead> {
-  const { data, error, response } = await api.POST("/api/routes", {
-    body: buildCreatePayload(form),
+async function createRingGroup(form: RingGroupFormValues): Promise<RingGroupRead> {
+  const { data, error, response } = await api.POST("/api/ring-groups", {
+    body: buildUpsertPayload(form),
   });
   if (response.status === 409) {
-    throw new MatchNumberConflictError("このマッチ番号は既に使用されています");
+    throw new GroupNumberConflictError("この番号は既に使用されています");
   }
-  if (error || !data) throw new Error("ルーティングの作成に失敗しました");
+  if (error || !data) throw new Error("グループ着信の作成に失敗しました");
   return data;
 }
 
-async function updateRoute(
+async function updateRingGroup(
   id: number,
-  form: RouteFormValues,
-  original: RouteRead,
-): Promise<RouteRead> {
-  const { data, error } = await api.PATCH("/api/routes/{route_id}", {
-    params: { path: { route_id: id } },
-    body: buildUpdatePayload(form, original),
+  form: RingGroupFormValues,
+): Promise<RingGroupRead> {
+  const { data, error, response } = await api.PATCH("/api/ring-groups/{group_id}", {
+    params: { path: { group_id: id } },
+    body: buildUpsertPayload(form),
   });
-  if (error || !data) throw new Error("ルーティングの更新に失敗しました");
+  if (response.status === 409) {
+    throw new GroupNumberConflictError("この番号は既に使用されています");
+  }
+  if (error || !data) throw new Error("グループ着信の更新に失敗しました");
   return data;
 }
 
-async function deleteRoute(id: number): Promise<void> {
-  const { error } = await api.DELETE("/api/routes/{route_id}", {
-    params: { path: { route_id: id } },
+async function deleteRingGroup(id: number): Promise<void> {
+  const { error } = await api.DELETE("/api/ring-groups/{group_id}", {
+    params: { path: { group_id: id } },
   });
-  if (error) throw new Error("ルーティングの削除に失敗しました");
+  if (error) throw new Error("グループ着信の削除に失敗しました");
 }
 
-/** target_type + target_value を人間可読な文字列に変換する。 */
-function formatTarget(
-  route: RouteRead,
-  extensions: ExtensionRead[],
-  aiAgents: AiAgentRead[],
-): string {
-  if (route.target_type === "extension") {
-    const ext = extensions.find((e) => e.number === route.target_value);
-    return ext
-      ? `内線 ${ext.number}（${ext.display_name}）`
-      : `内線 ${route.target_value}`;
+/** kind ごとのバッジ色。ラベルは numberPlanKindLabel と対で使う。 */
+function kindBadgeTone(kind: string): "accent" | "success" | "warn" | "neutral" {
+  switch (kind) {
+    case "extension":
+      return "accent";
+    case "ai_agent":
+      return "success";
+    case "workflow":
+      return "warn";
+    default:
+      // ring_group ほか
+      return "neutral";
   }
-  if (route.target_type === "ai_agent") {
-    const agentId = parseInt(route.target_value, 10);
-    const agent = aiAgents.find((a) => a.id === agentId);
-    return agent ? `AI: ${agent.name}` : `AI エージェント #${route.target_value}`;
-  }
-  return route.target_value;
 }
 
 export function RoutesPage() {
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const listQuery = useQuery({ queryKey: ROUTES_KEY, queryFn: fetchRoutes });
+  const planQuery = useQuery({ queryKey: NUMBER_PLAN_KEY, queryFn: fetchNumberPlan });
+  const groupsQuery = useQuery({ queryKey: RING_GROUPS_KEY, queryFn: fetchRingGroups });
   const extensionsQuery = useQuery({ queryKey: EXTENSIONS_KEY, queryFn: fetchExtensions });
-  const aiAgentsQuery = useQuery({ queryKey: AGENTS_KEY, queryFn: fetchAiAgents });
 
   const extensions = extensionsQuery.data ?? [];
-  const aiAgents = aiAgentsQuery.data ?? [];
 
-  const [editing, setEditing] = useState<RouteRead | null>(null);
+  // 内線 id → Read（グループのメンバー表示用）。
+  const extensionMap = useMemo(() => {
+    const map = new Map<number, ExtensionRead>();
+    for (const ext of extensions) map.set(ext.id, ext);
+    return map;
+  }, [extensions]);
+
+  const [editing, setEditing] = useState<RingGroupRead | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
-  const [form, setForm] = useState<RouteFormValues>(emptyForm());
-  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof RouteFormValues, string>>>(
-    {},
-  );
+  const [form, setForm] = useState<RingGroupFormValues>(emptyForm());
+  const [fieldErrors, setFieldErrors] = useState<
+    Partial<Record<keyof RingGroupFormValues, string>>
+  >({});
 
-  const [deleteTarget, setDeleteTarget] = useState<RouteRead | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<RingGroupRead | null>(null);
 
   function openCreate() {
     setEditing(null);
@@ -125,9 +128,9 @@ export function RoutesPage() {
     setPanelOpen(true);
   }
 
-  function openEdit(route: RouteRead) {
-    setEditing(route);
-    setForm(formFromRoute(route));
+  function openEdit(group: RingGroupRead) {
+    setEditing(group);
+    setForm(formFromGroup(group));
     setFieldErrors({});
     setPanelOpen(true);
   }
@@ -136,25 +139,30 @@ export function RoutesPage() {
     setPanelOpen(false);
   }
 
-  /** target_type が変わったら target_value をリセットする。 */
-  function handleTargetTypeChange(newType: RouteFormValues["target_type"]) {
-    setForm((f) => ({ ...f, target_type: newType, target_value: "" }));
-    setFieldErrors((prev) => ({ ...prev, target_value: undefined }));
+  /** メンバー内線チェックボックスのトグル。 */
+  function toggleMember(extensionId: number, checked: boolean) {
+    setForm((f) => ({
+      ...f,
+      member_extension_ids: checked
+        ? [...f.member_extension_ids, extensionId]
+        : f.member_extension_ids.filter((id) => id !== extensionId),
+    }));
   }
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      if (editing) return updateRoute(editing.id, form, editing);
-      return createRoute(form);
+      if (editing) return updateRingGroup(editing.id, form);
+      return createRingGroup(form);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ROUTES_KEY });
-      toast.success(editing ? "ルーティングを更新しました" : "ルーティングを作成しました");
+      queryClient.invalidateQueries({ queryKey: RING_GROUPS_KEY });
+      queryClient.invalidateQueries({ queryKey: NUMBER_PLAN_KEY });
+      toast.success(editing ? "グループ着信を更新しました" : "グループ着信を作成しました");
       setPanelOpen(false);
     },
     onError: (err) => {
-      if (err instanceof MatchNumberConflictError) {
-        setFieldErrors((prev) => ({ ...prev, match_number: err.message }));
+      if (err instanceof GroupNumberConflictError) {
+        setFieldErrors((prev) => ({ ...prev, number: err.message }));
         return;
       }
       toast.error(err instanceof Error ? err.message : "保存に失敗しました");
@@ -162,10 +170,11 @@ export function RoutesPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => deleteRoute(id),
+    mutationFn: (id: number) => deleteRingGroup(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ROUTES_KEY });
-      toast.success("ルーティングを削除しました");
+      queryClient.invalidateQueries({ queryKey: RING_GROUPS_KEY });
+      queryClient.invalidateQueries({ queryKey: NUMBER_PLAN_KEY });
+      toast.success("グループ着信を削除しました");
       setDeleteTarget(null);
     },
     onError: (err) => {
@@ -175,37 +184,55 @@ export function RoutesPage() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const errors = validateForm(form, editing ? "edit" : "create");
+    const errors = validateForm(form);
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
-    if (editing) {
-      const payload = buildUpdatePayload(form, editing);
-      if (Object.keys(payload).length === 0) {
-        toast.show("変更はありません", "neutral");
-        setPanelOpen(false);
-        return;
-      }
-    }
     saveMutation.mutate();
   }
 
-  const columns: Column<RouteRead>[] = [
-    { key: "match_number", header: "マッチ番号", width: "140px" },
+  const planColumns: Column<NumberPlanEntryRead>[] = [
+    { key: "number", header: "番号", width: "110px" },
     {
-      key: "target_type",
+      key: "kind",
       header: "種別",
-      width: "120px",
+      width: "130px",
+      render: (row) => (
+        <span className={badge({ tone: kindBadgeTone(row.kind) })}>
+          {numberPlanKindLabel(row.kind)}
+        </span>
+      ),
+    },
+    { key: "label", header: "名前" },
+    {
+      key: "enabled",
+      header: "状態",
+      width: "90px",
       render: (row) =>
-        row.target_type === "extension" ? (
-          <span className={badge({ tone: "accent" })}>内線</span>
+        row.enabled ? (
+          <span className={badge({ tone: "success" })}>有効</span>
         ) : (
-          <span className={badge({ tone: "neutral" })}>AI エージェント</span>
+          <span className={badge({ tone: "neutral" })}>無効</span>
         ),
     },
     {
-      key: "target_value",
-      header: "転送先",
-      render: (row) => formatTarget(row, extensions, aiAgents),
+      key: "inbound_trunks",
+      header: "着信トランク",
+      render: (row) => (row.inbound_trunks.length > 0 ? row.inbound_trunks.join(", ") : "—"),
+    },
+  ];
+
+  const groupColumns: Column<RingGroupRead>[] = [
+    { key: "number", header: "番号", width: "110px" },
+    { key: "name", header: "名前" },
+    {
+      key: "member_extension_ids",
+      header: "メンバー内線",
+      render: (row) =>
+        row.member_extension_ids.length > 0
+          ? row.member_extension_ids
+              .map((id) => extensionMap.get(id)?.number ?? `ID:${id}`)
+              .join(", ")
+          : "—",
     },
     {
       key: "enabled",
@@ -247,24 +274,57 @@ export function RoutesPage() {
   return (
     <PageLayout
       title="ルーティング"
-      description="着信番号と転送先（内線・AI エージェント）の対応を管理"
-      actions={
-        <button type="button" className={button({ variant: "primary" })} onClick={openCreate}>
-          ルールを追加
-        </button>
-      }
+      description="統一内線番号プランの一覧と、グループ着信（複数内線の一斉鳴動）の管理"
     >
-      <DataTable
-        columns={columns}
-        rows={listQuery.data ?? []}
-        rowKey={(row) => row.id}
-        loading={listQuery.isLoading}
-        emptyMessage="ルーティングルールがまだありません。右上の「ルールを追加」から登録してください。"
-      />
+      <div className={css({ display: "flex", flexDirection: "column", gap: "8" })}>
+        <section>
+          <SectionHeading
+            title="番号プラン"
+            description="内線・AI エージェント・ワークフロー・グループが共有する番号空間"
+          />
+          <DataTable
+            columns={planColumns}
+            rows={planQuery.data ?? []}
+            rowKey={(row) => `${row.kind}-${row.id}`}
+            loading={planQuery.isLoading}
+            emptyMessage="番号がまだありません。内線・AI エージェント・グループ着信を登録すると表示されます。"
+          />
+        </section>
+
+        <section>
+          <div
+            className={css({
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: "4",
+            })}
+          >
+            <SectionHeading
+              title="グループ着信"
+              description="1 つの番号で複数の内線を一斉に鳴らすグループ"
+            />
+            <button
+              type="button"
+              className={button({ variant: "primary" })}
+              onClick={openCreate}
+            >
+              グループを追加
+            </button>
+          </div>
+          <DataTable
+            columns={groupColumns}
+            rows={groupsQuery.data ?? []}
+            rowKey={(row) => row.id}
+            loading={groupsQuery.isLoading}
+            emptyMessage="グループ着信がまだありません。「グループを追加」から登録してください。"
+          />
+        </section>
+      </div>
 
       <SlidePanel
         open={panelOpen}
-        title={editing ? "ルールを編集" : "ルールを追加"}
+        title={editing ? "グループを編集" : "グループを追加"}
         onClose={closePanel}
         footer={
           <>
@@ -278,7 +338,7 @@ export function RoutesPage() {
             </button>
             <button
               type="submit"
-              form="route-form"
+              form="ring-group-form"
               className={button({ variant: "primary" })}
               disabled={saveMutation.isPending}
             >
@@ -288,67 +348,78 @@ export function RoutesPage() {
         }
       >
         <form
-          id="route-form"
+          id="ring-group-form"
           onSubmit={handleSubmit}
           className={css({ display: "flex", flexDirection: "column", gap: "4" })}
         >
-          <Field label="マッチ番号" error={fieldErrors.match_number}>
+          <Field label="番号（2〜6 桁）" error={fieldErrors.number}>
             <input
-              className={input({ invalid: fieldErrors.match_number ? true : undefined })}
-              value={form.match_number}
-              onChange={(e) => setForm((f) => ({ ...f, match_number: e.target.value }))}
-              disabled={editing !== null}
-              placeholder="0312345678"
+              className={input({ invalid: fieldErrors.number ? true : undefined })}
+              value={form.number}
+              onChange={(e) => setForm((f) => ({ ...f, number: e.target.value }))}
+              placeholder="200"
               autoFocus={editing === null}
             />
           </Field>
 
-          <Field label="転送先の種別" error={fieldErrors.target_type}>
-            <select
-              className={input()}
-              value={form.target_type}
-              onChange={(e) =>
-                handleTargetTypeChange(
-                  e.target.value as RouteFormValues["target_type"],
-                )
-              }
-            >
-              <option value="extension">内線</option>
-              <option value="ai_agent">AI エージェント</option>
-            </select>
+          <Field label="名前" error={fieldErrors.name}>
+            <input
+              className={input({ invalid: fieldErrors.name ? true : undefined })}
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="営業部"
+              maxLength={100}
+            />
           </Field>
 
-          {form.target_type === "extension" ? (
-            <Field label="内線" error={fieldErrors.target_value}>
-              <select
-                className={input({ invalid: fieldErrors.target_value ? true : undefined })}
-                value={form.target_value}
-                onChange={(e) => setForm((f) => ({ ...f, target_value: e.target.value }))}
-              >
-                <option value="">内線を選択してください</option>
-                {extensions.map((ext) => (
-                  <option key={ext.number} value={ext.number}>
+          {/* チェックボックス自体が label を持つため、Field（label ラップ方式）は使わない */}
+          <div>
+            <span
+              className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
+            >
+              メンバー内線
+            </span>
+            <div
+              className={css({
+                display: "flex",
+                flexDirection: "column",
+                gap: "1",
+                maxH: "240px",
+                overflowY: "auto",
+                borderWidth: "1px",
+                borderStyle: "solid",
+                borderColor: "border",
+                borderRadius: "md",
+                p: "2",
+              })}
+            >
+              {extensions.length === 0 ? (
+                <p className={css({ fontSize: "sm", color: "text.muted", m: 0 })}>
+                  内線がまだありません。先に内線を登録してください。
+                </p>
+              ) : (
+                extensions.map((ext) => (
+                  <label
+                    key={ext.id}
+                    className={css({
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "2",
+                      fontSize: "md",
+                      cursor: "pointer",
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.member_extension_ids.includes(ext.id)}
+                      onChange={(e) => toggleMember(ext.id, e.target.checked)}
+                    />
                     {ext.number} — {ext.display_name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          ) : (
-            <Field label="AI エージェント" error={fieldErrors.target_value}>
-              <select
-                className={input({ invalid: fieldErrors.target_value ? true : undefined })}
-                value={form.target_value}
-                onChange={(e) => setForm((f) => ({ ...f, target_value: e.target.value }))}
-              >
-                <option value="">AI エージェントを選択してください</option>
-                {aiAgents.map((agent) => (
-                  <option key={agent.id} value={String(agent.id)}>
-                    {agent.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          )}
+                  </label>
+                ))
+              )}
+            </div>
+          </div>
 
           <label
             className={css({
@@ -371,10 +442,10 @@ export function RoutesPage() {
 
       <ConfirmDialog
         open={deleteTarget !== null}
-        title="ルーティングルールを削除"
+        title="グループ着信を削除"
         message={
           deleteTarget
-            ? `マッチ番号「${deleteTarget.match_number}」のルーティングルールを削除します。この操作は取り消せません。`
+            ? `グループ「${deleteTarget.name}」（${deleteTarget.number}）を削除します。この操作は取り消せません。`
             : ""
         }
         confirmLabel="削除"
@@ -384,6 +455,18 @@ export function RoutesPage() {
         onCancel={() => setDeleteTarget(null)}
       />
     </PageLayout>
+  );
+}
+
+/** ページ内セクションの小見出し（番号プラン / グループ着信）。 */
+function SectionHeading({ title, description }: { title: string; description?: string }) {
+  return (
+    <div className={css({ mb: "3" })}>
+      <h2 className={css({ fontSize: "lg", fontWeight: "600", color: "text" })}>{title}</h2>
+      {description ? (
+        <p className={css({ fontSize: "sm", color: "text.muted", mt: "1" })}>{description}</p>
+      ) : null}
+    </div>
   );
 }
 

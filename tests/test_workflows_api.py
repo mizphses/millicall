@@ -165,18 +165,18 @@ async def test_duplicate_number_conflict(auth_client_with_telephony):
 
 
 @pytest.mark.asyncio
-async def test_create_provisions_route(auth_client_with_telephony):
+async def test_workflow_appears_in_number_plan(auth_client_with_telephony):
     c = auth_client_with_telephony
     wid = (await _create_workflow(c, number="0509998888")).json()["id"]
-    routes = (await c.get("/api/routes")).json()
-    match = [r for r in routes if r["match_number"] == "0509998888"]
+    plan = (await c.get("/api/number-plan")).json()
+    match = [p for p in plan if p["number"] == "0509998888"]
     assert len(match) == 1
-    assert match[0]["target_type"] == "workflow"
-    assert match[0]["target_value"] == str(wid)
+    assert match[0]["kind"] == "workflow"
+    assert match[0]["id"] == wid
 
 
 @pytest.mark.asyncio
-async def test_update_number_updates_route(auth_client_with_telephony):
+async def test_update_number_updates_number_plan(auth_client_with_telephony):
     c = auth_client_with_telephony
     wid = (await _create_workflow(c, number="0501010101")).json()["id"]
     resp = await c.put(
@@ -188,30 +188,30 @@ async def test_update_number_updates_route(auth_client_with_telephony):
         },
     )
     assert resp.status_code == 200
-    routes = (await c.get("/api/routes")).json()
-    numbers = {r["match_number"] for r in routes if r["target_type"] == "workflow"}
+    plan = (await c.get("/api/number-plan")).json()
+    numbers = {p["number"] for p in plan if p["kind"] == "workflow"}
     assert numbers == {"0502020202"}
 
 
 @pytest.mark.asyncio
-async def test_delete_removes_route(auth_client_with_telephony):
+async def test_delete_removes_from_number_plan(auth_client_with_telephony):
     c = auth_client_with_telephony
     wid = (await _create_workflow(c, number="0503030303")).json()["id"]
     resp = await c.delete(f"/api/workflows/{wid}")
     assert resp.status_code == 204
     assert (await c.get(f"/api/workflows/{wid}")).status_code == 404
-    routes = (await c.get("/api/routes")).json()
-    assert not [r for r in routes if r["match_number"] == "0503030303"]
+    plan = (await c.get("/api/number-plan")).json()
+    assert not [p for p in plan if p["number"] == "0503030303"]
 
 
 @pytest.mark.asyncio
-async def test_route_to_missing_workflow_rejected(auth_client_with_telephony):
+async def test_workflow_number_conflicts_with_extension(auth_client_with_telephony):
+    """統一番号プラン: 内線と同じ番号のワークフローは 409。"""
     c = auth_client_with_telephony
-    resp = await c.post(
-        "/api/routes",
-        json={"match_number": "0507770001", "target_type": "workflow", "target_value": "424242"},
-    )
-    assert resp.status_code == 422
+    r = await c.post("/api/extensions", json={"number": "1001", "display_name": "A"})
+    assert r.status_code == 201
+    resp = await _create_workflow(c, number="1001")
+    assert resp.status_code == 409
 
 
 # --------------------------------------------------------------------------- #

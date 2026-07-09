@@ -7,6 +7,7 @@ from millicall.deps import get_change_listener, get_session, require_admin
 from millicall.extensions.schemas import ExtensionCreate, ExtensionRead, ExtensionUpdate
 from millicall.gen import generate_sip_password
 from millicall.models import Extension
+from millicall.numberplan import NumberConflictError, assert_number_free
 from millicall.telephony.hooks import ExtensionChangeListener
 
 router = APIRouter(
@@ -25,6 +26,11 @@ async def create_extension(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Extension number already exists"
         )
+    try:
+        # 統一番号プラン: AI/ワークフロー/グループとも重複しないこと
+        await assert_number_free(session, body.number)
+    except NumberConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     ext = Extension(
         number=body.number,
         display_name=body.display_name,

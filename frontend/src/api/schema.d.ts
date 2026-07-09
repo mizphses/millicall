@@ -593,6 +593,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/number-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Number Plan
+         * @description 統一番号プランの全エントリ（番号昇順）。
+         */
+        get: operations["get_number_plan_api_number_plan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/providers": {
         parameters: {
             query?: never;
@@ -646,41 +666,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/routes": {
+    "/api/ring-groups": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Routes */
-        get: operations["list_routes_api_routes_get"];
+        /** List Ring Groups */
+        get: operations["list_ring_groups_api_ring_groups_get"];
         put?: never;
-        /** Create Route */
-        post: operations["create_route_api_routes_post"];
+        /** Create Ring Group */
+        post: operations["create_ring_group_api_ring_groups_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/routes/{route_id}": {
+    "/api/ring-groups/{group_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Route */
-        get: operations["get_route_api_routes__route_id__get"];
+        /** Get Ring Group */
+        get: operations["get_ring_group_api_ring_groups__group_id__get"];
         put?: never;
         post?: never;
-        /** Delete Route */
-        delete: operations["delete_route_api_routes__route_id__delete"];
+        /** Delete Ring Group */
+        delete: operations["delete_ring_group_api_ring_groups__group_id__delete"];
         options?: never;
         head?: never;
-        /** Update Route */
-        patch: operations["update_route_api_routes__route_id__patch"];
+        /** Update Ring Group */
+        patch: operations["update_ring_group_api_ring_groups__group_id__patch"];
         trace?: never;
     };
     "/api/scim/token": {
@@ -1406,6 +1426,8 @@ export interface components {
             max_history: number;
             /** Name */
             name: string;
+            /** Number */
+            number?: string | null;
             /**
              * Silence End Ms
              * @default 600
@@ -1435,6 +1457,8 @@ export interface components {
             max_history: number;
             /** Name */
             name: string;
+            /** Number */
+            number: string | null;
             /** Silence End Ms */
             silence_end_ms: number;
             /** Stt Provider Id */
@@ -1456,6 +1480,8 @@ export interface components {
             max_history?: number | null;
             /** Name */
             name?: string | null;
+            /** Number */
+            number?: string | null;
             /** Silence End Ms */
             silence_end_ms?: number | null;
             /** Stt Provider Id */
@@ -1809,6 +1835,21 @@ export interface components {
              */
             wan_interface: string;
         };
+        /** NumberPlanEntryRead */
+        NumberPlanEntryRead: {
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: number;
+            /** Inbound Trunks */
+            inbound_trunks: string[];
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /** Number */
+            number: string;
+        };
         /** ProviderCreate */
         ProviderCreate: {
             /** Api Key */
@@ -1899,44 +1940,32 @@ export interface components {
             /** New Password */
             new_password: string;
         };
-        /** RouteCreate */
-        RouteCreate: {
+        /** RingGroupRead */
+        RingGroupRead: {
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: number;
+            /** Member Extension Ids */
+            member_extension_ids: number[];
+            /** Name */
+            name: string;
+            /** Number */
+            number: string;
+        };
+        /** RingGroupUpsert */
+        RingGroupUpsert: {
             /**
              * Enabled
              * @default true
              */
             enabled: boolean;
-            /** Match Number */
-            match_number: string;
-            target_type: components["schemas"]["RouteTargetType"];
-            /** Target Value */
-            target_value: string;
-        };
-        /** RouteRead */
-        RouteRead: {
-            /** Enabled */
-            enabled: boolean;
-            /** Id */
-            id: number;
-            /** Match Number */
-            match_number: string;
-            /** Target Type */
-            target_type: string;
-            /** Target Value */
-            target_value: string;
-        };
-        /**
-         * RouteTargetType
-         * @enum {string}
-         */
-        RouteTargetType: "extension" | "ai_agent" | "workflow";
-        /** RouteUpdate */
-        RouteUpdate: {
-            /** Enabled */
-            enabled?: boolean | null;
-            target_type?: components["schemas"]["RouteTargetType"] | null;
-            /** Target Value */
-            target_value?: string | null;
+            /** Member Extension Ids */
+            member_extension_ids?: number[];
+            /** Name */
+            name: string;
+            /** Number */
+            number: string;
         };
         /** SynthesizeRequest */
         SynthesizeRequest: {
@@ -2022,6 +2051,11 @@ export interface components {
             enabled: boolean;
             /** Host */
             host: string;
+            /**
+             * Inbound Extension
+             * @default
+             */
+            inbound_extension: string;
             /** Name */
             name: string;
             /** Password */
@@ -2045,6 +2079,8 @@ export interface components {
             host: string;
             /** Id */
             id: number;
+            /** Inbound Extension */
+            inbound_extension: string;
             /** Name */
             name: string;
             /** Username */
@@ -2076,6 +2112,8 @@ export interface components {
             enabled?: boolean | null;
             /** Host */
             host?: string | null;
+            /** Inbound Extension */
+            inbound_extension?: string | null;
             /** Password */
             password?: string | null;
             /** Username */
@@ -3301,6 +3339,26 @@ export interface operations {
             };
         };
     };
+    get_number_plan_api_number_plan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NumberPlanEntryRead"][];
+                };
+            };
+        };
+    };
     list_providers_api_providers_get: {
         parameters: {
             query?: never;
@@ -3449,7 +3507,7 @@ export interface operations {
             };
         };
     };
-    list_routes_api_routes_get: {
+    list_ring_groups_api_ring_groups_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -3464,12 +3522,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RouteRead"][];
+                    "application/json": components["schemas"]["RingGroupRead"][];
                 };
             };
         };
     };
-    create_route_api_routes_post: {
+    create_ring_group_api_ring_groups_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -3478,7 +3536,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RouteCreate"];
+                "application/json": components["schemas"]["RingGroupUpsert"];
             };
         };
         responses: {
@@ -3488,7 +3546,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RouteRead"];
+                    "application/json": components["schemas"]["RingGroupRead"];
                 };
             };
             /** @description Validation Error */
@@ -3502,12 +3560,12 @@ export interface operations {
             };
         };
     };
-    get_route_api_routes__route_id__get: {
+    get_ring_group_api_ring_groups__group_id__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                route_id: number;
+                group_id: number;
             };
             cookie?: never;
         };
@@ -3519,7 +3577,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RouteRead"];
+                    "application/json": components["schemas"]["RingGroupRead"];
                 };
             };
             /** @description Validation Error */
@@ -3533,12 +3591,12 @@ export interface operations {
             };
         };
     };
-    delete_route_api_routes__route_id__delete: {
+    delete_ring_group_api_ring_groups__group_id__delete: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                route_id: number;
+                group_id: number;
             };
             cookie?: never;
         };
@@ -3562,18 +3620,18 @@ export interface operations {
             };
         };
     };
-    update_route_api_routes__route_id__patch: {
+    update_ring_group_api_ring_groups__group_id__patch: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                route_id: number;
+                group_id: number;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RouteUpdate"];
+                "application/json": components["schemas"]["RingGroupUpsert"];
             };
         };
         responses: {
@@ -3583,7 +3641,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RouteRead"];
+                    "application/json": components["schemas"]["RingGroupRead"];
                 };
             };
             /** @description Validation Error */

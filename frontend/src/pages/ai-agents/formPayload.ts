@@ -8,6 +8,8 @@ export type ProviderRead = components["schemas"]["ProviderRead"];
 /** SlidePanel フォームが保持する値。API 型とは分離し、UI 都合の型に寄せる。 */
 export interface AiAgentFormValues {
   name: string;
+  /** 内線番号（任意）。数字 2〜6 桁。空文字 = 番号なし。 */
+  number: string;
   system_prompt: string;
   greeting: string;
   /** null = 未選択 */
@@ -25,6 +27,7 @@ export interface AiAgentFormValues {
 export function emptyForm(): AiAgentFormValues {
   return {
     name: "",
+    number: "",
     system_prompt: "",
     greeting: "",
     llm_provider_id: null,
@@ -40,6 +43,7 @@ export function emptyForm(): AiAgentFormValues {
 export function formFromAgent(agent: AiAgentRead): AiAgentFormValues {
   return {
     name: agent.name,
+    number: agent.number ?? "",
     system_prompt: agent.system_prompt,
     greeting: agent.greeting,
     llm_provider_id: agent.llm_provider_id,
@@ -56,7 +60,7 @@ export function formFromAgent(agent: AiAgentRead): AiAgentFormValues {
  * 呼び出し前に validateForm で null チェック済みであることを前提とする。
  */
 export function buildCreatePayload(form: AiAgentFormValues): AiAgentCreate {
-  return {
+  const payload: AiAgentCreate = {
     name: form.name.trim(),
     system_prompt: form.system_prompt,
     greeting: form.greeting,
@@ -67,6 +71,10 @@ export function buildCreatePayload(form: AiAgentFormValues): AiAgentCreate {
     silence_end_ms: form.silence_end_ms,
     enabled: form.enabled,
   };
+  // number は任意。空なら「番号なし」として送らない。
+  const number = form.number.trim();
+  if (number !== "") payload.number = number;
+  return payload;
 }
 
 /**
@@ -83,6 +91,10 @@ export function buildUpdatePayload(
 
   const name = form.name.trim();
   if (name !== "" && name !== original.name) payload.name = name;
+
+  // number: 空文字 = 番号を外す（バックエンド仕様: "" = クリア）。変更があれば含める。
+  const number = form.number.trim();
+  if (number !== (original.number ?? "")) payload.number = number;
 
   if (form.system_prompt !== original.system_prompt) payload.system_prompt = form.system_prompt;
   if (form.greeting !== original.greeting) payload.greeting = form.greeting;
@@ -114,6 +126,10 @@ export function validateForm(
   const name = form.name.trim();
   if (name.length < 1 || name.length > 100) {
     errors.name = "名前は 1〜100 文字で入力してください";
+  }
+  const number = form.number.trim();
+  if (number !== "" && !/^[0-9]{2,6}$/.test(number)) {
+    errors.number = "内線番号は数字 2〜6 桁で入力してください";
   }
   if (form.llm_provider_id === null) {
     errors.llm_provider_id = "LLM プロバイダを選択してください";

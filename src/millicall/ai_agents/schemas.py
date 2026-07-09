@@ -5,6 +5,8 @@ class AiAgentCreate(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str = Field(..., min_length=1, max_length=100)
+    # 内線番号（統一番号プラン・任意）。None/空 = 番号なし（ワークフロー内部でのみ使用）。
+    number: str | None = Field(default=None, pattern=r"^\d{2,6}$")
     system_prompt: str = ""
     greeting: str = ""
     llm_provider_id: int
@@ -19,6 +21,8 @@ class AiAgentUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str | None = Field(default=None, min_length=1, max_length=100)
+    # None = 変更しない / "" = 番号を外す / "NNN" = その番号を割り当てる
+    number: str | None = Field(default=None, pattern=r"^(\d{2,6})?$")
     system_prompt: str | None = None
     greeting: str | None = None
     llm_provider_id: int | None = None
@@ -34,6 +38,7 @@ class AiAgentRead(BaseModel):
 
     id: int
     name: str
+    number: str | None
     system_prompt: str
     greeting: str
     llm_provider_id: int

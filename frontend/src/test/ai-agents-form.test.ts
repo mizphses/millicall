@@ -11,6 +11,7 @@ import {
 const original: AiAgentRead = {
   id: 1,
   name: "受付 AI",
+  number: null,
   system_prompt: "あなたは受付担当です。",
   greeting: "お電話ありがとうございます。",
   llm_provider_id: 10,
@@ -24,6 +25,7 @@ const original: AiAgentRead = {
 function formOf(overrides: Partial<AiAgentFormValues>): AiAgentFormValues {
   return {
     name: "受付 AI",
+    number: "",
     system_prompt: "あなたは受付担当です。",
     greeting: "お電話ありがとうございます。",
     llm_provider_id: 10,
@@ -61,6 +63,16 @@ describe("buildCreatePayload", () => {
     const payload = buildCreatePayload(formOf({ system_prompt: "" }));
     expect(payload.system_prompt).toBe("");
   });
+
+  it("number が空なら payload に含めない（番号なし）", () => {
+    const payload = buildCreatePayload(formOf({ number: "" }));
+    expect("number" in payload).toBe(false);
+  });
+
+  it("number が非空なら trim して含める", () => {
+    const payload = buildCreatePayload(formOf({ number: " 600 " }));
+    expect(payload.number).toBe("600");
+  });
 });
 
 describe("buildUpdatePayload（編集フォーム → PATCH payload 変換）", () => {
@@ -76,6 +88,23 @@ describe("buildUpdatePayload（編集フォーム → PATCH payload 変換）", 
 
   it("name が空文字なら含めない（据え置き）", () => {
     expect(buildUpdatePayload(formOf({ name: "" }), original)).toEqual({});
+  });
+
+  it("number を設定したとき含める", () => {
+    expect(buildUpdatePayload(formOf({ number: "600" }), original)).toEqual({ number: "600" });
+  });
+
+  it("number が unchanged（null ↔ 空文字）なら含めない", () => {
+    expect(buildUpdatePayload(formOf({ number: "" }), original)).toEqual({});
+    expect(
+      buildUpdatePayload(formOf({ number: "600" }), { ...original, number: "600" }),
+    ).toEqual({});
+  });
+
+  it("number を空文字にしたとき含める（\"\" = 番号を外す）", () => {
+    expect(
+      buildUpdatePayload(formOf({ number: "" }), { ...original, number: "600" }),
+    ).toEqual({ number: "" });
   });
 
   it("system_prompt を変更したとき含める", () => {
@@ -138,6 +167,14 @@ describe("validateForm", () => {
 
   it("name が 101 文字以上ならエラー", () => {
     expect(validateForm(formOf({ name: "a".repeat(101) }), "create").name).toBeTruthy();
+  });
+
+  it("number は空 or 数字 2〜6 桁のみ許可する", () => {
+    expect(validateForm(formOf({ number: "" }), "create").number).toBeUndefined();
+    expect(validateForm(formOf({ number: "600" }), "create").number).toBeUndefined();
+    expect(validateForm(formOf({ number: "1" }), "create").number).toBeTruthy();
+    expect(validateForm(formOf({ number: "1234567" }), "create").number).toBeTruthy();
+    expect(validateForm(formOf({ number: "60a" }), "create").number).toBeTruthy();
   });
 
   it("llm_provider_id が null ならエラー", () => {

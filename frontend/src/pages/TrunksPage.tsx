@@ -7,7 +7,7 @@ import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import type { components } from "../api/schema";
-import { TRUNKS_KEY } from "../queryKeys";
+import { TRUNKS_KEY, NUMBER_PLAN_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
@@ -22,6 +22,9 @@ import {
   type TrunkFormValues,
   type TrunkRead,
 } from "./trunks/formPayload";
+import { numberPlanKindLabel } from "./routes/formPayload";
+
+type NumberPlanEntryRead = components["schemas"]["NumberPlanEntryRead"];
 
 /** トランク名の重複（409）を型で区別するためのエラー。フォームのインライン表示に使う。 */
 class TrunkNameConflictError extends Error {}
@@ -29,6 +32,12 @@ class TrunkNameConflictError extends Error {}
 async function fetchTrunks(): Promise<TrunkRead[]> {
   const { data, error } = await api.GET("/api/trunks");
   if (error) throw new Error("トランク一覧の取得に失敗しました");
+  return data ?? [];
+}
+
+async function fetchNumberPlan(): Promise<NumberPlanEntryRead[]> {
+  const { data, error } = await api.GET("/api/number-plan");
+  if (error) throw new Error("番号プランの取得に失敗しました");
   return data ?? [];
 }
 
@@ -114,6 +123,9 @@ export function TrunksPage() {
   const queryClient = useQueryClient();
 
   const listQuery = useQuery({ queryKey: TRUNKS_KEY, queryFn: fetchTrunks });
+  // 着信先内線番号 select の選択肢（統一番号プラン）。
+  const numberPlanQuery = useQuery({ queryKey: NUMBER_PLAN_KEY, queryFn: fetchNumberPlan });
+  const numberPlan = numberPlanQuery.data ?? [];
 
   const [editing, setEditing] = useState<TrunkRead | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -207,6 +219,12 @@ export function TrunksPage() {
         ) : (
           <span className={badge({ tone: "warn" })}>未設定</span>
         ),
+    },
+    {
+      key: "inbound_extension",
+      header: "着信先",
+      width: "90px",
+      render: (row) => (row.inbound_extension !== "" ? row.inbound_extension : "—"),
     },
     {
       key: "enabled",
@@ -376,6 +394,21 @@ export function TrunksPage() {
               onChange={(e) => setForm((f) => ({ ...f, caller_id: e.target.value }))}
               placeholder="0312345678"
             />
+          </Field>
+
+          <Field label="着信先内線番号" error={fieldErrors.inbound_extension}>
+            <select
+              className={input({ invalid: fieldErrors.inbound_extension ? true : undefined })}
+              value={form.inbound_extension}
+              onChange={(e) => setForm((f) => ({ ...f, inbound_extension: e.target.value }))}
+            >
+              <option value="">（着信しない）</option>
+              {numberPlan.map((entry) => (
+                <option key={`${entry.kind}-${entry.id}`} value={entry.number}>
+                  {entry.number} — {entry.label}（{numberPlanKindLabel(entry.kind)}）
+                </option>
+              ))}
+            </select>
           </Field>
 
           <label

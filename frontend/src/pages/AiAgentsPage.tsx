@@ -35,10 +35,16 @@ async function fetchProviders(): Promise<ProviderRead[]> {
   return data ?? [];
 }
 
+/** 内線番号の重複（409）を型で区別するためのエラー。フォームのインライン表示に使う。 */
+class AgentNumberConflictError extends Error {}
+
 async function createAgent(form: AiAgentFormValues): Promise<AiAgentRead> {
-  const { data, error } = await api.POST("/api/ai-agents", {
+  const { data, error, response } = await api.POST("/api/ai-agents", {
     body: buildCreatePayload(form),
   });
+  if (response.status === 409) {
+    throw new AgentNumberConflictError("この番号は既に使用されています");
+  }
   if (error || !data) throw new Error("AI エージェントの作成に失敗しました");
   return data;
 }
@@ -48,10 +54,13 @@ async function updateAgent(
   form: AiAgentFormValues,
   original: AiAgentRead,
 ): Promise<AiAgentRead> {
-  const { data, error } = await api.PATCH("/api/ai-agents/{agent_id}", {
+  const { data, error, response } = await api.PATCH("/api/ai-agents/{agent_id}", {
     params: { path: { agent_id: id } },
     body: buildUpdatePayload(form, original),
   });
+  if (response.status === 409) {
+    throw new AgentNumberConflictError("この番号は既に使用されています");
+  }
   if (error || !data) throw new Error("AI エージェントの更新に失敗しました");
   return data;
 }
@@ -129,6 +138,10 @@ export function AiAgentsPage() {
       setPanelOpen(false);
     },
     onError: (err) => {
+      if (err instanceof AgentNumberConflictError) {
+        setFieldErrors((prev) => ({ ...prev, number: err.message }));
+        return;
+      }
       toast.error(err instanceof Error ? err.message : "保存に失敗しました");
     },
   });
@@ -163,6 +176,12 @@ export function AiAgentsPage() {
 
   const columns: Column<AiAgentRead>[] = [
     { key: "name", header: "名前" },
+    {
+      key: "number",
+      header: "番号",
+      width: "90px",
+      render: (row) => (row.number ? row.number : "—"),
+    },
     {
       key: "enabled",
       header: "状態",
@@ -271,6 +290,15 @@ export function AiAgentsPage() {
               placeholder="受付 AI"
               maxLength={100}
               autoFocus={editing === null}
+            />
+          </Field>
+
+          <Field label="内線番号（任意・2〜6 桁）" error={fieldErrors.number}>
+            <input
+              className={input({ invalid: fieldErrors.number ? true : undefined })}
+              value={form.number}
+              onChange={(e) => setForm((f) => ({ ...f, number: e.target.value }))}
+              placeholder="600"
             />
           </Field>
 
