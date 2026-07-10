@@ -8,7 +8,11 @@ from millicall.db import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False が必須。既定 True だと、アプリ起動時に
+    # upgrade_to_head() 経由でこの env.py が読み込まれた際、"millicall" を含む
+    # 既存ロガーがすべて無効化され、以降アプリのログ（AI/STT/レイテンシ等）が
+    # 一切出なくなる。マイグレーションのためにアプリのロギングを壊さない。
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

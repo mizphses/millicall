@@ -91,6 +91,25 @@ async def test_google_streams_each_chunk_incrementally():
 
 
 @pytest.mark.asyncio
+async def test_long_utterance_is_split_under_stream_limit():
+    """1 回の feed が大きくても、各 audio リクエストは 25600 bytes 以下に分割される。
+
+    Google Speech v2 StreamingRecognize は 1 リクエストの音声を最大 25600 bytes に制限する。
+    VAD が切り出した長い発話を丸ごと 1 リクエストで送ると 400 InvalidArgument になるため、
+    feed() が上限以下へ分割して順次投入することを検証する（実機で発生した回帰の固定）。
+    """
+    fake = _FakeClient(_final_responses())
+    stt = GoogleStreamingSTT(project="p", client=fake)
+    sess = stt.open_session()
+    big = b"\x01\x00" * 35520  # 71040 bytes（実機で 400 になったサイズ）
+    await sess.feed(big)
+    await sess.finish()
+    assert len(fake.audio_requests) == 3  # 25600 + 25600 + 19840
+    assert all(len(r) <= 25600 for r in fake.audio_requests)
+    assert b"".join(fake.audio_requests) == big  # 分割で欠落しない
+
+
+@pytest.mark.asyncio
 async def test_config_request_carries_recognizer_and_config():
     fake = _FakeClient(_final_responses())
     stt = GoogleStreamingSTT(project="proj-x", location="global", language="ja-JP", client=fake)
