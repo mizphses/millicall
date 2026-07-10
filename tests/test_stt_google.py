@@ -134,11 +134,16 @@ async def test_empty_session_returns_empty_without_calling_client():
 
 @pytest.mark.asyncio
 async def test_missing_package_raises_clear_error_not_import_error():
-    """client 未注入かつ google-cloud-speech 未導入なら、import 時ではなく使用時に明快な RuntimeError。"""
+    """client 未注入かつ google-cloud-speech 未導入なら、明快な RuntimeError を送出する。
+
+    クライアント生成はワーカースレッドで行う（イベントループを塞がないため）ので、
+    エラーは feed() ではなく finish() で顕在化する。feed() 自体はブロックしない。
+    """
     stt = GoogleStreamingSTT(project="p")  # client 注入なし
     sess = stt.open_session()
+    await sess.feed(b"\x01\x00" * 800)  # 非ブロッキング（スレッド起動のみ）
     with pytest.raises(RuntimeError) as exc:
-        await sess.feed(b"\x01\x00" * 800)
+        await sess.finish()
     msg = str(exc.value)
     assert "stt-google" in msg
     assert "google-cloud-speech" in msg
