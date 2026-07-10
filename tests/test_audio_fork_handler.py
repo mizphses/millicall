@@ -33,28 +33,58 @@ class _FakeSegmenter:
 class _FakeSession:
     def __init__(self, speaking=False):
         self._speaking = speaking
-        self.utterances = []
+        self.opened = 0
+        self.fed = []
+        self.finalized = 0
+        self.aborted = 0
         self.barge_ins = 0
 
     @property
     def speaking(self):
         return self._speaking
 
-    async def on_utterance(self, pcm):
-        self.utterances.append(pcm)
+    def open_stt_stream(self):
+        self.opened += 1
+
+    async def feed_stt_stream(self, pcm):
+        self.fed.append(pcm)
+
+    async def finalize_stt_stream(self):
+        self.finalized += 1
+
+    async def abort_stt_stream(self):
+        self.aborted += 1
 
     async def on_barge_in(self):
         self.barge_ins += 1
 
 
 @pytest.mark.asyncio
-async def test_speech_end_triggers_utterance():
+async def test_speech_stream_feeds_frames_and_finalizes():
+    """speech_start で STT を開き、発話中フレームを逐次 feed、speech_end で finalize する。"""
     sess = _FakeSession()
-    seg = _FakeSegmenter([[VadEvent("speech_end", b"AUDIO")], []])
-    ws = _FakeWS([b"a", b"b"])
+    seg = _FakeSegmenter([[VadEvent("speech_start")], [], [VadEvent("speech_end", b"AUDIO")], []])
+    ws = _FakeWS([b"a", b"b", b"c", b"d"])
     await AudioForkHandler(sess, seg).run(ws)
     await asyncio.sleep(0.01)
-    assert sess.utterances == [b"AUDIO"]
+    assert sess.opened == 1
+    assert sess.finalized == 1
+    assert sess.aborted == 0
+    # speech_start〜speech_end 間のフレーム(a,b)は feed され、終端フレーム(c)は feed しない。
+    assert sess.fed == [b"a", b"b"]
+
+
+@pytest.mark.asyncio
+async def test_short_speech_end_aborts_without_finalize():
+    """audio="" の speech_end（短すぎ）は破棄され、応答生成へは進まない。"""
+    sess = _FakeSession()
+    seg = _FakeSegmenter([[VadEvent("speech_start")], [VadEvent("speech_end", b"")], []])
+    ws = _FakeWS([b"a", b"b", b"c"])
+    await AudioForkHandler(sess, seg).run(ws)
+    await asyncio.sleep(0.01)
+    assert sess.opened == 1
+    assert sess.finalized == 0
+    assert sess.aborted == 1
 
 
 @pytest.mark.asyncio
@@ -65,10 +95,11 @@ async def test_speech_start_during_ai_speaking_triggers_barge_in():
     await AudioForkHandler(sess, seg).run(ws)
     await asyncio.sleep(0.01)
     assert sess.barge_ins == 1
+    assert sess.opened == 1
 
 
 class _BlockingSession:
-    """on_utterance が解除されるまでブロックする — タスク孤児化の検証用。"""
+    """finalize_stt_stream が解除されるまでブロックする — タスク孤児化の検証用。"""
 
     def __init__(self):
         self._speaking = False
@@ -80,7 +111,16 @@ class _BlockingSession:
     def speaking(self):
         return self._speaking
 
-    async def on_utterance(self, pcm):
+    def open_stt_stream(self):
+        pass
+
+    async def feed_stt_stream(self, pcm):
+        pass
+
+    async def abort_stt_stream(self):
+        pass
+
+    async def finalize_stt_stream(self):
         self.entered.set()
         try:
             await self.gate.wait()
@@ -111,7 +151,7 @@ class _DisconnectAfterWS:
 @pytest.mark.asyncio
 async def test_disconnect_cancels_and_awaits_inflight_conversation_task():
     sess = _BlockingSession()
-    seg = _FakeSegmenter([[VadEvent("speech_end", b"AUDIO")]])
+    seg = _FakeSegmenter([[VadEvent("speech_start"), VadEvent("speech_end", b"AUDIO")]])
     ws = _DisconnectAfterWS(sess.entered)
     handler = AudioForkHandler(sess, seg)
     # run() は実行中の会話タスクを cancel して await するまで戻らない。
@@ -243,7 +283,16 @@ class _ErrorSession:
     def speaking(self):
         return self._speaking
 
-    async def on_utterance(self, pcm):
+    def open_stt_stream(self):
+        pass
+
+    async def feed_stt_stream(self, pcm):
+        pass
+
+    async def abort_stt_stream(self):
+        pass
+
+    async def finalize_stt_stream(self):
         raise self._exc
 
     async def on_barge_in(self):
@@ -259,8 +308,8 @@ async def test_spawn_logs_error_on_task_exception(caplog):
     target_logger.disabled = False
 
     sess = _ErrorSession(RuntimeError("stt boom"))
-    seg = _FakeSegmenter([[VadEvent("speech_end", b"AUDIO")], []])
-    ws = _FakeWS([b"frame1", b"frame2"])
+    seg = _FakeSegmenter([[VadEvent("speech_start")], [VadEvent("speech_end", b"AUDIO")], []])
+    ws = _FakeWS([b"frame1", b"frame2", b"frame3"])
 
     with caplog.at_level(logging.ERROR, logger="millicall.media.audio_fork"):
         await AudioForkHandler(sess, seg).run(ws)
@@ -285,7 +334,7 @@ async def test_spawn_does_not_log_on_cancelled_error(caplog):
     target_logger.disabled = False
 
     sess = _BlockingSession()  # WS 切断で cancel される
-    seg = _FakeSegmenter([[VadEvent("speech_end", b"AUDIO")]])
+    seg = _FakeSegmenter([[VadEvent("speech_start"), VadEvent("speech_end", b"AUDIO")]])
     ws = _DisconnectAfterWS(sess.entered)
 
     with caplog.at_level(logging.ERROR, logger="millicall.media.audio_fork"):

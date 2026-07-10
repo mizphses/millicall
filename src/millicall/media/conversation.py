@@ -67,6 +67,10 @@ class ConversationSession:
         self._speaking = False
         self._playback_start: float | None = None
         self._seq = 0
+        # ストリーミング STT 用の開いているセッション（speech_start で開き speech_end で確定）。
+        # None = 発話中でない。発話中フレームを逐次 feed することで STT レイテンシを
+        # クリティカルパス（発話終端→応答）から外す。
+        self._stt_stream = None
         # ターン毎に書き出した TTS WAV のパスを追跡し、通話終了時にまとめて削除する。
         # （prompts/ 配下の定型文キャッシュは _play_pcm が書かないため決して含まれない。）
         self._written_wavs: set[Path] = set()
@@ -115,16 +119,57 @@ class ConversationSession:
         await self._call_control.stop_playback()
 
     async def on_utterance(self, pcm: bytes) -> None:
+        """発話全体を一括で STT する経路（バッチ）。後方互換のため残す。
+
+        通常のライブ経路は open/feed/finalize のストリーミング（下記）を使う。
+        """
         # 空 audio の speech_end（VadSegmenter の対称性契約）は STT せずスキップ。
         if not pcm:
             return
         utterance_end = self._clock()
-        text = await self._transcribe(pcm)
-        text = text.strip()
+        text = (await self._transcribe(pcm)).strip()
+        await self._handle_user_text(text, utterance_end, pcm_bytes=len(pcm))
+
+    # --- ストリーミング STT ---
+    # speech_start で open、発話中の各フレームを feed、speech_end で finalize。
+    # 発話中に文字化を進めるため発話終端の finish() はほぼ即座に確定 transcript を返し、
+    # STT レイテンシが「発話終端→応答」のクリティカルパスから外れる。
+    def open_stt_stream(self) -> None:
+        """speech_start で呼ぶ。発話用の STT ストリームセッションを開く。"""
+        self._stt_stream = self._stt.open_session()
+
+    async def feed_stt_stream(self, pcm: bytes) -> None:
+        """発話中の各フレームを開いている STT ストリームへ逐次投入する。"""
+        stream = self._stt_stream
+        if stream is not None and pcm:
+            await stream.feed(pcm)
+
+    async def finalize_stt_stream(self) -> None:
+        """speech_end（十分な長さ）で呼ぶ。STT を確定して応答生成へ進む。"""
+        stream = self._stt_stream
+        self._stt_stream = None
+        if stream is None:
+            return
+        utterance_end = self._clock()
+        text = (await stream.finish()).strip()
+        await self._handle_user_text(text, utterance_end)
+
+    async def abort_stt_stream(self) -> None:
+        """短すぎる発話（VAD が audio="" を返す）や切断時に呼ぶ。STT を破棄し応答しない。"""
+        stream = self._stt_stream
+        self._stt_stream = None
+        if stream is not None:
+            with contextlib.suppress(Exception):
+                await stream.finish()
+
+    async def _handle_user_text(
+        self, text: str, utterance_end: float, *, pcm_bytes: int | None = None
+    ) -> None:
+        """確定した発話テキストを履歴へ積み、LLM→TTS で応答する（バッチ/ストリーミング共通）。"""
         logger.info(
-            "STT 結果 (uuid=%s, pcm_bytes=%d, text_len=%d)%s",
+            "STT 結果 (uuid=%s, pcm_bytes=%s, text_len=%d)%s",
             self._call_uuid,
-            len(pcm),
+            pcm_bytes if pcm_bytes is not None else "stream",
             len(text),
             "" if text else " ← 空文字（無音/STT未認識）",
         )
