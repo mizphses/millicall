@@ -60,9 +60,17 @@ class AudioForkHandler:
             )
 
     async def run(self, ws) -> None:
+        uuid = getattr(self._session, "_call_uuid", "unknown")
+        frames = 0
+        speech_ends = 0
         try:
             while True:
                 frame = await ws.receive_bytes()
+                frames += 1
+                if frames == 1:
+                    logger.info(
+                        "audio-fork: 最初の音声フレーム受信 (uuid=%s, bytes=%d)", uuid, len(frame)
+                    )
                 for ev in self._segmenter.push(frame):
                     if ev.kind == "speech_start":
                         if self._session.speaking:
@@ -70,10 +78,22 @@ class AudioForkHandler:
                     elif ev.kind == "speech_end" and (
                         self._current is None or self._current.done()
                     ):
+                        speech_ends += 1
+                        logger.info(
+                            "audio-fork: VAD speech_end (uuid=%s, audio_bytes=%d)",
+                            uuid,
+                            len(ev.audio),
+                        )
                         self._current = self._spawn(self._session.on_utterance(ev.audio))
         except WebSocketDisconnect:
             return
         finally:
+            logger.info(
+                "audio-fork: 受信ループ終了 (uuid=%s, frames=%d, speech_end=%d)",
+                uuid,
+                frames,
+                speech_ends,
+            )
             # WS 切断時に実行中の会話/バージインタスクを孤児化させない。
             # まず 1 ループ回して、既にスケジュール済みで即完了するタスクは走らせ、
             # 本当に I/O 待ち中のタスク（STT→LLM→TTS→再生 の途中など）だけを
@@ -268,11 +288,18 @@ def register_media_ws(app: FastAPI) -> None:
             logger.exception("failed to build AI session for uuid=%s", call_uuid)
             await ws.close()
             return
+        logger.info(
+            "audio-fork: WS 接続確立 (uuid=%s, agent_id=%s, ephemeral=%s)",
+            call_uuid,
+            agent_id,
+            is_ephemeral,
+        )
         segmenter = VadSegmenter(silence_end_ms=session._agent.silence_end_ms)
         handler = AudioForkHandler(session, segmenter)
         try:
             # greet も try 内に置き、raise しても registry/WAV がリークしないようにする。
             await session.greet()
+            logger.info("audio-fork: 挨拶再生完了、受信ループを開始 (uuid=%s)", call_uuid)
             await handler.run(ws)
         finally:
             # 通話終了時にセッションが書き出したターン毎 TTS WAV を削除（ディスク枯渇防止）。

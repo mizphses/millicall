@@ -11,6 +11,12 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # list 型フィールド（mcp_allowed_hosts / sip_trusted_cidrs）を env から
+        # カンマ区切り文字列で渡せるようにする。無効だと pydantic-settings が
+        # 複合型の env 値を先に json.loads しようとし、"a,b" のような値で
+        # SettingsError を送出して core が起動時にクラッシュ→unhealthy になる。
+        # 両フィールドとも mode="before" バリデータでカンマ分割するため decode は不要。
+        enable_decoding=False,
     )
 
     data_dir: Path = Path("data")
