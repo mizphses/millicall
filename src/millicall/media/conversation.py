@@ -121,6 +121,13 @@ class ConversationSession:
         utterance_end = self._clock()
         text = await self._transcribe(pcm)
         text = text.strip()
+        logger.info(
+            "STT 結果 (uuid=%s, pcm_bytes=%d, text_len=%d)%s",
+            self._call_uuid,
+            len(pcm),
+            len(text),
+            "" if text else " ← 空文字（無音/STT未認識）",
+        )
         if not text:
             return
         self._history.append(ChatMessage("user", text))
