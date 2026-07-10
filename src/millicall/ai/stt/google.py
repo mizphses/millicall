@@ -195,10 +195,18 @@ class _GoogleSession:
         except BaseException as exc:  # noqa: BLE001  # スレッド境界越えに再送出用へ退避
             self._error = exc
 
+    # Google Speech v2 StreamingRecognize は 1 リクエストの音声を最大 25600 bytes に制限する。
+    # VAD が切り出した長い発話（8kHz/16bit で 1.6 秒超）を丸ごと 1 回で送ると
+    # 400 InvalidArgument "Audio chunk can be of a maximum of 25600 bytes" になるため、
+    # 上限以下に分割して同一ストリームへ順次投入する（分割送信はストリーミングの正規の使い方）。
+    _MAX_STREAM_CHUNK = 25600
+
     async def feed(self, pcm: bytes) -> None:
         # 最初の feed でストリームを開始し、以降チャンクを逐次流す（真のストリーミング）。
         self._start()
-        self._queue.put(pcm)
+        step = self._MAX_STREAM_CHUNK
+        for i in range(0, len(pcm), step):
+            self._queue.put(pcm[i : i + step])
 
     async def finish(self) -> str:
         if not self._started:
