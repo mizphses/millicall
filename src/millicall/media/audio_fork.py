@@ -315,7 +315,11 @@ def register_media_ws(app: FastAPI) -> None:
             agent_id,
             is_ephemeral,
         )
-        segmenter = VadSegmenter(silence_end_ms=session._agent.silence_end_ms)
+        segmenter = VadSegmenter(
+            silence_end_ms=session._agent.silence_end_ms,
+            mode=getattr(state.settings, "vad_mode", 2),
+            min_rms=getattr(state.settings, "vad_min_rms", 0),
+        )
         handler = AudioForkHandler(session, segmenter)
         try:
             # greet も try 内に置き、raise しても registry/WAV がリークしないようにする。

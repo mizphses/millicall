@@ -125,6 +125,15 @@ class Settings(BaseSettings):
     # converse 既定エージェント（Phase 4a Task 4 で使用）。None なら enabled な ai_agents 最小 id。
     mcp_default_agent_id: int | None = None
 
+    # --- VAD（着信 AI 応対の発話区切り / バージイン） ---
+    # webrtcvad の積極度 (0-3)。大きいほど非音声を弾く。
+    vad_mode: int = 2
+    # 発話とみなす最小 RMS（int16 振幅）。webrtcvad が speech と判定しても、フレーム RMS が
+    # この値未満なら無音/回線ノイズとして無視する。再生中の誤バージイン（TTS 途切れ）や
+    # 空 STT の暴発を抑える。実測では無音ノイズ RMS≈8、実発話は数百〜数千。0 で無効。
+    # 現場に合わせて MILLICALL_VAD_MIN_RMS で無停止調整できる。
+    vad_min_rms: int = 200
+
     # --- Email 通知 (Phase 4b) ---
     # smtp_host が空文字の場合はメール送信が無効化される。
     smtp_host: str = ""

@@ -1,3 +1,5 @@
+import array
+import math
 from dataclasses import dataclass
 
 
@@ -5,6 +7,15 @@ from dataclasses import dataclass
 class VadEvent:
     kind: str  # "speech_start" | "speech_end"
     audio: bytes = b""
+
+
+def _frame_rms(frame: bytes) -> float:
+    """L16（16bit LE モノ）フレームの RMS を返す。空フレームは 0。"""
+    samples = array.array("h")
+    samples.frombytes(frame if len(frame) % 2 == 0 else frame[:-1])
+    if not samples:
+        return 0.0
+    return math.sqrt(sum(s * s for s in samples) / len(samples))
 
 
 class _WebrtcClassifier:
@@ -38,6 +49,7 @@ class VadSegmenter:
         speech_start_frames: int = 3,
         silence_end_ms: int = 600,
         min_speech_ms: int = 200,
+        min_rms: float = 0.0,
         classifier=None,
     ) -> None:
         self._rate = sample_rate
@@ -46,6 +58,10 @@ class VadSegmenter:
         self._start_frames = speech_start_frames
         self._end_frames = max(1, silence_end_ms // frame_ms)
         self._min_speech_frames = max(1, min_speech_ms // frame_ms)
+        # エネルギーゲート: webrtcvad が speech と判定しても、フレーム RMS がこの値未満なら
+        # 無音/回線ノイズとして非音声扱いにする。近無音（実測 RMS≈8）を発話と誤検出して
+        # 再生中に誤バージイン（TTS 途切れ）や空 STT が暴発するのを抑える。0 で無効。
+        self._min_rms = min_rms
         self._classifier = classifier or _WebrtcClassifier(mode)
 
         self._buf = bytearray()
@@ -66,6 +82,9 @@ class VadSegmenter:
 
     def _process_frame(self, frame: bytes) -> list[VadEvent]:
         speech = self._classifier.is_speech(frame, self._rate)
+        # エネルギーゲート: 音量が閾値未満なら speech 判定を無効化（無音/ノイズ誤検出の抑制）。
+        if speech and self._min_rms > 0 and _frame_rms(frame) < self._min_rms:
+            speech = False
         events: list[VadEvent] = []
         if not self._in_speech:
             if speech:

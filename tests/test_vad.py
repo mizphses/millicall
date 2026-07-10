@@ -67,3 +67,42 @@ def test_push_buffers_partial_frames():
     e2 = seg.push(b"\x00" * 300)  # 合計600 → 1フレーム(480)処理、120余る
     assert e1 == []
     assert isinstance(e2, list)
+
+
+class _AlwaysSpeech:
+    """常に speech=True を返す判定器（エネルギーゲート検証用）。"""
+
+    def is_speech(self, frame: bytes, rate: int) -> bool:
+        return True
+
+
+def test_energy_gate_rejects_low_rms_frames():
+    # classifier は常に speech=True だが、min_rms 未満の低音量フレームは非音声化される。
+    quiet = b"\x08\x00" * 240  # 振幅 8（実測の回線ノイズ相当）→ RMS 8 < 200
+    seg = VadSegmenter(classifier=_AlwaysSpeech(), min_rms=200)
+    events = []
+    for _ in range(10):
+        events.extend(seg.push(quiet))
+    assert not any(e.kind == "speech_start" for e in events), (
+        "低RMS(ノイズ)は min_rms ゲートで speech とみなされないべき"
+    )
+
+
+def test_energy_gate_allows_loud_frames():
+    # 十分な音量（RMS >= min_rms）なら通常どおり speech_start が出る。
+    loud = b"\x00\x40" * 240  # 振幅 16384 → RMS 16384 >= 200
+    seg = VadSegmenter(classifier=_AlwaysSpeech(), min_rms=200)
+    events = []
+    for _ in range(5):
+        events.extend(seg.push(loud))
+    assert any(e.kind == "speech_start" for e in events), "十分な音量なら speech_start が出るべき"
+
+
+def test_energy_gate_disabled_by_default():
+    # min_rms=0（既定）ではゲート無効 → 低音量でも classifier 判定に従う。
+    quiet = b"\x08\x00" * 240
+    seg = VadSegmenter(classifier=_AlwaysSpeech())  # min_rms 既定 0
+    events = []
+    for _ in range(5):
+        events.extend(seg.push(quiet))
+    assert any(e.kind == "speech_start" for e in events)
