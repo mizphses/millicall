@@ -167,14 +167,12 @@ class _GoogleSession:
     def _start(self) -> None:
         if self._started:
             return
-        client = self._p._ensure_client()  # 未導入なら明快な RuntimeError
-        make_config, make_audio = self._p._request_builders()
-        self._thread = threading.Thread(
-            target=self._run,
-            args=(client, make_config, make_audio),
-            daemon=True,
-        )
+        # 重要: クライアント生成・認証トークン取得・gRPC ストリームはすべてワーカースレッドで行う。
+        # これらは同期的でネットワークを伴い（SA トークン取得等）、イベントループ上で実行すると
+        # 音声受信ループごとブロックして「通話中にフリーズ」する。_start は非同期文脈から
+        # await feed() 経由で呼ばれるため、ここではスレッド起動のみ（非ブロッキング）に留める。
         self._started = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def _requests(self, make_config, make_audio):
@@ -185,8 +183,12 @@ class _GoogleSession:
                 return
             yield make_audio(item)
 
-    def _run(self, client: Any, make_config, make_audio) -> None:
+    def _run(self) -> None:
+        # クライアント生成（未導入なら RuntimeError）・リクエスト構築・gRPC 消費をスレッド内で実行。
+        # 例外はスレッド境界を越えて finish() へ再送出するため self._error に退避する。
         try:
+            client = self._p._ensure_client()
+            make_config, make_audio = self._p._request_builders()
             responses = client.streaming_recognize(requests=self._requests(make_config, make_audio))
             for response in responses:
                 for result in getattr(response, "results", []):
