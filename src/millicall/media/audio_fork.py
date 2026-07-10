@@ -63,6 +63,10 @@ class AudioForkHandler:
         uuid = getattr(self._session, "_call_uuid", "unknown")
         frames = 0
         speech_ends = 0
+        # ストリーミング STT: speech_start で STT ストリームを開き、発話中の各フレームを
+        # 逐次 feed、speech_end で finalize する。発話中に文字化が進むため、発話終端での
+        # STT 確定がほぼ即座になり、STT レイテンシがクリティカルパスから外れる。
+        in_utterance = False
         try:
             while True:
                 frame = await ws.receive_bytes()
@@ -73,18 +77,31 @@ class AudioForkHandler:
                     )
                 for ev in self._segmenter.push(frame):
                     if ev.kind == "speech_start":
+                        # 発話開始で STT ストリームを開く（再生中でも開いて割り込み発話を取りこぼさない）。
+                        self._session.open_stt_stream()
+                        in_utterance = True
                         if self._session.speaking:
                             self._spawn(self._session.on_barge_in())
-                    elif ev.kind == "speech_end" and (
-                        self._current is None or self._current.done()
-                    ):
+                    elif ev.kind == "speech_end":
+                        if not in_utterance:
+                            continue
+                        in_utterance = False
                         speech_ends += 1
                         logger.info(
                             "audio-fork: VAD speech_end (uuid=%s, audio_bytes=%d)",
                             uuid,
                             len(ev.audio),
                         )
-                        self._current = self._spawn(self._session.on_utterance(ev.audio))
+                        # 十分な長さ かつ 直前の応答が完了済みのときだけ応答生成へ。
+                        # audio="" は VAD が短すぎと判定した発話 → 破棄。
+                        # 直前応答が処理中なら取りこぼし防止のため破棄（バージインで解放される）。
+                        if ev.audio and (self._current is None or self._current.done()):
+                            self._current = self._spawn(self._session.finalize_stt_stream())
+                        else:
+                            self._spawn(self._session.abort_stt_stream())
+                # 発話中は受信フレームを STT ストリームへ逐次投入する（真のストリーミング）。
+                if in_utterance:
+                    await self._session.feed_stt_stream(frame)
         except WebSocketDisconnect:
             return
         finally:
@@ -94,6 +111,10 @@ class AudioForkHandler:
                 frames,
                 speech_ends,
             )
+            # 発話中に切断された場合、開きっぱなしの STT ストリームを閉じる。
+            if in_utterance:
+                with contextlib.suppress(BaseException):
+                    await self._session.abort_stt_stream()
             # WS 切断時に実行中の会話/バージインタスクを孤児化させない。
             # まず 1 ループ回して、既にスケジュール済みで即完了するタスクは走らせ、
             # 本当に I/O 待ち中のタスク（STT→LLM→TTS→再生 の途中など）だけを
