@@ -28,6 +28,7 @@ import { SecurityPage } from "../pages/SecurityPage";
 import { SystemPage } from "../pages/SystemPage";
 import { AuditPage } from "../pages/AuditPage";
 import { SsoPage } from "../pages/SsoPage";
+import { SettingsPage } from "../pages/SettingsPage";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -175,6 +176,12 @@ const ssoRoute = createRoute({
   component: SsoPage,
 });
 
+const settingsRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   authLayoutRoute.addChildren([
@@ -196,6 +203,7 @@ const routeTree = rootRoute.addChildren([
     systemRoute,
     auditRoute,
     ssoRoute,
+    settingsRoute,
   ]),
 ]);
 

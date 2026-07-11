@@ -727,6 +727,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings Api
+         * @description 実効設定を取得する（管理者専用）。
+         */
+        get: operations["get_settings_api_api_settings_get"];
+        /**
+         * Update Settings Api
+         * @description 設定を更新する（管理者専用）。
+         *
+         *     allowlist 外のキー・型不正・レンジ外は 400。変更内容は監査ログに記録する
+         *     （秘密値は "***" にマスク）。反映は再起動不要（キャッシュ無効化で即時）。
+         */
+        put: operations["update_settings_api_api_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/containers": {
         parameters: {
             query?: never;
@@ -1966,6 +1993,40 @@ export interface components {
             name: string;
             /** Number */
             number: string;
+        };
+        /**
+         * SettingsRead
+         * @description 実効設定のレスポンス。
+         *
+         *     values には秘密キーを含めない。秘密キーは secrets に「設定済みか（非空か）」のみ返す。
+         *     overridden は DB で上書きされているキーの一覧（env デフォルトとの区別用）。
+         */
+        SettingsRead: {
+            /** Overridden */
+            overridden: string[];
+            /** Secrets */
+            secrets: {
+                [key: string]: boolean;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * SettingsUpdate
+         * @description 設定更新リクエスト。
+         *
+         *     values: 上書きするキーと値（秘密キーは平文文字列を渡すと暗号化保存される）。
+         *     reset: 上書きを削除して env デフォルトへ戻すキー。
+         */
+        SettingsUpdate: {
+            /** Reset */
+            reset?: string[];
+            /** Values */
+            values?: {
+                [key: string]: unknown;
+            };
         };
         /** SynthesizeRequest */
         SynthesizeRequest: {
@@ -3671,6 +3732,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["_TokenResponse"];
+                };
+            };
+        };
+    };
+    get_settings_api_api_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsRead"];
+                };
+            };
+        };
+    };
+    update_settings_api_api_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -14,6 +14,7 @@ import logging
 from fastapi import FastAPI, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from millicall.app_settings.service import effective_settings
 from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import (
     AnswerRegistry,
@@ -315,10 +316,13 @@ def register_media_ws(app: FastAPI) -> None:
             agent_id,
             is_ephemeral,
         )
+        # VAD パラメータは管理画面（DB）で無停止調整できるため、WS 接続毎に実効設定を読む
+        # （settings_service はキャッシュ済みで通常は DB アクセスなし）。
+        eff_settings = await effective_settings(state)
         segmenter = VadSegmenter(
             silence_end_ms=session._agent.silence_end_ms,
-            mode=getattr(state.settings, "vad_mode", 2),
-            min_rms=getattr(state.settings, "vad_min_rms", 0),
+            mode=getattr(eff_settings, "vad_mode", 2),
+            min_rms=getattr(eff_settings, "vad_min_rms", 0),
         )
         handler = AudioForkHandler(session, segmenter)
         try:

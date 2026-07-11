@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
 from millicall.auth.csrf import (
     clear_csrf_cookie,
@@ -120,7 +121,7 @@ async def login(
     TOTP が有効な場合は {totp_required: true, ticket: <signed>} を返す
     （セッション Cookie はセットしない）。
     """
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     secrets = request.app.state.secrets
     ip = get_client_ip(request)
 
@@ -194,7 +195,7 @@ async def login_totp(
     いずれかが失敗しても同じ 401 を返す（情報漏洩を防ぐ）。
     TOTP コードにもレート制限を適用する（H-2: /login/totp は別の攻撃面）。
     """
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     secrets = request.app.state.secrets
     ip = get_client_ip(request)
 
@@ -312,7 +313,7 @@ async def logout(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, bool]:
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     # ログアウトは認証必須ではない。可能ならCookieからユーザーを特定して監査記録するが、
     # 特定できない場合も失敗させない。
     actor_user_id: int | None = None
@@ -361,7 +362,7 @@ async def logout_all(
         ip_address=get_client_ip(request),
     )
     await session.commit()
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     response.delete_cookie(key=settings.session_cookie_name, path="/")
     # CSRF Cookie も削除する
     clear_csrf_cookie(response, settings)
@@ -381,7 +382,7 @@ async def get_csrf_token(request: Request, response: Response) -> dict[str, str]
     存在しない場合は新しいトークンを生成して Cookie にセットする。
     JS はこのエンドポイントまたは cookie を直接読んで X-CSRF-Token ヘッダーに設定する。
     """
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     existing = request.cookies.get(settings.csrf_cookie_name)
     if existing:
         return {"csrf": existing}

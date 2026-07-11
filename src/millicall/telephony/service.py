@@ -143,6 +143,16 @@ class TelephonyChangeListener:
             )
         return workflows
 
+    def update_outbound_policy(
+        self, international_allow_prefixes: list[str], sip_reject_anonymous: bool
+    ) -> None:
+        """発信ポリシー（国際発信 allowlist / 匿名着信拒否）を差し替える。
+
+        管理画面（PUT /api/settings）からの変更で使う。次回 regenerate/notify 時に
+        新しい値でテンプレート展開される。
+        """
+        self._writer.update_outbound_policy(international_allow_prefixes, sip_reject_anonymous)
+
     async def regenerate(self, session: AsyncSession) -> None:
         configs = await self._load_configs(session)
         trunks = await self._load_trunks(session)

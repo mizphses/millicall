@@ -52,12 +52,16 @@ class _FakeNetdClient:
             raise NetdError("apply_nat テスト失敗")
         self.apply_nat_calls.append(kwargs)
 
-    async def tailscale_up(self, *, auth_key: str) -> None:
+    async def tailscale_up(self, *, auth_key: str, serve_enabled: bool | None = None) -> None:
         if self.fail_tailscale_up:
             raise NetdError("tailscale_up テスト失敗")
         # auth_key を記録しない。テストで平文が漏れていないことを確認するため
         # キー長だけ記録する（平文を記録しない）
         self.tailscale_up_calls.append(auth_key)
+        self.tailscale_up_serve_flags: list[bool | None] = getattr(
+            self, "tailscale_up_serve_flags", []
+        )
+        self.tailscale_up_serve_flags.append(serve_enabled)
 
     async def tailscale_down(self) -> None:
         if self.fail_tailscale_down:

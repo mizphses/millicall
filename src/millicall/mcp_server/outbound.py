@@ -240,8 +240,9 @@ class OutboundCallService:
         self._lock = lock if lock is not None else asyncio.Lock()
         self._reconnect = reconnect
         # C3 修正: 国際発信 allowlist。
-        # None の場合は Settings から動的に読む（実運用経路; tools.py は渡さない）。
-        # テスト・DI では直接 list を渡して Settings 依存を切る。
+        # 実運用経路では tools.py が実効設定（env + 管理画面/DB 上書き）から読んで
+        # ツール呼び出し毎に注入する。None の場合のみ env Settings から動的に読む
+        # （後方互換・一部テスト用フォールバック）。
         self._international_allow_prefixes = international_allow_prefixes
 
     async def _bgapi(self, command: str) -> None:

@@ -17,6 +17,7 @@ import {
   ScrollText,
   KeyRound,
   ShieldCheck,
+  Settings2,
 } from "lucide-react";
 
 /** サイドナビとヘッダ題で共有するルート定義。 */
@@ -64,6 +65,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: "/system",    label: "システム",     icon: React.createElement(ServerCog,  { size: ICON_SIZE }) },
       { path: "/sso",       label: "SSO / SCIM",   icon: React.createElement(KeyRound,   { size: ICON_SIZE }) },
       { path: "/settings/security", label: "セキュリティ", icon: React.createElement(ShieldCheck, { size: ICON_SIZE }) },
+      { path: "/settings", label: "設定", icon: React.createElement(Settings2, { size: ICON_SIZE }) },
     ],
   },
   {

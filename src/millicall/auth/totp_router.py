@@ -22,6 +22,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
 from millicall.auth.security import bump_session_epoch
 from millicall.auth.throttle import check_and_raise, record_failure
@@ -228,7 +229,7 @@ async def totp_verify(
     セッション取得済みのエンドポイントでも TOTP コードを何度も試行できるため
     レート制限を適用する（H-2）。
     """
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     ip = get_client_ip(request)
 
     # レート制限チェック（コード検証前に行う）
@@ -307,7 +308,7 @@ async def totp_disable(
     セッション取得済みのエンドポイントでも TOTP コードを何度も試行できるため
     レート制限を適用する（H-2）。
     """
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     ip = get_client_ip(request)
 
     # レート制限チェック（コード検証前に行う）

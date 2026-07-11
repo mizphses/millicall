@@ -57,6 +57,7 @@ class WorkflowRunner:
         session_registry: SessionRegistry,
         settings,
         dtmf_collector,
+        settings_service=None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._secrets = secrets
@@ -66,6 +67,15 @@ class WorkflowRunner:
         self._session_registry = session_registry
         self._settings = settings
         self._dtmf_collector = dtmf_collector
+        # SMTP / playback_timeout は管理画面（DB）で上書き可能なため、注入されていれば
+        # 通話開始毎に実効設定を読む。未注入（単体テスト等）は settings をそのまま使う。
+        self._settings_service = settings_service
+
+    async def _effective_settings(self):
+        """実効 Settings を返す（settings_service 未注入時は env Settings にフォールバック）。"""
+        if self._settings_service is not None:
+            return await self._settings_service.effective()
+        return self._settings
 
     async def start(self, uuid: str, workflow_id: int) -> None:
         """ワークフローを起動する。
@@ -113,12 +123,13 @@ class WorkflowRunner:
             )
 
         # --- EslCallControl + CallPrimitives -------------------------------- #
+        eff_settings = await self._effective_settings()
         call_control = EslCallControl(
             self._esl,
             uuid,
             lock=self._lock,
             reconnect=self._reconnect,
-            playback_timeout=self._settings.playback_timeout_sec,
+            playback_timeout=eff_settings.playback_timeout_sec,
         )
 
         primitives: CallPrimitives | None = None
@@ -156,7 +167,7 @@ class WorkflowRunner:
                 provider_resolver=self._make_provider_resolver(box),
                 agent_resolver=self._make_agent_resolver(),
                 default_tts_provider_id=workflow.default_tts_provider_id,
-                smtp=SmtpEmailSender.from_settings(self._settings),
+                smtp=SmtpEmailSender.from_settings(eff_settings),
                 # 最上位ワークフロー id を呼び出しスタックに入れ、call_workflow の
                 # cross-workflow 循環（A→B→A）を実行時に検出できるようにする。
                 active_workflow_ids={workflow_id},

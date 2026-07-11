@@ -41,6 +41,7 @@ from signxml import SignatureConfiguration, XMLVerifier
 from signxml.exceptions import InvalidSignature
 from sqlalchemy import select
 
+from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
 from millicall.auth.csrf import generate_csrf_token
 from millicall.auth.security import hash_password, issue_session
@@ -257,7 +258,7 @@ def _find_attribute(assertion: etree._Element, candidate_names: list[str]) -> st
 @router.get("/metadata", response_class=PlainTextResponse)
 async def saml_metadata(request: Request) -> PlainTextResponse:
     """SP メタデータ XML を返す。SAML 無効時は 404（SP entity/ACS URL の露出を避ける、レビュー N-5）。"""
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     if not settings.saml_enabled:
         raise HTTPException(status_code=404)
     xml = _build_metadata_xml(settings.saml_sp_entity_id, settings.saml_sp_acs_url)
@@ -271,7 +272,7 @@ async def saml_login(request: Request, next: str = "/") -> RedirectResponse:
     SAML が無効・未設定の場合は 404 を返す。
     AuthnRequest を deflate+base64 して IdP へリダイレクトする（HTTP-Redirect binding）。
     """
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
 
     if not settings.saml_enabled or not settings.saml_idp_sso_url or not settings.saml_sp_entity_id:
         raise HTTPException(status_code=404, detail="SAML is not enabled")
@@ -313,7 +314,7 @@ async def saml_acs(
     失敗時は必ず 400 を返し、セッションは発行しない。
     アサーション内容はログ・監査に記録しない（理由コードのみ）。
     """
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     secrets_state = request.app.state.secrets
     ip = get_client_ip(request)
 

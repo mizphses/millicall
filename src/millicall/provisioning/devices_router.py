@@ -7,12 +7,12 @@
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from millicall.config import get_settings
+from millicall.app_settings.service import effective_settings
 from millicall.deps import get_change_listener, get_netd_client, get_session, require_admin
 from millicall.models import Device, Extension
 from millicall.network.client import NetdClient, NetdError
@@ -141,6 +141,7 @@ async def sync_devices(
 async def quick_provision_endpoint(
     device_id: int,
     body: QuickProvisionBody,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
 ) -> DeviceRead:
@@ -159,9 +160,9 @@ async def quick_provision_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    # best-effort resync（失敗しても 200 を返す）。管理者資格情報は Settings 由来
-    # （env で上書き可能。コードに定数を持たない）。
-    settings = get_settings()
+    # best-effort resync（失敗しても 200 を返す）。管理者資格情報は実効設定由来
+    # （管理画面/DB で上書き可能。パスワードは暗号化保存され、ここで復号済み値を使う）。
+    settings = await effective_settings(request.app.state)
     try:
         await resync_phone(
             device,
