@@ -17,6 +17,7 @@ const original: TrunkRead = {
   did_number: "0312345678",
   caller_id: "0312345678",
   inbound_extension: "200",
+  source_port: null,
   enabled: true,
   has_password: true,
 };
@@ -31,6 +32,7 @@ function formOf(overrides: Partial<TrunkFormValues>): TrunkFormValues {
     did_number: "0312345678",
     caller_id: "0312345678",
     inbound_extension: "200",
+    source_port: "",
     enabled: true,
     ...overrides,
   };
@@ -57,6 +59,11 @@ describe("buildCreatePayload", () => {
   it("inbound_extension を含める（trim あり・空文字 = 着信しない も送る）", () => {
     expect(buildCreatePayload(formOf({ inbound_extension: " 200 ", password: "x" })).inbound_extension).toBe("200");
     expect(buildCreatePayload(formOf({ inbound_extension: "", password: "x" })).inbound_extension).toBe("");
+  });
+
+  it("source_port: 空文字 = null（自動採番）、数値文字列 = number", () => {
+    expect(buildCreatePayload(formOf({ source_port: "", password: "x" })).source_port).toBeNull();
+    expect(buildCreatePayload(formOf({ source_port: "5082", password: "x" })).source_port).toBe(5082);
   });
 });
 
@@ -125,6 +132,23 @@ describe("buildUpdatePayload（編集フォーム → PATCH payload 変換）", 
     expect(payload.enabled).toBe(false);
   });
 
+  it("source_port を明示指定したら含める（number）", () => {
+    const payload = buildUpdatePayload(formOf({ source_port: "5090" }), original);
+    expect(payload.source_port).toBe(5090);
+  });
+
+  it("source_port が unchanged（空 = null のまま）なら含めない", () => {
+    const payload = buildUpdatePayload(formOf({ source_port: "" }), original);
+    expect(payload.source_port).toBeUndefined();
+  });
+
+  it("source_port を明示から自動採番（空 = null）へ戻したら null を含める", () => {
+    const withPort: TrunkRead = { ...original, source_port: 5082 };
+    const payload = buildUpdatePayload(formOf({ source_port: "" }), withPort);
+    expect("source_port" in payload).toBe(true);
+    expect(payload.source_port).toBeNull();
+  });
+
   it("複数フィールドを同時に変更したら全て含める", () => {
     const payload = buildUpdatePayload(
       formOf({ display_name: "別名称", password: "changed", enabled: false }),
@@ -178,5 +202,12 @@ describe("validateForm（編集モード）", () => {
 
   it("did_number が 31 文字以上なら弾く", () => {
     expect(validateForm(formOf({ did_number: "0".repeat(31) }), "create").did_number).toBeTruthy();
+  });
+
+  it("source_port が範囲外なら弾く / 範囲内・空はエラーなし", () => {
+    expect(validateForm(formOf({ source_port: "80" }), "edit").source_port).toBeTruthy();
+    expect(validateForm(formOf({ source_port: "70000" }), "edit").source_port).toBeTruthy();
+    expect(validateForm(formOf({ source_port: "5082" }), "edit").source_port).toBeUndefined();
+    expect(validateForm(formOf({ source_port: "" }), "edit").source_port).toBeUndefined();
   });
 });

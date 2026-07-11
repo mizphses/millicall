@@ -21,6 +21,11 @@ export interface TrunkFormValues {
   caller_id: string;
   /** 着信先内線番号。空文字 = 着信しない（番号プランへ振り分けない）。 */
   inbound_extension: string;
+  /**
+   * 送信元 SIP ポート。空文字 = 自動採番（サーバが external_sip_port から採番）。
+   * 数値文字列で保持し、payload 変換時に number | null へ写す。
+   */
+  source_port: string;
   enabled: boolean;
 }
 
@@ -35,6 +40,7 @@ export function emptyForm(): TrunkFormValues {
     did_number: "",
     caller_id: "",
     inbound_extension: "",
+    source_port: "",
     enabled: true,
   };
 }
@@ -50,6 +56,7 @@ export function formFromTrunk(trunk: TrunkRead): TrunkFormValues {
     did_number: trunk.did_number,
     caller_id: trunk.caller_id,
     inbound_extension: trunk.inbound_extension,
+    source_port: trunk.source_port != null ? String(trunk.source_port) : "",
     enabled: trunk.enabled,
   };
 }
@@ -65,8 +72,17 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
     did_number: form.did_number.trim(),
     caller_id: form.caller_id.trim(),
     inbound_extension: form.inbound_extension.trim(),
+    // 空文字 = 自動採番（null）。数値文字列なら number として送る。
+    source_port: parseSourcePort(form.source_port),
     enabled: form.enabled,
   };
+}
+
+/** フォームの送信元ポート文字列を number | null に変換する。空 = null（自動採番）。 */
+function parseSourcePort(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  return Number(trimmed);
 }
 
 /**
@@ -120,6 +136,12 @@ export function buildUpdatePayload(
   const inboundExtension = form.inbound_extension.trim();
   if (inboundExtension !== original.inbound_extension) {
     payload.inbound_extension = inboundExtension;
+  }
+
+  // source_port: 空 = 自動採番(null)。変更があれば含める（null 明示で自動採番に戻す）。
+  const sourcePort = parseSourcePort(form.source_port);
+  if (sourcePort !== (original.source_port ?? null)) {
+    payload.source_port = sourcePort;
   }
 
   if (form.enabled !== original.enabled) {
@@ -178,6 +200,15 @@ export function validateForm(
   }
   if (form.caller_id.trim().length > 30) {
     errors.caller_id = "発信者番号は 30 文字以内で入力してください";
+  }
+
+  // 送信元ポート: 空は許可（自動採番）。入力があれば 1024〜65535 の整数。
+  const sourcePort = form.source_port.trim();
+  if (sourcePort !== "") {
+    const n = Number(sourcePort);
+    if (!Number.isInteger(n) || n < 1024 || n > 65535) {
+      errors.source_port = "送信元ポートは 1024〜65535 の整数で入力してください";
+    }
   }
 
   return errors;

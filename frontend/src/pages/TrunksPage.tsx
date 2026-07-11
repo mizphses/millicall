@@ -411,6 +411,19 @@ export function TrunksPage() {
             </select>
           </Field>
 
+          <Field label="送信元ポート（任意・空欄で自動）" error={fieldErrors.source_port}>
+            <input
+              className={input({ invalid: fieldErrors.source_port ? true : undefined })}
+              type="number"
+              inputMode="numeric"
+              min={1024}
+              max={65535}
+              value={form.source_port}
+              onChange={(e) => setForm((f) => ({ ...f, source_port: e.target.value }))}
+              placeholder="自動採番（5080 から +2 ずつ）"
+            />
+          </Field>
+
           <label
             className={css({
               display: "flex",
