@@ -308,7 +308,7 @@ export function WorkflowsPage() {
               className={input({ invalid: fieldErrors.number ? true : undefined })}
               value={form.number}
               onChange={(e) => setForm((f) => ({ ...f, number: e.target.value }))}
-              placeholder="0312345678"
+              placeholder="300"
               maxLength={30}
             />
           </Field>
