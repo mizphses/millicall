@@ -754,6 +754,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/saml/fetch-idp-metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Saml Idp Metadata Api
+         * @description IdP フェデレーションメタデータ URL から SAML 設定値を取得する（管理者専用）。
+         *
+         *     取得した値は保存せずレスポンスで返すのみ。フロントがフォームに反映し、
+         *     ユーザーが内容を確認して通常の保存フロー（PUT /api/settings）で保存する。
+         *
+         *     セキュリティ: https のみ許可 / SSRF ブロック（内部アドレス解決は 400）/
+         *     リダイレクト非追従 / サイズ上限 1 MiB / タイムアウト 10 秒。
+         *     監査ログには URL のみ記録する（証明書等の取得内容は記録しない）。
+         */
+        post: operations["fetch_saml_idp_metadata_api_api_settings_saml_fetch_idp_metadata_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/containers": {
         parameters: {
             query?: never;
@@ -1993,6 +2020,26 @@ export interface components {
             name: string;
             /** Number */
             number: string;
+        };
+        /**
+         * SamlIdpMetadataFetchRequest
+         * @description IdP フェデレーションメタデータ取込リクエスト。
+         */
+        SamlIdpMetadataFetchRequest: {
+            /** Url */
+            url: string;
+        };
+        /**
+         * SamlIdpMetadataFetchResponse
+         * @description IdP メタデータから抽出した SAML 設定値（保存はしていない）。
+         */
+        SamlIdpMetadataFetchResponse: {
+            /** Idp Entity Id */
+            idp_entity_id: string;
+            /** Idp Sso Url */
+            idp_sso_url: string;
+            /** Idp X509 Cert */
+            idp_x509_cert: string;
         };
         /**
          * SettingsRead
@@ -3776,6 +3823,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_saml_idp_metadata_api_api_settings_saml_fetch_idp_metadata_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SamlIdpMetadataFetchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SamlIdpMetadataFetchResponse"];
                 };
             };
             /** @description Validation Error */
