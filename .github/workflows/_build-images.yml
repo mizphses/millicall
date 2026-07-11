@@ -17,6 +17,14 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # buildx キャッシュは type=gha ではなく GHCR の registry キャッシュを使う。
+    # type=gha は GitHub Actions ストレージ（Pro プランで 2GB/月まで）を消費し、
+    # FreeSWITCH のソースビルドで数 GB に達して課金枠を圧迫した実績がある。
+    # GHCR は public パッケージのストレージが無料のため、専用イメージ
+    # millicall-buildcache の tag ごとにキャッシュを保存する（build-record
+    # アーティファクトのアップロードも同じ理由で無効化する）。
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: false
     steps:
       - uses: actions/checkout@v7
 
@@ -40,8 +48,8 @@ jobs:
           tags: |
             ghcr.io/mizphses/millicall-core:${{ inputs.sha_tag }}
             ${{ inputs.moving_tag != '' && format('ghcr.io/mizphses/millicall-core:{0}', inputs.moving_tag) || '' }}
-          cache-from: type=gha,scope=core-amd64
-          cache-to: type=gha,mode=max,scope=core-amd64
+          cache-from: type=registry,ref=ghcr.io/mizphses/millicall-buildcache:core-amd64
+          cache-to: type=registry,ref=ghcr.io/mizphses/millicall-buildcache:core-amd64,mode=max,image-manifest=true,oci-mediatypes=true
 
       - name: Build & push freeswitch (amd64)
         uses: docker/build-push-action@v7
@@ -54,8 +62,8 @@ jobs:
           tags: |
             ghcr.io/mizphses/millicall-freeswitch:${{ inputs.sha_tag }}
             ${{ inputs.moving_tag != '' && format('ghcr.io/mizphses/millicall-freeswitch:{0}', inputs.moving_tag) || '' }}
-          cache-from: type=gha,scope=freeswitch-amd64
-          cache-to: type=gha,mode=max,scope=freeswitch-amd64
+          cache-from: type=registry,ref=ghcr.io/mizphses/millicall-buildcache:freeswitch-amd64
+          cache-to: type=registry,ref=ghcr.io/mizphses/millicall-buildcache:freeswitch-amd64,mode=max,image-manifest=true,oci-mediatypes=true
 
       - name: Build & push netd (amd64)
         uses: docker/build-push-action@v7
@@ -68,5 +76,5 @@ jobs:
           tags: |
             ghcr.io/mizphses/millicall-netd:${{ inputs.sha_tag }}
             ${{ inputs.moving_tag != '' && format('ghcr.io/mizphses/millicall-netd:{0}', inputs.moving_tag) || '' }}
-          cache-from: type=gha,scope=netd-amd64
-          cache-to: type=gha,mode=max,scope=netd-amd64
+          cache-from: type=registry,ref=ghcr.io/mizphses/millicall-buildcache:netd-amd64
+          cache-to: type=registry,ref=ghcr.io/mizphses/millicall-buildcache:netd-amd64,mode=max,image-manifest=true,oci-mediatypes=true
