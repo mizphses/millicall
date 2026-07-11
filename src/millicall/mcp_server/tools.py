@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from mcp.server.auth.middleware.auth_context import get_access_token
 from sqlalchemy import select
 
+from millicall.app_settings.service import effective_settings
 from millicall.mcp_server.directory import Directory
 from millicall.mcp_server.guide import OUTBOUND_CALLING_GUIDE
 from millicall.mcp_server.live_calls import LiveCallView
@@ -56,9 +57,14 @@ async def _fetch_enabled_trunks(sessionmaker) -> list:
         return list(rows)
 
 
-def _build_outbound(state) -> OutboundCallService:
-    """app.state から OutboundCallService（dial/converse 共用）を組む。"""
+async def _build_outbound(state) -> OutboundCallService:
+    """app.state から OutboundCallService（dial/converse 共用）を組む。
+
+    国際発信 allowlist は管理画面（DB）で変更可能なため、ツール呼び出し毎に
+    実効設定から読んで注入する（プロセス再起動なしで反映される）。
+    """
     sessionmaker = state.sessionmaker
+    eff = await effective_settings(state)
     return OutboundCallService(
         esl=state.esl_command,
         answer_registry=state.answer_registry,
@@ -68,6 +74,11 @@ def _build_outbound(state) -> OutboundCallService:
         ephemeral_store=state.ephemeral_store,
         lock=state.esl_command_lock,
         reconnect=state.esl_reconnect,
+        international_allow_prefixes=[
+            prefix.strip()
+            for prefix in eff.outbound_international_allow.split(",")
+            if prefix.strip()
+        ],
     )
 
 
@@ -139,13 +150,14 @@ def register_tools(mcp: FastMCP) -> None:
         except ValueError as exc:
             return _err(str(exc))
         try:
+            eff = await effective_settings(state)
             providers = await resolve_default_providers(
-                state.sessionmaker, state.secrets, state.settings.mcp_default_agent_id
+                state.sessionmaker, state.secrets, eff.mcp_default_agent_id
             )
         except ValueError as exc:
             return _dumps({"error": f"発信エラー: {exc}", "transcript": []})
 
-        svc = _build_outbound(state)
+        svc = await _build_outbound(state)
         result = await svc.converse(
             phone_number,
             purpose,
@@ -185,7 +197,7 @@ def register_tools(mcp: FastMCP) -> None:
             await _require_admin_subject(state)
         except ValueError as exc:
             return _err(str(exc))
-        svc = _build_outbound(state)
+        svc = await _build_outbound(state)
         try:
             result = await svc.dial(phone_number, caller_id, trunk)
         except DialTimeout as exc:
@@ -209,15 +221,16 @@ def register_tools(mcp: FastMCP) -> None:
     # -- 手動音声プリミティブ（say/listen/say_and_listen） --------------------
     async def _build_primitives(state, channel_id: str) -> CallPrimitives:
         """default エージェントの tts/stt で CallPrimitives を組む（parked channel 上）。"""
+        eff = await effective_settings(state)
         providers = await resolve_default_providers(
-            state.sessionmaker, state.secrets, state.settings.mcp_default_agent_id
+            state.sessionmaker, state.secrets, eff.mcp_default_agent_id
         )
         call_control = EslCallControl(
             state.esl_command,
             channel_id,
             lock=state.esl_command_lock,
             reconnect=state.esl_reconnect,
-            playback_timeout=state.settings.playback_timeout_sec,
+            playback_timeout=eff.playback_timeout_sec,
         )
         return CallPrimitives(
             esl=state.esl_command,

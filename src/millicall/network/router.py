@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from millicall.app_settings.service import effective_settings
 from millicall.config import http_port_suffix
 from millicall.crypto import SecretBox
 from millicall.deps import get_netd_client, get_secret_box, get_session, require_admin
@@ -304,6 +305,7 @@ async def tailscale_status(
 
 @router.post("/tailscale/up", response_model=ApplyResult)
 async def tailscale_up(
+    request: Request,
     session: AsyncSession = Depends(get_session),
     netd: NetdClient = Depends(get_netd_client),
     box: SecretBox = Depends(get_secret_box),
@@ -330,8 +332,10 @@ async def tailscale_up(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="保存された auth key を復号できません。キーを再登録してください。",
         ) from exc
+    # tailscale serve の有効/無効は管理画面（DB）で切替可能な実効設定を netd へ伝える。
+    eff = await effective_settings(request.app.state)
     try:
-        await netd.tailscale_up(auth_key=auth_key)
+        await netd.tailscale_up(auth_key=auth_key, serve_enabled=eff.tailscale_serve_enabled)
     except NetdError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

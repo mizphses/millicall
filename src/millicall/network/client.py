@@ -188,18 +188,24 @@ class NetdClient:
         if not resp.get("ok"):
             raise NetdError(f"apply_nat 失敗: {resp.get('error', '不明なエラー')}")
 
-    async def tailscale_up(self, *, auth_key: str) -> None:
+    async def tailscale_up(self, *, auth_key: str, serve_enabled: bool | None = None) -> None:
         """Tailscale VPN を有効化する。
 
         auth_key は認証情報のため、エラーメッセージには一切含めない。
 
         Args:
             auth_key: Tailscale 認証キー（tskey-... 形式）。
+            serve_enabled: up 成功後に `tailscale serve` で HTTPS 公開するか。
+                None の場合はペイロードに含めず、netd 側の env 設定に委ねる
+                （core の実効設定を netd プロセスへ伝える経路。管理画面から変更可能）。
 
         Raises:
             NetdError: 通信失敗またはサーバー側エラーの場合（auth_key は含まない）。
         """
-        resp = await self._call({"cmd": "tailscale_up", "auth_key": auth_key})
+        payload: dict = {"cmd": "tailscale_up", "auth_key": auth_key}
+        if serve_enabled is not None:
+            payload["serve_enabled"] = serve_enabled
+        resp = await self._call(payload)
         if not resp.get("ok"):
             # auth_key をエラーメッセージに含めない
             raise NetdError(f"tailscale_up 失敗: {resp.get('error', '不明なエラー')}")

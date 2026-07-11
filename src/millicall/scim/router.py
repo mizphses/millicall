@@ -44,6 +44,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
 from millicall.auth.security import bump_session_epoch, hash_password
 from millicall.deps import get_session, require_admin
@@ -110,7 +111,7 @@ async def _verify_bearer(request: Request, session: AsyncSession) -> None:
     検証失敗または未設定の場合は SCIM 形式の 401 を raise する。
     scim_enabled=False の場合は 404 を raise する（feature off 扱い）。
     """
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     if not settings.scim_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SCIM not enabled")
 

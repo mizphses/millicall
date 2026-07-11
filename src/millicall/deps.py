@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from millicall.app_settings.service import effective_settings
 from millicall.auth.security import SessionData, read_session
 from millicall.models import User
 
@@ -60,7 +61,8 @@ async def get_current_user(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    settings = request.app.state.settings
+    # session_max_age は管理画面（DB）で上書き可能なため実効設定から読む
+    settings = await effective_settings(request.app.state)
     secrets = request.app.state.secrets
     token = request.cookies.get(settings.session_cookie_name)
     if not token:

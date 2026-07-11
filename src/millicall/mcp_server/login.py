@@ -16,6 +16,7 @@ from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 
+from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
 from millicall.auth.security import hash_password, verify_password
 from millicall.auth.throttle import check_and_raise, clear_failures, record_failure
@@ -119,7 +120,7 @@ async def mcp_login_callback(
     resource = claims.get("resource", "")
     explicit = bool(claims.get("explicit", True))
 
-    settings = request.app.state.settings
+    settings = await effective_settings(request.app.state)
     sessionmaker = request.app.state.sessionmaker
     ip = get_client_ip(request)
 

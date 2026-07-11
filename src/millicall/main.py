@@ -220,6 +220,7 @@ async def lifespan(app: FastAPI):
         session_registry=app.state.session_registry,
         settings=settings,
         dtmf_collector=app.state.dtmf_collector,
+        settings_service=app.state.settings_service,
     )
 
     # 着信 AI 応対では CHANNEL_ANSWER を受けた core が uuid_audio_stream を発行するため、

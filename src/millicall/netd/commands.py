@@ -199,6 +199,8 @@ async def tailscale_up(
 
     ペイロードフィールド:
         auth_key (str): Tailscale 認証キー（tskey- プレフィックス必須）。
+        serve_enabled (bool, 省略可): up 成功後に `tailscale serve` するか。
+            省略時は netd 側の env 設定（tailscale_serve_enabled）に従う。
     """
     auth_key = payload.get("auth_key", "")
 
@@ -234,7 +236,12 @@ async def tailscale_up(
     # tailscale_serve_enabled のとき、up 成功後に tailnet 上で HTTPS を張り
     # http://localhost:<http_port> を公開する（管理画面/MCP のリモート公開）。
     # serve の失敗は up 自体の成功を覆さない（警告のみ。auth key は serve コマンドに渡さない）。
-    if getattr(settings, "tailscale_serve_enabled", False):
+    # core は管理画面（DB）の実効設定を payload の serve_enabled で伝える。
+    # payload に無い場合（旧 core）だけ netd 自身の env 設定へフォールバックする。
+    serve_enabled = payload.get("serve_enabled")
+    if serve_enabled is None:
+        serve_enabled = getattr(settings, "tailscale_serve_enabled", False)
+    if serve_enabled:
         port = getattr(settings, "http_port", 80)
         s_rc, _s_out, s_err = await ops.run(
             ["tailscale", "serve", "--bg", "--https=443", f"http://localhost:{port}"]
