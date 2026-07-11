@@ -131,6 +131,38 @@ async def saml_client(saml_app):
 
 
 @pytest_asyncio.fixture
+async def saml_scim_app(tmp_path, idp_keypair):
+    """SAML + SCIM の両方が有効な FastAPI アプリ（SCIM モード）。"""
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
+        fs_config_dir=tmp_path / "fs",
+        cookie_secure=False,
+        esl_timeout_seconds=1.0,
+        saml_enabled=True,
+        saml_sp_entity_id=_SP_ENTITY_ID,
+        saml_sp_acs_url=_ACS_URL,
+        saml_idp_entity_id=_IDP_ENTITY_ID,
+        saml_idp_sso_url=_IDP_SSO_URL,
+        saml_idp_x509_cert=idp_keypair["cert_pem"],
+        saml_default_role="user",
+        saml_allowed_clock_skew_seconds=120,
+        scim_enabled=True,
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        yield app
+
+
+@pytest_asyncio.fixture
+async def saml_scim_client(saml_scim_app):
+    """SAML + SCIM 有効化アプリ向けの AsyncClient。"""
+    transport = ASGITransport(app=saml_scim_app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as c:
+        yield c
+
+
+@pytest_asyncio.fixture
 async def disabled_saml_app(tmp_path):
     """SAML 無効の FastAPI アプリ。"""
     settings = Settings(
@@ -753,3 +785,173 @@ async def test_metadata_disabled_returns_404(disabled_client) -> None:
     """SAML 無効時は /saml/metadata が 404（SP entity/ACS URL を露出しない、N-5）。"""
     resp = await disabled_client.get("/saml/metadata")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# テスト: SCIM モード（scim_enabled=True 時の ACS プロビジョニングゲート）
+# ---------------------------------------------------------------------------
+
+
+async def test_acs_scim_mode_unknown_user_rejected_no_jit(saml_scim_client, idp_keypair) -> None:
+    """SCIM モード: 未プロビジョニングのユーザーは 400 で拒否され、JIT 作成されない。"""
+    from sqlalchemy import select as sa_select
+
+    email = "unprovisioned@example.com"
+    saml_b64, _ = _build_saml_response(
+        idp_keypair["key_pem"],
+        idp_keypair["cert_pem"],
+        email=email,
+        assertion_id="_" + secrets.token_hex(16),
+    )
+    resp = await _post_acs(saml_scim_client, saml_b64)
+    assert resp.status_code == 400
+    assert "millicall_session" not in resp.cookies
+
+    # JIT でユーザーが作成されていないことを確認
+    app = saml_scim_client._transport.app
+    async with app.state.sessionmaker() as session:
+        user = await session.scalar(sa_select(User).where(User.email == email))
+        assert user is None
+        user_by_name = await session.scalar(sa_select(User).where(User.username == email))
+        assert user_by_name is None
+
+
+async def test_acs_scim_mode_scim_user_email_match_succeeds(saml_scim_client, idp_keypair) -> None:
+    """SCIM モード: origin='scim' ユーザーは email 一致でログインできる。
+
+    display_name は SCIM がソースオブトゥルースのため、SAML 属性で上書きされない。
+    """
+    from sqlalchemy import select as sa_select
+
+    from millicall.auth.security import hash_password
+
+    email = "scim-user@example.com"
+    app = saml_scim_client._transport.app
+    async with app.state.sessionmaker() as session:
+        session.add(
+            User(
+                username="scim-user@example.com",
+                hashed_password=hash_password(secrets.token_hex(32)),
+                display_name="SCIM Provisioned Name",
+                email=email,
+                role="user",
+                origin="scim",
+                enabled=True,
+            )
+        )
+        await session.commit()
+
+    saml_b64, _ = _build_saml_response(
+        idp_keypair["key_pem"],
+        idp_keypair["cert_pem"],
+        email=email,
+        display_name="IdP Asserted Name",
+        assertion_id="_" + secrets.token_hex(16),
+    )
+    resp = await _post_acs(saml_scim_client, saml_b64, relay_state="/dashboard")
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/dashboard"
+    assert "millicall_session" in resp.cookies
+    assert "millicall_csrf" in resp.cookies
+
+    # display_name が SAML 属性で上書きされていないこと（SCIM がソースオブトゥルース）
+    async with app.state.sessionmaker() as session:
+        user = await session.scalar(sa_select(User).where(User.email == email))
+        assert user is not None
+        assert user.display_name == "SCIM Provisioned Name"
+
+
+async def test_acs_scim_mode_username_fallback_match_succeeds(
+    saml_scim_client, idp_keypair
+) -> None:
+    """SCIM モード: email 未設定の SCIM ユーザーでも username（UPN）一致でログインできる。"""
+    from millicall.auth.security import hash_password
+
+    upn = "upn-only@example.com"
+    app = saml_scim_client._transport.app
+    async with app.state.sessionmaker() as session:
+        session.add(
+            User(
+                username=upn,  # SCIM userName = UPN
+                hashed_password=hash_password(secrets.token_hex(32)),
+                display_name="UPN Only User",
+                email=None,  # SCIM の emails 未設定
+                role="user",
+                origin="scim",
+                enabled=True,
+            )
+        )
+        await session.commit()
+
+    # NameID / email 属性 = UPN でアサート
+    saml_b64, _ = _build_saml_response(
+        idp_keypair["key_pem"],
+        idp_keypair["cert_pem"],
+        email=upn,
+        assertion_id="_" + secrets.token_hex(16),
+    )
+    resp = await _post_acs(saml_scim_client, saml_b64)
+    assert resp.status_code == 302
+    assert "millicall_session" in resp.cookies
+
+
+async def test_acs_scim_mode_saml_origin_user_rejected(saml_scim_client, idp_keypair) -> None:
+    """SCIM モード: origin='saml'（過去に JIT 作成された）ユーザーは拒否される。"""
+    from millicall.auth.security import hash_password
+
+    email = "old-jit@example.com"
+    app = saml_scim_client._transport.app
+    async with app.state.sessionmaker() as session:
+        session.add(
+            User(
+                username=email[:50],
+                hashed_password=hash_password(secrets.token_hex(32)),
+                display_name="Old JIT User",
+                email=email,
+                role="user",
+                origin="saml",
+                enabled=True,
+            )
+        )
+        await session.commit()
+
+    saml_b64, _ = _build_saml_response(
+        idp_keypair["key_pem"],
+        idp_keypair["cert_pem"],
+        email=email,
+        assertion_id="_" + secrets.token_hex(16),
+    )
+    resp = await _post_acs(saml_scim_client, saml_b64)
+    assert resp.status_code == 400
+    assert "millicall_session" not in resp.cookies
+
+
+async def test_acs_scim_mode_disabled_scim_user_rejected(saml_scim_client, idp_keypair) -> None:
+    """SCIM モード: enabled=False の SCIM ユーザーは拒否される（deactivate が即効く）。"""
+    from millicall.auth.security import hash_password
+
+    email = "deactivated-scim@example.com"
+    app = saml_scim_client._transport.app
+    async with app.state.sessionmaker() as session:
+        session.add(
+            User(
+                username=email[:50],
+                hashed_password=hash_password(secrets.token_hex(32)),
+                display_name="Deactivated SCIM User",
+                email=email,
+                role="user",
+                origin="scim",
+                enabled=False,  # SCIM deactivate 済み
+            )
+        )
+        await session.commit()
+
+    saml_b64, _ = _build_saml_response(
+        idp_keypair["key_pem"],
+        idp_keypair["cert_pem"],
+        email=email,
+        assertion_id="_" + secrets.token_hex(16),
+    )
+    resp = await _post_acs(saml_scim_client, saml_b64)
+    assert resp.status_code == 400
+    assert "millicall_session" not in resp.cookies
