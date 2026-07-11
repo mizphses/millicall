@@ -1,3 +1,4 @@
+import json
 from functools import lru_cache
 from pathlib import Path
 
@@ -93,6 +94,11 @@ class Settings(BaseSettings):
     # True のとき /scim/v2/* エンドポイントが有効になる。
     # False（デフォルト）の場合、全 SCIM エンドポイントは 404 を返す（feature off）。
     scim_enabled: bool = False
+    # SCIM グループ displayName → millicall ロールのマッピング。
+    # 例: {"millicall-admins": "admin"}。マップ済みグループに属する origin="scim"
+    # ユーザーへ最上位ロール（admin > user）を自動付与する。空 {} で機能オフ。
+    # 通常は管理画面（app_settings）から編集する。env から渡す場合は JSON 文字列。
+    scim_group_role_map: dict[str, str] = {}
 
     # --- SAML 2.0 SP (Phase 6 Task 4) ---
     # True のとき /saml/* エンドポイントが有効になる。
@@ -247,6 +253,14 @@ class Settings(BaseSettings):
         # env MILLICALL_SIP_TRUSTED_CIDRS はカンマ区切り文字列で渡せる（mcp_allowed_hosts と同系）。
         if isinstance(v, str):
             return [c.strip() for c in v.split(",") if c.strip()]
+        return v
+
+    @field_validator("scim_group_role_map", mode="before")
+    @classmethod
+    def _parse_scim_group_role_map(cls, v: object) -> object:
+        # enable_decoding=False のため env からの JSON 文字列は自前でデコードする。
+        if isinstance(v, str):
+            return json.loads(v) if v.strip() else {}
         return v
 
 
