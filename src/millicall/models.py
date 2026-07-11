@@ -62,6 +62,39 @@ class User(Base):
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
 
 
+class ScimGroup(Base):
+    """SCIM 2.0 グループ（IdP から同期; DB 永続化）。
+
+    displayName は scim_group_role_map（app_settings）のキーと突合され、
+    origin="scim" ユーザーのロール自動付与に使う。IdP 側の命名を尊重するため
+    UNIQUE は付けない（同名グループが複数来ても各々保持する）。
+    """
+
+    __tablename__ = "scim_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
+class ScimGroupMember(Base):
+    """SCIM グループのメンバー（user_id は origin="scim" の users.id のみ格納する）。"""
+
+    __tablename__ = "scim_group_members"
+    __table_args__ = (Index("ux_scim_group_member", "group_id", "user_id", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("scim_groups.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
