@@ -115,10 +115,31 @@ class TestApplyDhcp:
         assert "dhcp-range=172.20.1.1,172.20.254.254" in written_content
         assert "http://172.20.0.1:8000/provisioning/" in written_content
 
-        # dnsmasq restart が呼ばれたことを確認
-        assert len(ops.run_calls) == 1
-        argv, _ = ops.run_calls[0]
-        assert argv == ["systemctl", "restart", "dnsmasq"]
+        # ip link up → ip addr replace → dnsmasq restart の順で呼ばれたことを確認
+        argvs = [argv for argv, _ in ops.run_calls]
+        assert argvs == [
+            ["ip", "link", "set", "dev", "enp3s0", "up"],
+            ["ip", "addr", "replace", "172.20.0.1/16", "dev", "enp3s0"],
+            ["systemctl", "restart", "dnsmasq"],
+        ]
+
+    @pytest.mark.asyncio
+    async def test_link_up_failure_returns_error_no_conf_write(self):
+        """ip link up が失敗したら dnsmasq.conf を書かずエラーを返す。"""
+        ops = FakeSystemOps(run_responses=[(1, "", "link down")])
+        resp = await dispatch(_VALID_DHCP_PAYLOAD, ops, SETTINGS)
+        assert resp["ok"] is False
+        assert "up" in resp["error"]
+        assert ops.write_calls == []
+
+    @pytest.mark.asyncio
+    async def test_addr_assign_failure_returns_error_no_conf_write(self):
+        """ip addr replace が失敗したら dnsmasq.conf を書かずエラーを返す。"""
+        ops = FakeSystemOps(run_responses=[(0, "", ""), (2, "", "no such device")])
+        resp = await dispatch(_VALID_DHCP_PAYLOAD, ops, SETTINGS)
+        assert resp["ok"] is False
+        assert "IP 付与" in resp["error"]
+        assert ops.write_calls == []
 
     @pytest.mark.asyncio
     async def test_invalid_interface_name_returns_error_no_ops(self):
@@ -211,8 +232,8 @@ class TestApplyDhcp:
         resp = await dispatch(_VALID_DHCP_PAYLOAD, ops, CustomReloadSettings())
 
         assert resp["ok"] is True
-        assert len(ops.run_calls) == 1
-        argv, _ = ops.run_calls[0]
+        # ip link / ip addr の後に、上書きされた reload コマンドが最後に呼ばれる
+        argv, _ = ops.run_calls[-1]
         assert argv == ["/usr/local/bin/reload-dnsmasq.sh"]
 
     @pytest.mark.asyncio
@@ -226,7 +247,12 @@ class TestApplyDhcp:
         resp = await dispatch(_VALID_DHCP_PAYLOAD, ops, EmptyReloadSettings())
 
         assert resp["ok"] is False
-        assert ops.run_calls == []
+        # ip link up / ip addr replace は実行されるが、reload コマンドは呼ばれない
+        argvs = [argv for argv, _ in ops.run_calls]
+        assert argvs == [
+            ["ip", "link", "set", "dev", "enp3s0", "up"],
+            ["ip", "addr", "replace", "172.20.0.1/16", "dev", "enp3s0"],
+        ]
 
 
 # ---------------------------------------------------------------------------
