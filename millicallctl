@@ -187,6 +187,26 @@ case "${cmd}" in
     dc restart
     ;;
   update)
+    # 環境変数で MILLICALL_VERSION が明示されていたら .env に永続化する。
+    # 一回限りの env 指定（MILLICALL_VERSION=dev millicallctl update）だけだと、
+    # 以後の restart / up が .env の古いタグで起動し、新イメージで前進した
+    # DB マイグレーションと食い違って core が起動不能になる（実機で発生）。
+    if [ -n "${MILLICALL_VERSION:-}" ] && [ -f .env ]; then
+      case "${MILLICALL_VERSION}" in
+        *[!A-Za-z0-9._-]*) die "MILLICALL_VERSION に使用できない文字が含まれています: ${MILLICALL_VERSION}" ;;
+      esac
+      if [ "$(env_val MILLICALL_VERSION)" != "${MILLICALL_VERSION}" ]; then
+        if grep -q '^MILLICALL_VERSION=' .env; then
+          # sed -i は GNU/BSD で非互換のため一時ファイル経由で書き換える
+          tmp_env="$(mktemp)"
+          sed "s/^MILLICALL_VERSION=.*/MILLICALL_VERSION=${MILLICALL_VERSION}/" .env > "${tmp_env}"
+          mv "${tmp_env}" .env
+        else
+          printf 'MILLICALL_VERSION=%s\n' "${MILLICALL_VERSION}" >> .env
+        fi
+        log "MILLICALL_VERSION=${MILLICALL_VERSION} を .env に永続化しました（以後の up/restart にも適用されます）。"
+      fi
+    fi
     # DB マイグレーションは core 起動時に自動実行される。更新前の backup を強く推奨。
     fetch_compose
     apply_profiles
