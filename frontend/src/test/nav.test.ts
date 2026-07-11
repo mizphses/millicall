@@ -38,6 +38,7 @@ describe("NAV_SECTIONS", () => {
       "/system",
       "/sso",
       "/settings/security",
+      "/settings",
       "/cdr",
       "/audit",
     ]);

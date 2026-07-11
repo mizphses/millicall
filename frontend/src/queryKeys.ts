@@ -75,3 +75,10 @@ export const SYSTEM_INFO_KEY = ["p6-system-info"] as const;
 
 /** ログインユーザー自身の情報（2FA 状態確認で使う）。 */
 export const AUTH_ME_KEY = ["p6-auth-me"] as const;
+
+// ─────────────────────────────────────────────────────────
+// アプリ設定（管理画面から編集する .env 上書き）
+// ─────────────────────────────────────────────────────────
+
+/** GET /api/settings。PUT 後は setQueryData で置き換える。 */
+export const APP_SETTINGS_KEY = ["app-settings"] as const;
