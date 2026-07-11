@@ -417,12 +417,15 @@ export function SettingsPage() {
                   {section.note}
                 </p>
               ) : null}
+              {/* 広い 2 列（狭い画面では 1 列に落とす）。詰め込みグリッドだとラベル行が折り返して崩れるため。 */}
               <div
                 className={css({
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-                  gap: "4",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  columnGap: "6",
+                  rowGap: "5",
                   alignItems: "start",
+                  "@media (max-width: 860px)": { gridTemplateColumns: "1fr" },
                 })}
               >
                 {section.fields.map((field) => (
@@ -516,6 +519,8 @@ function SettingField({
   onReset: () => void;
   resetDisabled: boolean;
 }) {
+  // ラベル行: ラベル + 上書きドット +（上書き中のみ）既定に戻すリンクを 1 行に収める。
+  // ラベルは省略記号で切り、バッジ・リンクは flexShrink:0 + nowrap で潰れ・折り返しを防ぐ。
   const labelRow = (
     <span
       className={css({
@@ -525,22 +530,41 @@ function SettingField({
         fontSize: "sm",
         color: "text.muted",
         mb: "1",
+        minWidth: "0",
       })}
     >
-      <span>{field.label}</span>
+      <span
+        className={css({
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        })}
+        title={field.label}
+      >
+        {field.label}
+      </span>
       {isOverridden ? (
         <>
           <span
             className={css({
-              fontSize: "xs",
-              px: "1.5",
-              py: "0.5",
-              borderRadius: "sm",
-              bg: "accent",
-              color: "white",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "1",
+              flexShrink: 0,
+              whiteSpace: "nowrap",
+              color: "accent",
             })}
             title=".env の値を DB で上書き中"
           >
+            <span
+              aria-hidden="true"
+              className={css({
+                width: "6px",
+                height: "6px",
+                borderRadius: "50%",
+                bg: "accent",
+              })}
+            />
             上書き中
           </span>
           <button
@@ -552,10 +576,14 @@ function SettingField({
               display: "inline-flex",
               alignItems: "center",
               gap: "1",
-              fontSize: "xs",
+              ml: "auto",
+              flexShrink: 0,
+              whiteSpace: "nowrap",
+              fontSize: "sm",
               color: "text.muted",
               cursor: "pointer",
               _hover: { color: "accent" },
+              _disabled: { opacity: 0.5, cursor: "not-allowed" },
             })}
           >
             <RotateCcw size={12} />
@@ -628,7 +656,15 @@ function SettingField({
       <div className={css({ gridColumn: "1 / -1" })}>
         {labelRow}
         <textarea
-          className={cx(input(), css({ width: "100%", minHeight: "120px", fontFamily: "mono" }))}
+          className={cx(
+            input(),
+            css({
+              width: "100%",
+              minH: "textareaMin",
+              resize: "vertical",
+              fontFamily: "monospace",
+            }),
+          )}
           value={String(value)}
           onChange={(e) => onChange(e.target.value)}
           placeholder={field.placeholder}
