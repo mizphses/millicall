@@ -127,7 +127,7 @@ def test_ephemeral_spec_defaults():
 # ===========================================================================
 
 
-def test_system_prompt_includes_purpose_and_end_call_tag():
+def test_system_prompt_includes_purpose_and_end_talk_tag():
     from millicall.mcp_server.outbound import build_converse_system_prompt
 
     prompt = build_converse_system_prompt(
@@ -136,8 +136,9 @@ def test_system_prompt_includes_purpose_and_end_call_tag():
     assert "ラーメンを1杯注文する" in prompt
     assert "味噌ラーメン" in prompt
     assert "小川" in prompt
-    # 旧 [DONE] ではなく [END_CALL] 版。
-    assert "[END_CALL]" in prompt
+    # 旧 [DONE]/[END_CALL] ではなく <end_talk/> 版（後方互換で [END_CALL] も検出はされる）。
+    assert "<end_talk/>" in prompt
+    assert "[END_CALL]" not in prompt
     assert "[DONE]" not in prompt
 
 
@@ -146,7 +147,7 @@ def test_system_prompt_omits_optional_parts_when_empty():
 
     prompt = build_converse_system_prompt(purpose="用件を伝える", key_points="", your_name="")
     assert "用件を伝える" in prompt
-    assert "[END_CALL]" in prompt
+    assert "<end_talk/>" in prompt
     # key_points が空なら要点セクションは出さない。
     assert "伝えるべき要点" not in prompt
 

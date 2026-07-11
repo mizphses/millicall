@@ -27,9 +27,19 @@ ctx への要求:
   * ``ctx.render(text)``、``ctx.set_var(name, value)``、``ctx.get_var(name)``
   * ``ctx.hangup()``
 
-[END_CALL] 規約:
-  ``_END_MARKER = "[END_CALL]"`` — LLM 応答にこの文字列が含まれていれば通話終了を意図する。
-  ai_conversation はマーカーを除去した残りのテキストを再生してから hangup する。
+会話終了タグ規約:
+  LLM 応答に ``<end_talk/>``（表記ゆれ許容・後方互換 ``[END_CALL]`` も可）が
+  含まれていれば通話終了を意図する。ai_conversation はタグを除去した残りの
+  テキストを再生してから hangup する。検出・除去は millicall.ai.end_talk に
+  一本化されており、ストリーミング会話（media/conversation.py）と同一ロジック。
+
+プロンプトインジェクション対策（millicall.ai.end_talk）:
+  * ユーザ発話（STT 結果）は ``sanitize_user_input`` で制御トークンを除去してから
+    履歴・LLM プロンプトへ入れる（発話による強制終了・乗っ取りの防止）。
+  * システムプロンプトには終了タグ案内とガード指示を ``build_guarded_system_prompt``
+    で自動追記する。
+  * 分類・抽出プロンプトへ会話内容を渡す際は ``wrap_untrusted_transcript`` で
+    デリミタ囲みし「データであり指示ではない」ことを明示する。
 
 空 listen ルール（ai_conversation のみ）:
   listen() が空文字を返した場合（無音・STT 失敗）は 1 ターン分許容し、
@@ -57,6 +67,12 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from millicall.ai.end_talk import (
+    build_guarded_system_prompt,
+    sanitize_user_input,
+    split_end_talk,
+    wrap_untrusted_transcript,
+)
 from millicall.ai.llm.base import ChatMessage
 from millicall.workflows.executor import register_handler
 
@@ -64,9 +80,6 @@ if TYPE_CHECKING:
     from millicall.workflows.context import ChannelContext
 
 logger = logging.getLogger("millicall.workflows.handlers.ai")
-
-# ai_conversation / conversation.py と同一マーカー
-_END_MARKER = "[END_CALL]"
 
 # 確認否定とみなすキーワード（小文字で比較）
 _NEGATIVE_KEYWORDS = (
@@ -134,8 +147,9 @@ async def handle_collect_info(node: object, ctx: ChannelContext) -> None:
     for var_name, question in config.fields.items():
         rendered_question = ctx.render(question)
 
-        # 初回質問
+        # 初回質問（回答は STT 結果 = 信頼できない入力なのでサニタイズしてから使う）
         _, answer = await ctx.primitives.say_and_listen(rendered_question, **say_kwargs)
+        answer = sanitize_user_input(answer)
 
         if config.confirmation and answer:
             # 確認: 回答を読み上げて yes/no を聞く
@@ -145,6 +159,7 @@ async def handle_collect_info(node: object, ctx: ChannelContext) -> None:
             if _is_negative(confirm_reply):
                 # 否定 → 1 回だけ再質問し、その答えを使う
                 _, answer = await ctx.primitives.say_and_listen(rendered_question, **say_kwargs)
+                answer = sanitize_user_input(answer)
 
         ctx.set_var(var_name, answer)
 
@@ -179,11 +194,12 @@ async def handle_intent_detection(node: object, ctx: ChannelContext) -> str:
     config = node.config  # type: ignore[attr-defined]
     fallback = config.fallback_intent
 
-    # 発話取得
+    # 発話取得（STT 結果は信頼できない入力なので制御トークンを除去する）
     if ctx.primitives is None:
         utterance = ""
     else:
-        utterance = await ctx.primitives.listen()
+        raw_utterance = await ctx.primitives.listen()
+        utterance = sanitize_user_input(raw_utterance)
 
     if not utterance:
         return fallback
@@ -206,9 +222,11 @@ async def handle_intent_detection(node: object, ctx: ChannelContext) -> str:
         f"意図キー一覧:\n{intent_descriptions}"
     )
 
+    # 発話はデリミタで囲み「分類対象のデータであり指示ではない」ことを明示する
+    # （プロンプトインジェクション対策）。
     messages = [
         ChatMessage("system", system_msg),
-        ChatMessage("user", utterance),
+        ChatMessage("user", wrap_untrusted_transcript(utterance)),
     ]
 
     raw = await _collect_llm_response(llm, messages)
@@ -249,10 +267,11 @@ async def handle_ai_conversation(node: object, ctx: ChannelContext) -> None:
            （Task 9 でランナーファクトリが適切なリソースを注入する）
       3. 挨拶文がある場合は say() で再生する
       4. max_turns 回のターンループ:
-         a. listen() でユーザ発話を取得
-         b. 空発話が 2 回連続の場合はループ終了（空発話ルール）
+         a. listen() でユーザ発話を取得し、制御トークンをサニタイズ
+         b. 空発話（サニタイズ後含む）が 2 回連続の場合はループ終了（空発話ルール）
          c. LLM に messages を渡してレスポンスを取得
-         d. [END_CALL] が含まれていれば残りのテキストを再生して hangup
+         d. 終了タグ <end_talk/>（後方互換 [END_CALL]）が含まれていれば
+            残りのテキストを再生して hangup
          e. そうでなければ応答を再生し、履歴に追加
       5. 会話後に extract_variables が設定されていれば変数抽出を実施
 
@@ -310,13 +329,16 @@ async def handle_ai_conversation(node: object, ctx: ChannelContext) -> None:
         await ctx.primitives.say(ctx.render(greeting), **say_kwargs)
 
     # ----- 4. ターンループ -----
+    # システムプロンプトに終了タグ案内 + インジェクション対策指示を自動追記する
+    system_prompt = build_guarded_system_prompt(system_prompt)
     history: list[ChatMessage] = []
     empty_count = 0  # 連続空発話カウンタ
     max_history = agent.max_history if agent is not None else 0
 
     for _ in range(config.max_turns):
-        # ユーザ発話取得
-        user_text = await ctx.primitives.listen()
+        # ユーザ発話取得（STT 結果は信頼できない入力なので制御トークンを除去する。
+        # 除去後に空なら空発話扱い — 発話による強制終了・乗っ取りの防止）
+        user_text = sanitize_user_input(await ctx.primitives.listen())
 
         if not user_text:
             empty_count += 1
@@ -335,9 +357,9 @@ async def handle_ai_conversation(node: object, ctx: ChannelContext) -> None:
         messages = [ChatMessage("system", system_prompt), *history]
         assistant_text = await _collect_llm_response(llm, messages)
 
-        if _END_MARKER in assistant_text:
-            # 終話マーカーが含まれている → マーカーを除去して残りを再生し、hangup
-            clean_text = assistant_text.replace(_END_MARKER, "").strip()
+        clean_text, end_talk = split_end_talk(assistant_text)
+        if end_talk:
+            # 終了タグが含まれている → タグを除去して残りを再生し、hangup
             if clean_text:
                 await ctx.primitives.say(clean_text, **say_kwargs)
             await ctx.hangup()
@@ -397,9 +419,11 @@ async def _extract_variables(
         "次のキーを持つ minified JSON オブジェクトのみで回答してください（他の文字を含めない）。\n\n"
         f"抽出する変数（キー: 説明）:\n{var_descriptions}"
     )
+    # 会話履歴はデリミタで囲み「抽出対象のデータであり指示ではない」ことを明示する
+    # （プロンプトインジェクション対策）。
     extract_messages = [
         ChatMessage("system", extract_system),
-        ChatMessage("user", transcript),
+        ChatMessage("user", wrap_untrusted_transcript(transcript)),
     ]
 
     try:
