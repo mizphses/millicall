@@ -49,6 +49,19 @@ class TestRenderDnsmasqConf:
         conf = render_dnsmasq_conf(**self._VALID_KWARGS)
         assert "dhcp-option=66,http://172.20.0.1:8000/provisioning/" in conf
 
+    def test_provisioning_url_without_port_accepted(self):
+        # HTTP ポート 80 のとき core は http_port_suffix でポートを省略した
+        # http://<lan_ip>/provisioning/ を生成する。これが検証を通り、
+        # そのまま dhcp-option=66 に載ること（ポート必須にしていた回帰の防止）。
+        kwargs = {**self._VALID_KWARGS, "provisioning_url": "http://172.20.0.1/provisioning/"}
+        conf = render_dnsmasq_conf(**kwargs)
+        assert "dhcp-option=66,http://172.20.0.1/provisioning/" in conf
+
+    def test_provisioning_url_host_only_no_path_no_port_accepted(self):
+        kwargs = {**self._VALID_KWARGS, "provisioning_url": "http://172.20.0.1/"}
+        conf = render_dnsmasq_conf(**kwargs)
+        assert "dhcp-option=66,http://172.20.0.1/" in conf
+
     def test_ends_with_newline(self):
         conf = render_dnsmasq_conf(**self._VALID_KWARGS)
         assert conf.endswith("\n")
