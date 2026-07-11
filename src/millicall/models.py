@@ -402,6 +402,13 @@ class NetworkConfig(Base):
     )
     # Fernet トークン。Tailscale 無効時は NULL。NEVER store plaintext, NEVER log。
     tailscale_auth_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 一度でも netd への apply（POST /api/network/apply）に成功したかを示すフラグ。
+    # OS/コンテナ再起動後、core 起動時にネットワーク設定を自動再適用するかの判定に使う。
+    # 一度も適用していない環境（デフォルト設定のまま）で起動時に勝手に enp3s0 を
+    # 掴むのを防ぐため、applied=True のときだけ再適用する。
+    applied: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
