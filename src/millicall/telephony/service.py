@@ -19,6 +19,7 @@ from millicall.telephony.fsconfig import (
     RingGroupConfig,
     TrunkConfig,
     WorkflowConfig,
+    build_reload_commands,
 )
 
 logger = logging.getLogger("millicall.telephony.service")
@@ -101,6 +102,7 @@ class TelephonyChangeListener:
                 did_number=t.did_number,
                 caller_id=t.caller_id,
                 inbound_extension=t.inbound_extension,
+                source_port=t.source_port,
             )
             for t in result
         ]
@@ -172,13 +174,14 @@ class TelephonyChangeListener:
         await client.connect()
         await client.reloadxml()
         if sync_gateway is not None:
-            # reloadxml だけでは sofia ゲートウェイは再ロードされない。
-            # killgw で既存ゲートウェイを破棄し(未ロードなら -ERR だが無害)、
-            # rescan で XML 上のゲートウェイをロードする。ロード時に register=true の
-            # ゲートウェイは直ちに REGISTER を試行するため、保存直後に HGW 側で
-            # 登録状態を確認できる。削除時は XML に無いので rescan で再ロードされない。
-            await client.api(f"sofia profile external killgw {sync_gateway}")
-            await client.api("sofia profile external rescan")
+            # トランクごとに external_<name> プロファイルが分かれたため、
+            # 対象トランクのプロファイルを restart する（新規ロード/変更反映の両対応）。
+            # reloadxml だけでは sofia プロファイルは再ロードされない。register=true の
+            # ゲートウェイは restart 後に直ちに REGISTER を試行するため、保存直後に
+            # HGW 側で登録状態を確認できる。削除されたトランクは XML から消えており
+            # プロファイルファイルも掃除済みなので、対象を指定しなければ復活しない。
+            for cmd in build_reload_commands([sync_gateway], changed=sync_gateway):
+                await client.api(cmd)
 
     async def notify(self, session: AsyncSession, *, sync_gateway: str | None = None) -> None:
         await self.regenerate(session)

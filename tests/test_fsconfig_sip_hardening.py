@@ -92,18 +92,27 @@ def test_internal_profile_has_apply_inbound_acl(tmp_path) -> None:
     assert 'value="millicall_trusted"' in content
 
 
+def _external_trunk_content(tmp_path) -> str:
+    """1 トランクを書き出し、その external_<name>.xml の内容を返す。"""
+    from millicall.telephony.fsconfig import TrunkConfig
+
+    _writer(tmp_path).write_all(
+        [],
+        trunks=[TrunkConfig(name="hgw", display_name="HGW", host="h", username="u", password="p")],
+    )
+    return (tmp_path / "sip_profiles" / "external_hgw.xml").read_text()
+
+
 def test_external_profile_has_apply_inbound_acl(tmp_path) -> None:
-    """external.xml に apply-inbound-acl=millicall_trusted が設定されていること。"""
-    _writer(tmp_path).write_all([])
-    content = (tmp_path / "sip_profiles" / "external.xml").read_text()
+    """external_<name>.xml に apply-inbound-acl=millicall_trusted が設定されていること。"""
+    content = _external_trunk_content(tmp_path)
     assert 'name="apply-inbound-acl"' in content
     assert 'value="millicall_trusted"' in content
 
 
 def test_external_profile_acl_is_not_none(tmp_path) -> None:
-    """external.xml の apply-inbound-acl が 'none' でないこと（regression: ACL無効化の防止）。"""
-    _writer(tmp_path).write_all([])
-    content = (tmp_path / "sip_profiles" / "external.xml").read_text()
+    """external_<name>.xml の apply-inbound-acl が 'none' でないこと（regression: ACL無効化の防止）。"""
+    content = _external_trunk_content(tmp_path)
     import re
 
     # apply-inbound-acl パラメータの value が 'none' でないこと（コメント内の 'none' は無視）
