@@ -41,6 +41,15 @@ if [ ! -f .env ]; then
   cs="${cs:-false}"
 
   sed -i "s#^MILLICALL_SIP_DOMAIN=.*#MILLICALL_SIP_DOMAIN=${lan_ip}#" .env
+  # sofia の sip-ip=auto は host ネットワーク Docker 環境でループバック(127.0.0.1)へ
+  # 誤解決することがあり、その場合 REGISTER の Contact が不正になって HGW が 503 を
+  # 返し外線トランクが登録できない。LAN IP を明示バインドしてこれを防ぐ。
+  # .env.example ではコメントアウトされているので、コメント有無どちらでも上書きする。
+  if grep -qE '^#? *MILLICALL_SIP_BIND_IP=' .env; then
+    sed -i -E "s|^#? *MILLICALL_SIP_BIND_IP=.*|MILLICALL_SIP_BIND_IP=${lan_ip}|" .env
+  else
+    printf 'MILLICALL_SIP_BIND_IP=%s\n' "${lan_ip}" >> .env
+  fi
   sed -i "s#^MILLICALL_COOKIE_SECURE=.*#MILLICALL_COOKIE_SECURE=${cs}#" .env
   if grep -q '^MILLICALL_VERSION=' .env; then
     sed -i "s#^MILLICALL_VERSION=.*#MILLICALL_VERSION=${ver}#" .env
