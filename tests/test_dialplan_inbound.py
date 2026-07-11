@@ -120,6 +120,21 @@ def test_workflow_number_parks_in_default(tmp_path):
     assert "ring_ready" not in dp
 
 
+def test_workflow_starts_inband_dtmf_detection(tmp_path):
+    """external プロファイルは RFC2833 無効（HGW 互換）のため、外線 DTMF は
+    インバンドのみ。workflow 拡張は answer 後・park 前に start_dtmf で
+    mod_spandsp のインバンド DTMF 検出を起動しないと DTMF イベントが出ない。"""
+    w = _writer(tmp_path)
+    w.write_all([], workflows=[WorkflowConfig(number="300", workflow_id=42)])
+    dp = (tmp_path / "dialplan" / "default.xml").read_text()
+    ET.fromstring(dp)
+    assert 'application="start_dtmf"' in dp
+    i_answer = dp.index('application="answer"', dp.index("workflow_300"))
+    i_dtmf = dp.index('application="start_dtmf"', dp.index("workflow_300"))
+    i_park = dp.index('application="park"', dp.index("workflow_300"))
+    assert i_answer < i_dtmf < i_park
+
+
 def test_workflow_ring_count_renders_sleep(tmp_path):
     w = _writer(tmp_path)
     w.write_all([], workflows=[WorkflowConfig(number="300", workflow_id=42, ring_count=3)])

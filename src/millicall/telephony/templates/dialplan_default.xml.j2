@@ -43,6 +43,9 @@
         <action application="sleep" data="{{ wf.ring_count * 6000 }}"/>
         {% endif %}
         <action application="answer"/>
+        {#- external プロファイルは HGW 互換のため RFC2833 無効（dtmf-type=none）。
+            外線 DTMF はインバンドのみなので spandsp のインバンド検出を起動する。 -#}
+        <action application="start_dtmf"/>
         <action application="park"/>
       </condition>
     </extension>
