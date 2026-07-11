@@ -2,10 +2,12 @@ import { Link, useRouterState } from "@tanstack/react-router";
 
 import { css } from "styled-system/css";
 
-import { NAV_SECTIONS } from "./nav";
+import { NAV_SECTIONS, activeNavPath } from "./nav";
 
 export function SideNav() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // 入れ子パス（/network と /network/remote）でも 1 件だけを強調する
+  const activePath = activeNavPath(pathname);
 
   return (
     <nav
@@ -56,7 +58,7 @@ export function SideNav() {
             ) : null}
             <ul className={css({ listStyle: "none", m: 0, p: 0, display: "flex", flexDirection: "column", gap: "1" })}>
               {section.items.map((item) => {
-                const active = item.path === "/" ? pathname === "/" : pathname.startsWith(item.path);
+                const active = item.path === activePath;
                 return (
                   <li key={item.path}>
                     <Link

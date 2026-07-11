@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { NAV_ITEMS, NAV_SECTIONS, titleForPath } from "../shell/nav";
+import { NAV_ITEMS, NAV_SECTIONS, activeNavPath, titleForPath } from "../shell/nav";
 
 /**
  * nav.ts のセクション構造テスト。
@@ -14,7 +14,7 @@ describe("NAV_SECTIONS", () => {
   });
 
   it("カテゴリの見出しと順序が定義どおり", () => {
-    expect(NAV_SECTIONS.map((s) => s.title)).toEqual([null, "回線", "デバイス設定", "監査"]);
+    expect(NAV_SECTIONS.map((s) => s.title)).toEqual([null, "回線", "設定", "監査"]);
   });
 
   it("NAV_ITEMS は全セクションのフラット列挙と一致する", () => {
@@ -34,6 +34,7 @@ describe("NAV_SECTIONS", () => {
       "/providers",
       "/devices",
       "/network",
+      "/network/remote",
       "/users",
       "/system",
       "/sso",
@@ -54,6 +55,8 @@ describe("titleForPath", () => {
     expect(titleForPath("/")).toBe("ダッシュボード");
     expect(titleForPath("/extensions")).toBe("内線");
     expect(titleForPath("/routes")).toBe("ルーティング");
+    expect(titleForPath("/network")).toBe("ネットワーク（内向き）");
+    expect(titleForPath("/network/remote")).toBe("ネットワーク（外向き）");
     expect(titleForPath("/settings/security")).toBe("セキュリティ");
     expect(titleForPath("/audit")).toBe("監査ログ");
   });
@@ -70,5 +73,25 @@ describe("titleForPath", () => {
 
   it("未知のパスはフォールバック名を返す", () => {
     expect(titleForPath("/unknown")).toBe("millicall");
+  });
+});
+
+describe("activeNavPath", () => {
+  it("完全一致のパスを返す", () => {
+    expect(activeNavPath("/")).toBe("/");
+    expect(activeNavPath("/extensions")).toBe("/extensions");
+  });
+
+  it("入れ子パスでは最長一致の 1 件だけを返す", () => {
+    expect(activeNavPath("/network")).toBe("/network");
+    expect(activeNavPath("/network/remote")).toBe("/network/remote");
+  });
+
+  it("詳細画面はセグメント境界のプレフィックスで一致する", () => {
+    expect(activeNavPath("/workflows/5")).toBe("/workflows");
+  });
+
+  it("未知のパスは null を返す", () => {
+    expect(activeNavPath("/unknown")).toBeNull();
   });
 });
