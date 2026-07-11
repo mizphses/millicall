@@ -17,10 +17,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.app_settings.service import effective_settings
-from millicall.config import http_port_suffix
 from millicall.crypto import SecretBox
 from millicall.deps import get_netd_client, get_secret_box, get_session, require_admin
 from millicall.models import NetworkConfig
+from millicall.network.apply import apply_network_config_to_netd
 from millicall.network.client import NetdClient, NetdError
 from millicall.network.validation import (
     is_valid_interface,
@@ -248,38 +248,21 @@ async def apply_network_config(
     cfg = await _get_or_create(session)
     await session.commit()
 
-    # settings は apply_nat の http_port 引数にも使う（スコープを if の外に出す）
+    # settings は apply 共通関数へ渡す（provisioning URL 構築・http_port に使う）。
     settings = request.app.state.settings
 
-    # provisioning_base_url が空の場合は lan_ip + core の HTTP ポートから構築する
-    # （標準ポート 80 は URL から省略。option 66 が指す先 = core の待受ポート）。
-    provisioning_url = cfg.provisioning_base_url
-    if not provisioning_url:
-        suffix = http_port_suffix(settings.http_port)
-        provisioning_url = f"http://{cfg.lan_ip}{suffix}/provisioning/"
-
     try:
-        await netd.apply_dhcp(
-            lan_interface=cfg.lan_interface,
-            lan_ip=cfg.lan_ip,
-            lan_prefix=cfg.lan_prefix,
-            dhcp_range_start=cfg.dhcp_range_start,
-            dhcp_range_end=cfg.dhcp_range_end,
-            dhcp_lease_hours=cfg.dhcp_lease_hours,
-            provisioning_url=provisioning_url,
-        )
-        await netd.apply_nat(
-            enabled=cfg.nat_enabled,
-            lan_ip=cfg.lan_ip,
-            lan_prefix=cfg.lan_prefix,
-            wan_interface=cfg.wan_interface,
-            http_port=settings.http_port,
-        )
+        await apply_network_config_to_netd(cfg, netd, settings)
     except NetdError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"netd への適用に失敗しました: {exc}",
         ) from exc
+
+    # 適用成功をマークする。これにより OS/コンテナ再起動後、core 起動時に
+    # このネットワーク設定が自動再適用されるようになる（applied=True のみ対象）。
+    cfg.applied = True
+    await session.commit()
 
     return ApplyResult(ok=True)
 
