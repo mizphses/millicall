@@ -23,6 +23,7 @@ export interface ConfigSchemaField {
     | "boolean"
     | "provider_ref"
     | "agent_ref"
+    | "workflow_ref"
     | "key_value_list"
     | "multi_select"
     | "json";
@@ -59,6 +60,12 @@ export interface ProviderOption {
 
 /** AI エージェント参照用。 */
 export interface AgentOption {
+  id: number;
+  name: string;
+}
+
+/** ワークフロー参照用（call_workflow の呼び出し先選択）。 */
+export interface WorkflowOption {
   id: number;
   name: string;
 }

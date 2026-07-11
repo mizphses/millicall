@@ -485,6 +485,15 @@ def test_node_type_catalog_has_all_types_with_fields() -> None:
     assert tf["transfer_type"]["options"] == ["blind"]
 
 
+def test_node_type_catalog_call_workflow_uses_workflow_ref() -> None:
+    """call_workflow の workflow_id は workflow_ref タイプで配信される（ドロップダウン用）。"""
+    catalog = node_type_catalog()
+    by_type = {c["type"]: c for c in catalog}
+    fields = {f["key"]: f for f in by_type["call_workflow"]["config_schema"]}
+    assert fields["workflow_id"]["type"] == "workflow_ref"
+    assert fields["workflow_id"]["required"] is True
+
+
 def test_node_type_catalog_output_handles_present() -> None:
     catalog = node_type_catalog()
     by_type = {c["type"]: c for c in catalog}

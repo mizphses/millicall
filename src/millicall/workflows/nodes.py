@@ -8,7 +8,7 @@ xyflow editor (``node_type_catalog``).
 
 Config field UI-type vocabulary (delivered to the frontend):
 ``string | textarea | number | select | multi_select | boolean | json |
-key_value_list | provider_ref | agent_ref``.
+key_value_list | provider_ref | agent_ref | workflow_ref``.
 """
 
 from __future__ import annotations
@@ -241,7 +241,7 @@ class HumanEscalationConfig(_Config):
 
 
 class CallWorkflowConfig(_Config):
-    workflow_id: int = Field(..., json_schema_extra=_ui("呼び出すワークフロー", "number"))
+    workflow_id: int = Field(..., json_schema_extra=_ui("呼び出すワークフロー", "workflow_ref"))
 
 
 # --------------------------------------------------------------------------- #
