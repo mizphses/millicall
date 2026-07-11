@@ -170,25 +170,34 @@ class TelephonyChangeListener:
         )
 
     @staticmethod
-    async def _esl_connect_and_reload(client: ESLClient, sync_gateway: str | None = None) -> None:
+    async def _esl_connect_and_reload(
+        client: ESLClient,
+        sync_gateway: str | None = None,
+        current_trunk_names: list[str] | None = None,
+    ) -> None:
         await client.connect()
         await client.reloadxml()
         if sync_gateway is not None:
             # トランクごとに external_<name> プロファイルが分かれたため、
-            # 対象トランクのプロファイルを restart する（新規ロード/変更反映の両対応）。
+            # 対象トランクのプロファイルを操作する。current_trunk_names（現存する
+            # トランク名）に対象があれば restart（新規ロード/変更反映）、無ければ
+            # stop（削除済み。XML/ファイルは掃除済みのため restart では旧 in-memory
+            # プロファイルが残りゴースト登録が続く。stop で明示破棄する）。
             # reloadxml だけでは sofia プロファイルは再ロードされない。register=true の
             # ゲートウェイは restart 後に直ちに REGISTER を試行するため、保存直後に
-            # HGW 側で登録状態を確認できる。削除されたトランクは XML から消えており
-            # プロファイルファイルも掃除済みなので、対象を指定しなければ復活しない。
-            for cmd in build_reload_commands([sync_gateway], changed=sync_gateway):
+            # HGW 側で登録状態を確認できる。
+            for cmd in build_reload_commands(current_trunk_names or [], changed=sync_gateway):
                 await client.api(cmd)
 
     async def notify(self, session: AsyncSession, *, sync_gateway: str | None = None) -> None:
         await self.regenerate(session)
+        # regenerate 後の DB 状態から現存トランク名を取得する。削除直後は対象が
+        # ここに含まれないため、_esl_connect_and_reload が stop を選択する。
+        current_trunk_names = [t.name for t in await self._load_trunks(session)]
         client = self._esl_factory()
         try:
             await asyncio.wait_for(
-                self._esl_connect_and_reload(client, sync_gateway),
+                self._esl_connect_and_reload(client, sync_gateway, current_trunk_names),
                 timeout=self._esl_timeout,
             )
         except TimeoutError:

@@ -98,8 +98,10 @@ services:
       - ./data/freeswitch/directory/default.xml:/etc/freeswitch/directory/default.xml
       - ./data/freeswitch/directory/default:/etc/freeswitch/directory/default
       - ./data/freeswitch/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml
-      - ./data/freeswitch/sip_profiles/internal.xml:/etc/freeswitch/sip_profiles/internal.xml
-      - ./data/freeswitch/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml
+      # sip_profiles はディレクトリごとマウントする。トランクごとに external_<name>.xml が
+      # 動的に生成/削除されるため、個別ファイルマウントでは新規プロファイルがコンテナから
+      # 見えない（旧構成の名残でフラップ/未登録になる）。internal.xml もこの配下で見える。
+      - ./data/freeswitch/sip_profiles:/etc/freeswitch/sip_profiles
       - ./data/freeswitch/dialplan/public.xml:/etc/freeswitch/dialplan/public.xml
       - ./data/freeswitch/autoload_configs/event_socket.conf.xml:/etc/freeswitch/autoload_configs/event_socket.conf.xml
       # ACL (millicall_trusted)。マウントしないとイメージ標準の acl.conf.xml が使われ、

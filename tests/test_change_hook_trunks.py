@@ -97,3 +97,63 @@ async def test_trunk_create_sends_gateway_sync(tmp_path) -> None:
     assert restart_idx is not None, f"external_hgw restart が送信されていない: {received}"
     # reloadxml → restart の順序(XML 再読込後にプロファイルを再ロード)
     assert reload_idx < restart_idx
+
+
+@pytest.mark.asyncio
+async def test_trunk_delete_stops_profile(tmp_path) -> None:
+    """トランク削除時、external_<name> stop が FreeSWITCH に送られること。
+
+    削除で XML/プロファイルファイルは掃除されるが、restart では旧 in-memory
+    プロファイルが残ってゴースト登録が続く。stop で明示破棄する（旧 killgw 相当）。
+    """
+    from millicall.config import Settings
+    from millicall.main import create_app
+    from tests.test_change_hook import _make_admin_client, _start_accepting_fake_fs
+
+    server, port, received = await _start_accepting_fake_fs()
+
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
+        fs_config_dir=tmp_path / "fs",
+        cookie_secure=False,
+        esl_host="127.0.0.1",
+        esl_port=port,
+        esl_timeout_seconds=2.0,
+    )
+    application = create_app(settings)
+    try:
+        async with (
+            application.router.lifespan_context(application),
+            _make_admin_client(application) as c,
+        ):
+            created = await c.post(
+                "/api/trunks",
+                json={
+                    "name": "hgw",
+                    "display_name": "HGW",
+                    "host": "192.168.1.1",
+                    "username": "0312345678",
+                    "password": "pw",
+                },
+            )
+            assert created.status_code == 201
+            tid = created.json()["id"]
+            received.clear()  # 作成時のコマンドを除外し、削除分だけを見る
+            deleted = await c.delete(f"/api/trunks/{tid}")
+            assert deleted.status_code == 204
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    reload_idx = next((i for i, cmd in enumerate(received) if "reloadxml" in cmd), None)
+    stop_idx = next(
+        (i for i, cmd in enumerate(received) if "sofia profile external_hgw stop" in cmd),
+        None,
+    )
+    # 削除対象を restart してはいけない（ゴースト登録の原因）
+    restart_sent = any("sofia profile external_hgw restart" in cmd for cmd in received)
+    assert reload_idx is not None, f"reloadxml が送信されていない: {received}"
+    assert stop_idx is not None, f"external_hgw stop が送信されていない: {received}"
+    assert not restart_sent, f"削除トランクに restart が送られている: {received}"
+    assert reload_idx < stop_idx
