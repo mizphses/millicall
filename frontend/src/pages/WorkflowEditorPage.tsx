@@ -595,7 +595,8 @@ export function WorkflowEditorPage() {
             onConnect={onConnect}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
-            deleteKeyCode="Delete"
+            // macOS の delete キーは KeyboardEvent.key === "Backspace" のため両方許可する
+            deleteKeyCode={["Backspace", "Delete"]}
             fitView
             fitViewOptions={{ padding: 0.2 }}
             minZoom={0.3}
