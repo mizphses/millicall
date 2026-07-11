@@ -24,6 +24,7 @@ from millicall.app_settings.service import (
 from millicall.audit import get_client_ip, record_audit
 from millicall.deps import get_session, require_admin
 from millicall.models import User
+from millicall.scim.roles import recalc_scim_roles
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -108,9 +109,24 @@ async def update_settings_api(
     await session.commit()
     svc.invalidate()
 
+    changed = set(validated) | set(body.reset)
+
+    # グループ→ロールマップの変更時は、全 origin="scim" ユーザーのロールを再計算する
+    # （マップが空 {} の場合は機能オフとして何もしない — recalc_scim_roles 側で保証）。
+    if "scim_group_role_map" in changed:
+        eff_after = await svc.effective()
+        role_changes = await recalc_scim_roles(
+            session,
+            eff_after.scim_group_role_map,
+            actor_user_id=admin.id,
+            actor_label=admin.username,
+            ip=get_client_ip(request),
+        )
+        if role_changes:
+            await session.commit()
+
     # 国際発信 allowlist / 匿名着信拒否は FreeSWITCH dialplan に展開されるため、
     # 変更時は設定ファイルを再生成して reloadxml する（ESL 不達でも保存自体は成功扱い）。
-    changed = set(validated) | set(body.reset)
     if changed & TELEPHONY_REGEN_KEYS:
         eff = await svc.effective()
         listener = request.app.state.change_listener

@@ -14,10 +14,11 @@
   PATCH  /scim/v2/Users/{id}          — ユーザー部分更新
   DELETE /scim/v2/Users/{id}          — ユーザー無効化（deactivate）
 
-  GET    /scim/v2/Groups              — グループ一覧（最小実装）
-  POST   /scim/v2/Groups             — グループ作成（最小実装）
-  GET    /scim/v2/Groups/{id}        — グループ取得（最小実装）
-  PATCH  /scim/v2/Groups/{id}        — グループ更新（最小実装）
+  GET    /scim/v2/Groups              — グループ一覧（displayName eq フィルター対応）
+  POST   /scim/v2/Groups             — グループ作成（DB 永続化）
+  GET    /scim/v2/Groups/{id}        — グループ取得
+  PATCH  /scim/v2/Groups/{id}        — グループ更新（displayName / members add・remove・replace）
+  DELETE /scim/v2/Groups/{id}        — グループ削除
 
 セキュリティ設計:
   - Bearer トークン: 平文は生成時に一度だけ返す。DB には Argon2 ハッシュのみ保存。
@@ -26,13 +27,15 @@
   - active=false / DELETE → enabled=False + bump_session_epoch → 即時セッション失効。
 
 グループ→ロールマッピング:
-  グループは薄いインメモリストアとして実装する（DB 永続化なし）。
-  displayName が "admins" のグループを管理者グループとして扱う。
-  グループメンバー追加時にそのユーザーの role を "admin" に昇格させる運用は
-  IdP 側の設定に委ねる（SCIM Groups は今回ロール昇格を行わない）。
-  「Groups は 500 を返さない」「基本 CRUD が動く」レベルの最小実装。
+  グループは scim_groups / scim_group_members テーブルに永続化する。
+  app_settings の scim_group_role_map（displayName → ロール）に基づき、
+  グループの作成・変更・削除時に影響を受ける origin="scim" ユーザーのロールを
+  再計算する（scim/roles.py 参照）。members には origin="scim" ユーザーのみ
+  格納し、それ以外の value は黙って無視する（ロールに影響させない）。
 """
 
+import contextlib
+import re
 import secrets
 from typing import Any
 
@@ -49,7 +52,8 @@ from millicall.audit import get_client_ip, record_audit
 from millicall.auth.security import bump_session_epoch, hash_password
 from millicall.deps import get_session, require_admin
 from millicall.gen import generate_password
-from millicall.models import AppSetting, User
+from millicall.models import AppSetting, ScimGroup, ScimGroupMember, User
+from millicall.scim.roles import recalc_scim_roles
 
 # ---------------------------------------------------------------------------
 # 定数
@@ -67,9 +71,8 @@ _SCHEMA_PATCHOP = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
 _hasher = PasswordHasher()
 
-# インメモリ グループストア（Groups の最小実装; 再起動でリセット）
-# {group_id: {"id": str, "displayName": str, "members": list}}
-_groups: dict[str, dict] = {}
+# PATCH remove の Entra 形式パス members[value eq "123"] を解析する正規表現。
+_MEMBER_PATH_RE = re.compile(r'^members\[value\s+eq\s+"?(?P<value>[^"\]]+)"?\]$')
 
 # ---------------------------------------------------------------------------
 # ルーター宣言
@@ -788,21 +791,141 @@ async def delete_user(
 
 
 # ---------------------------------------------------------------------------
-# Groups: 最小実装（インメモリ）
+# Groups: DB 永続化 + ロール自動付与
 # ---------------------------------------------------------------------------
 
 
+async def _load_group(session: AsyncSession, group_id: str) -> ScimGroup | None:
+    """URL パスの group_id からグループを取得する（数値でなければ None）。"""
+    try:
+        gid = int(group_id)
+    except ValueError:
+        return None
+    return await session.get(ScimGroup, gid)
+
+
+async def _group_member_ids(session: AsyncSession, group_id: int) -> set[int]:
+    """グループの現メンバー user_id 集合を返す。"""
+    rows = await session.scalars(
+        select(ScimGroupMember.user_id).where(ScimGroupMember.group_id == group_id)
+    )
+    return set(rows.all())
+
+
+async def _extract_member_ids(session: AsyncSession, members: object) -> set[int]:
+    """SCIM members 配列から格納可能な user_id 集合を抽出する。
+
+    value が数値でない・存在しない・origin != "scim" のメンバーは黙って無視する
+    （非 SCIM ユーザーをグループ経由のロール変更に巻き込まないため）。
+    """
+    if not isinstance(members, list):
+        return set()
+    candidate_ids: set[int] = set()
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        raw = m.get("value")
+        try:
+            candidate_ids.add(int(str(raw)))
+        except (TypeError, ValueError):
+            continue
+    if not candidate_ids:
+        return set()
+    rows = await session.scalars(
+        select(User.id).where(User.id.in_(candidate_ids), User.origin == "scim")
+    )
+    return set(rows.all())
+
+
+async def _write_member_diff(
+    session: AsyncSession, group_id: int, current_ids: set[int], new_ids: set[int]
+) -> None:
+    """メンバー集合の差分を scim_group_members に反映する。"""
+    for uid in sorted(new_ids - current_ids):
+        session.add(ScimGroupMember(group_id=group_id, user_id=uid))
+    removed = current_ids - new_ids
+    if removed:
+        rows = await session.scalars(
+            select(ScimGroupMember).where(
+                ScimGroupMember.group_id == group_id,
+                ScimGroupMember.user_id.in_(removed),
+            )
+        )
+        for row in rows:
+            await session.delete(row)
+    await session.flush()
+
+
+async def _recalc_affected(
+    request: Request, session: AsyncSession, affected_ids: set[int], ip: str | None
+) -> None:
+    """影響を受けたユーザーのロールを再計算する（マップ空なら no-op）。"""
+    settings = await effective_settings(request.app.state)
+    await recalc_scim_roles(
+        session,
+        settings.scim_group_role_map,
+        user_ids=affected_ids,
+        actor_label="scim",
+        ip=ip,
+    )
+
+
+async def _group_to_scim(session: AsyncSession, group: ScimGroup, base_url: str) -> dict[str, Any]:
+    """ScimGroup を SCIM Group 表現に変換する（members の display は username）。"""
+    rows = await session.execute(
+        select(User.id, User.username)
+        .join(ScimGroupMember, ScimGroupMember.user_id == User.id)
+        .where(ScimGroupMember.group_id == group.id)
+        .order_by(User.id)
+    )
+    members = [{"value": str(uid), "display": username} for uid, username in rows]
+    location = f"{base_url}/scim/v2/Groups/{group.id}"
+    return {
+        "schemas": [_SCHEMA_GROUP],
+        "id": str(group.id),
+        "displayName": group.display_name,
+        "externalId": group.external_id,
+        "members": members,
+        "meta": {
+            "resourceType": "Group",
+            "location": location,
+        },
+    }
+
+
 @scim_router.get("/Groups")
-async def list_groups(request: Request, session: AsyncSession = Depends(get_session)):
+async def list_groups(
+    request: Request,
+    filter: str | None = None,  # noqa: A002
+    startIndex: int = 1,  # noqa: N803
+    count: int = 100,
+    session: AsyncSession = Depends(get_session),
+):
     await _verify_bearer(request, session)
     base = str(request.base_url).rstrip("/")
-    groups = list(_groups.values())
+
+    stmt = select(ScimGroup).order_by(ScimGroup.id)
+    if filter:
+        # Groups は displayName eq のみ対応（Entra の重複チェックで使用される）。
+        parts = filter.strip().split(None, 2)
+        if len(parts) != 3 or parts[0] != "displayName" or parts[1].lower() != "eq":  # noqa: PLR2004
+            return _scim_error(400, f"Filter not supported: {filter}", "invalidFilter")
+        val = parts[2].strip().strip('"').strip("'")
+        stmt = stmt.where(ScimGroup.display_name == val)
+
+    groups = (await session.scalars(stmt)).all()
+    total = len(groups)
+    # ページング（Users と同じクランプ規則）。
+    safe_count = max(0, min(count, 1000))
+    start = max(startIndex, 1)
+    paged = groups[start - 1 : start - 1 + safe_count]
+    resources = [await _group_to_scim(session, g, base) for g in paged]
     return {
         "schemas": [_SCHEMA_LIST],
-        "totalResults": len(groups),
-        "startIndex": 1,
-        "itemsPerPage": len(groups),
-        "Resources": [_group_to_scim(g, base) for g in groups],
+        "totalResults": total,
+        "startIndex": start,
+        "itemsPerPage": len(resources),
+        "Resources": resources,
     }
 
 
@@ -810,10 +933,10 @@ async def list_groups(request: Request, session: AsyncSession = Depends(get_sess
 async def get_group(group_id: str, request: Request, session: AsyncSession = Depends(get_session)):
     await _verify_bearer(request, session)
     base = str(request.base_url).rstrip("/")
-    g = _groups.get(group_id)
-    if g is None:
+    group = await _load_group(session, group_id)
+    if group is None:
         return _scim_error(404, f"Group {group_id} not found")
-    return _group_to_scim(g, base)
+    return await _group_to_scim(session, group, base)
 
 
 @scim_router.post("/Groups", status_code=201)
@@ -825,16 +948,33 @@ async def create_group(
 ):
     await _verify_bearer(request, session)
     base = str(request.base_url).rstrip("/")
-    display_name = body.get("displayName", "").strip()
+    ip = get_client_ip(request)
+
+    display_name = str(body.get("displayName", "")).strip()
     if not display_name:
         return _scim_error(400, "displayName is required", "invalidValue")
 
-    group_id = secrets.token_urlsafe(12)
-    members = body.get("members", [])
-    g = {"id": group_id, "displayName": display_name, "members": members}
-    _groups[group_id] = g
+    group = ScimGroup(display_name=display_name, external_id=body.get("externalId") or None)
+    session.add(group)
+    await session.flush()  # id を確定させる
 
-    scim_group = _group_to_scim(g, base)
+    member_ids = await _extract_member_ids(session, body.get("members", []))
+    await _write_member_diff(session, group.id, set(), member_ids)
+
+    await record_audit(
+        session,
+        actor_user_id=None,
+        actor_label="scim",
+        action="scim.group.create",
+        target_type="scim_group",
+        target_id=str(group.id),
+        detail={"displayName": display_name, "members": len(member_ids)},
+        ip_address=ip,
+    )
+    await _recalc_affected(request, session, member_ids, ip)
+    await session.commit()
+
+    scim_group = await _group_to_scim(session, group, base)
     location = scim_group["meta"]["location"]
     response.headers["Location"] = location
     return JSONResponse(content=scim_group, status_code=201, headers={"Location": location})
@@ -849,56 +989,106 @@ async def patch_group(
 ):
     await _verify_bearer(request, session)
     base = str(request.base_url).rstrip("/")
-    g = _groups.get(group_id)
-    if g is None:
+    ip = get_client_ip(request)
+
+    group = await _load_group(session, group_id)
+    if group is None:
         return _scim_error(404, f"Group {group_id} not found")
+
+    current_ids = await _group_member_ids(session, group.id)
+    new_ids = set(current_ids)
 
     for op in body.get("Operations", []):
         op_name = str(op.get("op", "")).lower()
-        path = op.get("path", "")
+        path = str(op.get("path", "") or "")
         value = op.get("value")
         if op_name == "replace":
             if path == "displayName" and isinstance(value, str):
-                g["displayName"] = value
+                group.display_name = value
             elif path == "members" and isinstance(value, list):
-                g["members"] = value
+                new_ids = await _extract_member_ids(session, value)
             elif not path and isinstance(value, dict):
                 if "displayName" in value:
-                    g["displayName"] = value["displayName"]
-                if "members" in value:
-                    g["members"] = value["members"]
+                    group.display_name = str(value["displayName"])
+                if "members" in value and isinstance(value["members"], list):
+                    new_ids = await _extract_member_ids(session, value["members"])
         elif op_name == "add" and path == "members" and isinstance(value, list):
-            existing_refs = {m.get("value") for m in g["members"]}
-            for m in value:
-                if m.get("value") not in existing_refs:
-                    g["members"].append(m)
-        elif op_name == "remove" and path == "members":
-            remove_vals = {v.get("value") for v in (value if isinstance(value, list) else [])}
-            if remove_vals:
-                g["members"] = [m for m in g["members"] if m.get("value") not in remove_vals]
-            else:
-                g["members"] = []
+            new_ids |= await _extract_member_ids(session, value)
+        elif op_name == "remove":
+            # Entra 形式: path='members[value eq "123"]'（value なし）
+            matched = _MEMBER_PATH_RE.match(path)
+            if matched:
+                with contextlib.suppress(ValueError):
+                    new_ids.discard(int(matched.group("value")))
+            elif path == "members":
+                if isinstance(value, list):
+                    remove_ids: set[int] = set()
+                    for v in value:
+                        if not isinstance(v, dict):
+                            continue
+                        try:
+                            remove_ids.add(int(str(v.get("value"))))
+                        except (TypeError, ValueError):
+                            continue
+                    new_ids -= remove_ids
+                else:
+                    # value なしの remove members = 全メンバー削除
+                    new_ids = set()
+        # 未知の op / path は無視（Users PATCH と同じ寛容ポリシー）
 
-    return _group_to_scim(g, base)
+    await _write_member_diff(session, group.id, current_ids, new_ids)
+
+    await record_audit(
+        session,
+        actor_user_id=None,
+        actor_label="scim",
+        action="scim.group.patch",
+        target_type="scim_group",
+        target_id=str(group.id),
+        detail={"displayName": group.display_name, "members": len(new_ids)},
+        ip_address=ip,
+    )
+    # displayName 変更もロールに影響するため、変更前後の全関係メンバーを再計算する。
+    await _recalc_affected(request, session, current_ids | new_ids, ip)
+    await session.commit()
+    return await _group_to_scim(session, group, base)
 
 
-# ---------------------------------------------------------------------------
-# グループ変換
-# ---------------------------------------------------------------------------
+@scim_router.delete("/Groups/{group_id}", status_code=204)
+async def delete_group(
+    group_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """グループ削除。所属していたメンバーのロールを再計算する。"""
+    await _verify_bearer(request, session)
+    ip = get_client_ip(request)
 
+    group = await _load_group(session, group_id)
+    if group is None:
+        return _scim_error(404, f"Group {group_id} not found")
 
-def _group_to_scim(g: dict, base_url: str) -> dict[str, Any]:
-    location = f"{base_url}/scim/v2/Groups/{g['id']}"
-    return {
-        "schemas": [_SCHEMA_GROUP],
-        "id": g["id"],
-        "displayName": g["displayName"],
-        "members": g.get("members", []),
-        "meta": {
-            "resourceType": "Group",
-            "location": location,
-        },
-    }
+    gid = group.id
+    member_ids = await _group_member_ids(session, gid)
+    # SQLite の FK CASCADE に依存せず members 行を明示的に削除する。
+    await _write_member_diff(session, gid, member_ids, set())
+    display_name = group.display_name
+    await session.delete(group)
+    await session.flush()
+
+    await record_audit(
+        session,
+        actor_user_id=None,
+        actor_label="scim",
+        action="scim.group.delete",
+        target_type="scim_group",
+        target_id=str(gid),
+        detail={"displayName": display_name, "members": len(member_ids)},
+        ip_address=ip,
+    )
+    await _recalc_affected(request, session, member_ids, ip)
+    await session.commit()
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------
