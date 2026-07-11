@@ -12,6 +12,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from millicall.ai_agents.router import router as ai_agents_router
+from millicall.app_settings.router import router as app_settings_router
+from millicall.app_settings.service import SettingsService
 from millicall.audit_router import router as audit_router
 from millicall.auth.csrf import CsrfMiddleware
 from millicall.auth.router import router as auth_router
@@ -134,7 +136,17 @@ async def lifespan(app: FastAPI):
     # 持たせるため sessionmaker を注入する（監査 C1）。
     if _mcp_provider is not None:
         _mcp_provider.set_sessionmaker(app.state.sessionmaker)
-    writer = build_config_writer(settings, app.state.secrets)
+
+    # 管理画面から編集可能な設定のマージ層（env デフォルト + app_settings 上書き）。
+    # 以降の起動処理・各ルーターは settings_service.effective() 経由で実効設定を読む。
+    from millicall.crypto import SecretBox
+
+    app.state.settings_service = SettingsService(
+        app.state.sessionmaker, settings, SecretBox(app.state.secrets.master_key)
+    )
+    # FreeSWITCH 設定（国際発信 allowlist / 匿名着信拒否）は DB 上書きを含む実効設定で生成する。
+    effective = await app.state.settings_service.effective()
+    writer = build_config_writer(effective, app.state.secrets)
     esl_factory = build_esl_factory(settings, app.state.secrets)
     app.state.esl_factory = esl_factory
     listener = TelephonyChangeListener(
@@ -300,6 +312,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ルーター登録より前に追加することで全ルートに適用される。
     app.add_middleware(CsrfMiddleware)
     app.include_router(auth_router)
+    app.include_router(app_settings_router)
     app.include_router(saml_router)
     app.include_router(totp_router)
     app.include_router(audit_router)

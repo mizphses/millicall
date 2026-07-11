@@ -126,6 +126,23 @@ class FreeswitchConfigWriter:
         # Markup でラップすることで HTML autoescape による二重エスケープを防ぐ。
         self._env.filters["re_escape"] = _re_escape_safe
 
+    def update_outbound_policy(
+        self, international_allow_prefixes: list[str], sip_reject_anonymous: bool
+    ) -> None:
+        """発信ポリシー（国際発信 allowlist / 匿名着信拒否）を差し替える。
+
+        管理画面からの設定変更（再起動なし反映）用。プレフィックスは __init__ と
+        同一規則（2〜8桁の数字のみ）で検証し、不正値は ValueError を送出する。
+        """
+        for p in international_allow_prefixes:
+            if not _SAFE_PREFIX_RE.match(p):
+                raise ValueError(
+                    f"国際発信allowlistに無効なプレフィックスが含まれています: "
+                    f"'{p}' （2〜8桁の数字のみ）"
+                )
+        self._base["international_allow_prefixes"] = list(international_allow_prefixes)
+        self._base["sip_reject_anonymous"] = sip_reject_anonymous
+
     def _render(self, template: str, extra: dict | None = None) -> str:
         context = dict(self._base)
         if extra:

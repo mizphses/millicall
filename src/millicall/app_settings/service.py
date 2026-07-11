@@ -230,7 +230,11 @@ class SettingsService:
         if key in SECRET_KEYS:
             return self._box.decrypt(raw)
         value = json.loads(raw)
-        return TypeAdapter(Settings.model_fields[key].annotation).validate_python(value)
+        validated = TypeAdapter(Settings.model_fields[key].annotation).validate_python(value)
+        # 手動編集で書式不正（例: 国際発信プレフィックス）が混入しても起動を止めないよう、
+        # 読み取り側でもキー固有検証を行う（失敗時は _load が env 値へフォールバックする）。
+        _validate_extra(key, validated)
+        return validated
 
     async def apply_update(
         self,
