@@ -21,6 +21,7 @@ import { CdrPage } from "../pages/CdrPage";
 import { WorkflowsPage } from "../pages/WorkflowsPage";
 import { WorkflowEditorPage } from "../pages/WorkflowEditorPage";
 import { NetworkPage } from "../pages/NetworkPage";
+import { NetworkRemotePage } from "../pages/NetworkRemotePage";
 import { DevicesPage } from "../pages/DevicesPage";
 import { UsersPage } from "../pages/UsersPage";
 import { SecurityPage } from "../pages/SecurityPage";
@@ -121,10 +122,19 @@ const workflowEditorRoute = createRoute({
   component: WorkflowEditorPage,
 });
 
+// ネットワーク（内向き）: 電話管理用 LAN 側（LAN / DHCP / NAT）。
+// 従来の /network パスを互換のため維持する。
 const networkRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/network",
   component: NetworkPage,
+});
+
+// ネットワーク（外向き）: リモートアクセス側（Tailscale など）。
+const networkRemoteRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: "/network/remote",
+  component: NetworkRemotePage,
 });
 
 const devicesRoute = createRoute({
@@ -179,6 +189,7 @@ const routeTree = rootRoute.addChildren([
     workflowsRoute,
     workflowEditorRoute,
     networkRoute,
+    networkRemoteRoute,
     devicesRoute,
     usersRoute,
     securityRoute,
