@@ -22,10 +22,12 @@ from millicall.network.validation import (
 )
 
 # dnsmasq.conf の dhcp-option 行に許容する URL パターン。
-# http://<IPv4 アドレス>:<ポート>/<パス> のみ許可。
+# http://<IPv4 アドレス>[:<ポート>]/<パス> のみ許可。ポートは任意（省略時は 80 扱い）。
+# core は HTTP ポート 80 のとき http_port_suffix でポートを省略した
+# http://<lan_ip>/provisioning/ を自動生成するため、ポート無しも受理する必要がある。
 # HTTPS / ホスト名 / シェルメタ文字 / 空白 / 改行はすべて拒否。
 _PROVISIONING_URL_RE = re.compile(
-    r"\Ahttp://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})(/[^\s\r\n]*)?\Z"
+    r"\Ahttp://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::(\d{1,5}))?(/[^\s\r\n]*)?\Z"
 )
 
 # シェルメタ文字・改行・制御文字を検出する正規表現
@@ -68,9 +70,11 @@ def _validate_provisioning_url(url: str, lan_ip: str) -> None:
             f"provisioning_url のホスト ({host_in_url!r}) が lan_ip ({lan_ip!r}) と一致しません"
         )
 
-    port = int(port_str)
-    if not (1 <= port <= 65535):
-        raise ValueError(f"provisioning_url のポート {port} は 1–65535 の範囲外です")
+    # ポートは任意。省略時は 80（http デフォルト）として扱い、範囲チェックはスキップする。
+    if port_str is not None:
+        port = int(port_str)
+        if not (1 <= port <= 65535):
+            raise ValueError(f"provisioning_url のポート {port} は 1–65535 の範囲外です")
 
 
 def _cidr_to_netmask(prefix: int) -> str:
