@@ -8,8 +8,8 @@ import { css } from "styled-system/css";
 import { input } from "styled-system/recipes";
 
 import { api } from "../../api/client";
-import { AGENTS_KEY, PROVIDERS_KEY } from "../../queryKeys";
-import type { AgentOption, ConfigSchemaField, ProviderOption } from "./types";
+import { AGENTS_KEY, PROVIDERS_KEY, WORKFLOWS_KEY } from "../../queryKeys";
+import type { AgentOption, ConfigSchemaField, ProviderOption, WorkflowOption } from "./types";
 
 interface ConfigPanelProps {
   /** ノード ID（表示用）。 */
@@ -24,6 +24,8 @@ interface ConfigPanelProps {
   onChange: (key: string, value: unknown) => void;
   /** ノードを削除するボタン用コールバック。 */
   onDelete: () => void;
+  /** 編集中のワークフロー ID（call_workflow の選択肢から自分自身を除外する）。 */
+  currentWorkflowId: number;
 }
 
 export function ConfigPanel({
@@ -33,6 +35,7 @@ export function ConfigPanel({
   schema,
   onChange,
   onDelete,
+  currentWorkflowId,
 }: ConfigPanelProps) {
   const providersQuery = useQuery({
     queryKey: PROVIDERS_KEY,
@@ -52,8 +55,19 @@ export function ConfigPanel({
     },
   });
 
+  const workflowsQuery = useQuery({
+    queryKey: WORKFLOWS_KEY,
+    queryFn: async () => {
+      const { data, error } = await api.GET("/api/workflows");
+      if (error) throw new Error("ワークフロー取得失敗");
+      return (data ?? []) as WorkflowOption[];
+    },
+  });
+
   const providers = providersQuery.data ?? [];
   const agents = agentsQuery.data ?? [];
+  // 自己再帰を防ぐため、編集中のワークフロー自身は呼び出し先候補から外す。
+  const workflows = (workflowsQuery.data ?? []).filter((w) => w.id !== currentWorkflowId);
 
   return (
     <div
@@ -85,6 +99,7 @@ export function ConfigPanel({
             onChange={(v) => onChange(field.key, v)}
             providers={providers}
             agents={agents}
+            workflows={workflows}
           />
         ))}
         {schema.length === 0 && (
@@ -140,9 +155,10 @@ interface FieldProps {
   onChange: (v: unknown) => void;
   providers: ProviderOption[];
   agents: AgentOption[];
+  workflows: WorkflowOption[];
 }
 
-function SchemaField({ field, value, onChange, providers, agents }: FieldProps) {
+function SchemaField({ field, value, onChange, providers, agents, workflows }: FieldProps) {
   const labelEl = (
     <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
       {field.label}
@@ -312,6 +328,27 @@ function SchemaField({ field, value, onChange, providers, agents }: FieldProps) 
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+
+    case "workflow_ref": {
+      const numVal = value === null || value === undefined ? "" : String(value);
+      return (
+        <label className={css({ display: "block" })}>
+          {labelEl}
+          <select
+            className={input()}
+            value={numVal}
+            onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+          >
+            <option value="">-- 選択してください --</option>
+            {workflows.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
               </option>
             ))}
           </select>

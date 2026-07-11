@@ -629,6 +629,7 @@ export function WorkflowEditorPage() {
               schema={typedSelectedNode.data.configSchema}
               onChange={onConfigChange}
               onDelete={deleteSelectedNode}
+              currentWorkflowId={workflowId}
             />
           </aside>
         )}
