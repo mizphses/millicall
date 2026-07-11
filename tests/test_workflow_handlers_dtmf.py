@@ -466,3 +466,66 @@ async def test_menu_collect_uses_empty_terminator() -> None:
     await handle_menu(node, ctx)
 
     fake_dtmf.collect.assert_awaited_with(max_digits=1, timeout=7, terminator="")
+
+
+@pytest.mark.asyncio
+async def test_dtmf_input_tts_prompt_uses_provider_override() -> None:
+    """dtmf_input の TTS プロンプトは config.tts_provider_id のプロバイダで再生する。"""
+    from millicall.workflows.nodes import DtmfInputConfig, DtmfInputNode
+
+    ctx = make_ctx()
+    ctx.primitives = make_fake_primitives()
+    ctx.dtmf = FakeBoundDtmf("1")
+    override_tts = object()
+
+    async def resolver(pid: int):
+        return override_tts if pid == 5 else None
+
+    ctx.provider_resolver = resolver
+    node = DtmfInputNode(
+        id="di_tts",
+        type="dtmf_input",
+        config=DtmfInputConfig(
+            prompt_mode="tts",
+            prompt_text="番号を押してください",
+            tts_provider_id=5,
+        ),
+    )
+
+    await handle_dtmf_input(node, ctx)
+
+    ctx.primitives.say.assert_awaited_once_with("番号を押してください", tts=override_tts)
+
+
+@pytest.mark.asyncio
+async def test_menu_invalid_text_uses_provider_override() -> None:
+    """menu の invalid_text も config.tts_provider_id のプロバイダで再生する。"""
+    from millicall.workflows.nodes import MenuConfig, MenuNode
+
+    ctx = make_ctx()
+    ctx.primitives = make_fake_primitives()
+    fake_dtmf = MagicMock()
+    fake_dtmf.collect = AsyncMock(side_effect=["", "1"])
+    ctx.dtmf = fake_dtmf
+    override_tts = object()
+
+    async def resolver(pid: int):
+        return override_tts if pid == 9 else None
+
+    ctx.provider_resolver = resolver
+    node = MenuNode(
+        id="mn_tts",
+        type="menu",
+        config=MenuConfig(
+            prompt_mode="none",
+            prompt_text="番号を押してください",
+            invalid_text="もう一度どうぞ",
+            tts_provider_id=9,
+            max_retries=1,
+        ),
+    )
+
+    result = await handle_menu(node, ctx)
+
+    assert result == "1"
+    ctx.primitives.say.assert_awaited_once_with("もう一度どうぞ", tts=override_tts)

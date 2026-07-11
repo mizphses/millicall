@@ -83,9 +83,13 @@ class CallPrimitives:
             self._esl, command, lock=self._lock, reconnect=self._reconnect
         )
 
-    async def say(self, text: str) -> float:
-        """text を合成して再生し、再生秒数を返す。"""
-        pcm = await self._tts.synthesize(text)
+    async def say(self, text: str, *, tts=None) -> float:
+        """text を合成して再生し、再生秒数を返す。
+
+        tts が指定された場合は既定プロバイダの代わりにそのプロバイダで合成する
+        （ワークフローノードの tts_provider_id オーバーライド用）。
+        """
+        pcm = await (tts if tts is not None else self._tts).synthesize(text)
         self._seq += 1
         path = self._tts_dir / f"mcp_say_{self._call_uuid}_{self._seq}.wav"
         path.write_bytes(pcm8k_to_wav(pcm))
@@ -147,9 +151,11 @@ class CallPrimitives:
             await self._bgapi(f"uuid_record {self._call_uuid} stop {path}")
         return path
 
-    async def say_and_listen(self, text: str, max_seconds: int = 15) -> tuple[str, str]:
+    async def say_and_listen(
+        self, text: str, max_seconds: int = 15, *, tts=None
+    ) -> tuple[str, str]:
         """say → listen を 1 ターンで行い、(話した内容, 聞き取り) を返す。"""
-        await self.say(text)
+        await self.say(text, tts=tts)
         heard = await self.listen(max_seconds)
         return text, heard
 

@@ -80,6 +80,10 @@ class ChannelContext:
     # Lifecycle flag: set once the channel has been (or is being) hung up.
     hung_up: bool = False
 
+    # resolve_provider() の per-call キャッシュ（menu リトライ等で同一プロバイダを
+    # 毎回 DB から再構築しないため。成功した解決結果のみ保持する）。
+    _provider_cache: dict[int, Any] = field(default_factory=dict, repr=False)
+
     # --- variables ------------------------------------------------------- #
 
     def render(self, text: str) -> str:
@@ -114,7 +118,29 @@ class ChannelContext:
         pid = provider_id if provider_id is not None else self.default_tts_provider_id
         if pid is None or self.provider_resolver is None:
             return None
-        return await self.provider_resolver(pid)
+        if pid in self._provider_cache:
+            return self._provider_cache[pid]
+        provider = await self.provider_resolver(pid)
+        if provider is not None:
+            self._provider_cache[pid] = provider
+        return provider
+
+    async def say(self, text: str, tts_provider_id: int | None = None) -> None:
+        """text を primitives.say で再生する（ノードの TTS プロバイダ上書き対応）。
+
+        ``tts_provider_id`` が指定されていればそのプロバイダを解決して合成に使う。
+        解決失敗（None）時は既定 TTS にフォールバックする。
+        text が空 / primitives 未接続なら何もしない（graceful skip）。
+        """
+        if not text or self.primitives is None:
+            return
+        tts = None
+        if tts_provider_id is not None:
+            tts = await self.resolve_provider(tts_provider_id)
+        if tts is not None:
+            await self.primitives.say(text, tts=tts)
+        else:
+            await self.primitives.say(text)
 
     async def resolve_agent(self, agent_id: int) -> Any:
         """Resolve an agent id via the injected resolver (None if not wired)."""

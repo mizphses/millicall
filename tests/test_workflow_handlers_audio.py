@@ -223,6 +223,70 @@ def test_play_audio_registered_in_handlers() -> None:
     assert "play_audio" in HANDLERS
 
 
+@pytest.mark.asyncio
+async def test_play_audio_tts_provider_id_overrides_tts() -> None:
+    """config.tts_provider_id が指定されたら resolve_provider で解決した TTS を
+    say() の tts オーバーライドとして渡す。"""
+    ctx = make_ctx()
+    ctx.primitives = make_fake_primitives()
+    override_tts = object()
+    resolved: list[int] = []
+
+    async def resolver(pid: int):
+        resolved.append(pid)
+        return override_tts
+
+    ctx.provider_resolver = resolver
+    node = make_play_audio_node(tts_text="こんにちは", tts_provider_id=7)
+
+    await handle_play_audio(node, ctx)
+
+    assert resolved == [7]
+    ctx.primitives.say.assert_awaited_once_with("こんにちは", tts=override_tts)
+
+
+@pytest.mark.asyncio
+async def test_play_audio_tts_provider_resolve_failure_falls_back() -> None:
+    """resolve_provider が None を返したら既定 TTS（オーバーライドなし）で再生する。"""
+    ctx = make_ctx()
+    ctx.primitives = make_fake_primitives()
+
+    async def resolver(pid: int):
+        return None
+
+    ctx.provider_resolver = resolver
+    node = make_play_audio_node(tts_text="こんにちは", tts_provider_id=7)
+
+    await handle_play_audio(node, ctx)
+
+    ctx.primitives.say.assert_awaited_once_with("こんにちは")
+
+
+@pytest.mark.asyncio
+async def test_voicemail_greeting_uses_tts_provider_override(tmp_path: Path) -> None:
+    """voicemail の greeting も config.tts_provider_id のプロバイダで再生する。"""
+    from millicall.workflows.nodes import VoicemailConfig, VoicemailNode
+
+    ctx = make_ctx()
+    ctx.primitives = make_fake_primitives()
+    ctx.tts_dir = tmp_path / "tts_cache"
+    override_tts = object()
+
+    async def resolver(pid: int):
+        return override_tts if pid == 3 else None
+
+    ctx.provider_resolver = resolver
+    node = VoicemailNode(
+        id="vm1",
+        type="voicemail",
+        config=VoicemailConfig(mailbox="box1", greeting_text="ご用件をどうぞ", tts_provider_id=3),
+    )
+
+    await handle_voicemail(node, ctx)
+
+    ctx.primitives.say.assert_awaited_once_with("ご用件をどうぞ", tts=override_tts)
+
+
 # =========================================================================== #
 # transfer
 # =========================================================================== #
@@ -608,6 +672,41 @@ async def test_primitives_record_rejects_bad_duration(tmp_path: Path, bad_dur: o
     with pytest.raises(ValueError):
         await prim.record(str(tmp_path / "vm.wav"), max_seconds=bad_dur)  # type: ignore[arg-type]
     assert prim._esl.cmds == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_primitives_say_uses_tts_override(tmp_path: Path) -> None:
+    """say(tts=...) はオーバーライドされた TTS で合成する（既定 TTS は使わない）。"""
+    from millicall.mcp_server.primitives import CallPrimitives
+
+    class _RecordingTts:
+        def __init__(self) -> None:
+            self.texts: list[str] = []
+
+        async def synthesize(self, text: str) -> bytes:
+            self.texts.append(text)
+            return b"\x00\x01" * 100
+
+    default_tts = _RecordingTts()
+    override_tts = _RecordingTts()
+
+    cc = MagicMock()
+    cc.play_file = AsyncMock()
+
+    prim = CallPrimitives(
+        esl=_FakeEsl(),
+        call_uuid="uuid-say",
+        call_control=cc,
+        tts=default_tts,
+        stt=_FakeStt(),
+        tts_dir=tmp_path,
+    )
+
+    await prim.say("上書きテスト", tts=override_tts)
+    await prim.say("既定テスト")
+
+    assert override_tts.texts == ["上書きテスト"]
+    assert default_tts.texts == ["既定テスト"]
 
 
 def test_safe_mailbox_strips_metacharacters() -> None:

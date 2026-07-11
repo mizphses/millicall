@@ -749,3 +749,35 @@ def test_all_three_ai_handlers_registered() -> None:
     assert "ai_conversation" in HANDLERS
     assert "intent_detection" in HANDLERS
     assert "collect_info" in HANDLERS
+
+
+@pytest.mark.asyncio
+async def test_collect_info_uses_tts_provider_override() -> None:
+    """collect_info の質問再生は config.tts_provider_id のプロバイダで行う。"""
+    from millicall.workflows.nodes import CollectInfoConfig, CollectInfoNode
+
+    ctx = make_ctx()
+    ctx.primitives = make_fake_primitives(say_and_listen_returns=[("q", "山田")])
+    override_tts = object()
+
+    async def resolver(pid: int):
+        return override_tts if pid == 4 else None
+
+    ctx.provider_resolver = resolver
+    node = CollectInfoNode(
+        id="ci_tts",
+        type="collect_info",
+        config=CollectInfoConfig(
+            fields={"name": "お名前を教えてください"},
+            agent_id=1,
+            tts_provider_id=4,
+            confirmation=False,
+        ),
+    )
+
+    await handle_collect_info(node, ctx)
+
+    ctx.primitives.say_and_listen.assert_awaited_once_with(
+        "お名前を教えてください", tts=override_tts
+    )
+    assert ctx.get_var("name") == "山田"

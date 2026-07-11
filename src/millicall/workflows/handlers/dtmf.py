@@ -48,18 +48,18 @@ async def _play_prompt(
     prompt_mode: str,
     prompt_text: str,
     ctx: ChannelContext,
+    tts_provider_id: int | None = None,
 ) -> None:
     """プロンプトモードに従ってプロンプトを再生する。
 
     * ``tts``: prompt_text が空でなく ctx.primitives が利用可能なら
-      ``ctx.primitives.say(ctx.render(prompt_text))`` を呼ぶ。
+      ``ctx.say()`` で再生する（tts_provider_id 指定時はそのプロバイダで合成）。
     * ``beep``: ctx.call_control が利用可能なら tone_stream を再生する。
     * ``none``: 何もしない。
     """
     if prompt_mode == "tts":
         text = ctx.render(prompt_text) if prompt_text else ""
-        if text and ctx.primitives is not None:
-            await ctx.primitives.say(text)
+        await ctx.say(text, tts_provider_id)
     elif prompt_mode == "beep":
         if ctx.call_control is not None:
             await ctx.call_control.play_file(_BEEP_TONE)
@@ -86,7 +86,7 @@ async def handle_dtmf_input(node: object, ctx: ChannelContext) -> str:
     config = node.config  # type: ignore[attr-defined]
 
     # 1. プロンプト再生
-    await _play_prompt(config.prompt_mode, config.prompt_text, ctx)
+    await _play_prompt(config.prompt_mode, config.prompt_text, ctx, config.tts_provider_id)
 
     # 2. DTMF コレクタ未接続 → タイムアウト扱い
     if ctx.dtmf is None:
@@ -138,7 +138,7 @@ async def handle_menu(node: object, ctx: ChannelContext) -> str:
 
     for attempt in range(config.max_retries + 1):
         # プロンプト再生（リトライ時も毎回再生）
-        await _play_prompt(config.prompt_mode, config.prompt_text, ctx)
+        await _play_prompt(config.prompt_mode, config.prompt_text, ctx, config.tts_provider_id)
 
         # 単桁収集（終端キーなし: terminator=""）
         digit: str = await ctx.dtmf.collect(
@@ -153,7 +153,7 @@ async def handle_menu(node: object, ctx: ChannelContext) -> str:
 
         # 無効 / タイムアウト: 最後の試行でなければ invalid_text を再生してリトライ
         is_last_attempt = attempt >= config.max_retries
-        if not is_last_attempt and config.invalid_text and ctx.primitives is not None:
-            await ctx.primitives.say(ctx.render(config.invalid_text))
+        if not is_last_attempt and config.invalid_text:
+            await ctx.say(ctx.render(config.invalid_text), config.tts_provider_id)
 
     return "timeout"

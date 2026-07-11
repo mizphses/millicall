@@ -102,10 +102,8 @@ async def handle_play_audio(node: object, ctx: ChannelContext) -> None:
         elif ctx.call_control is not None:
             await ctx.call_control.play_file(config.file_path)
     else:
-        # TTS 合成→再生
-        text = ctx.render(config.tts_text)
-        if text and ctx.primitives is not None:
-            await ctx.primitives.say(text)
+        # TTS 合成→再生（tts_provider_id 指定時はそのプロバイダで合成）
+        await ctx.say(ctx.render(config.tts_text), config.tts_provider_id)
 
     return None
 
@@ -149,11 +147,9 @@ async def handle_voicemail(node: object, ctx: ChannelContext) -> None:
     """
     config = node.config  # type: ignore[attr-defined]
 
-    # 1. Greeting 再生
-    if config.greeting_text and ctx.primitives is not None:
-        greeting = ctx.render(config.greeting_text)
-        if greeting:
-            await ctx.primitives.say(greeting)
+    # 1. Greeting 再生（tts_provider_id 指定時はそのプロバイダで合成）
+    if config.greeting_text:
+        await ctx.say(ctx.render(config.greeting_text), config.tts_provider_id)
 
     # 2. 録音 & 3. パス格納
     if ctx.primitives is not None:
@@ -189,11 +185,9 @@ async def handle_human_escalation(node: object, ctx: ChannelContext) -> None:
     """
     config = node.config  # type: ignore[attr-defined]
 
-    # 1. Announcement 再生
-    if config.announcement_text and ctx.primitives is not None:
-        announcement = ctx.render(config.announcement_text)
-        if announcement:
-            await ctx.primitives.say(announcement)
+    # 1. Announcement 再生（tts_provider_id 指定時はそのプロバイダで合成）
+    if config.announcement_text:
+        await ctx.say(ctx.render(config.announcement_text), config.tts_provider_id)
 
     # 2. 転送
     if ctx.call_control is not None:

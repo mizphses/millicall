@@ -125,20 +125,26 @@ async def handle_collect_info(node: object, ctx: ChannelContext) -> None:
             ctx.set_var(var_name, "")
         return None
 
+    # tts_provider_id 指定時はそのプロバイダで質問文を合成する（解決失敗は既定 TTS）
+    tts = None
+    if config.tts_provider_id is not None:
+        tts = await ctx.resolve_provider(config.tts_provider_id)
+    say_kwargs = {"tts": tts} if tts is not None else {}
+
     for var_name, question in config.fields.items():
         rendered_question = ctx.render(question)
 
         # 初回質問
-        _, answer = await ctx.primitives.say_and_listen(rendered_question)
+        _, answer = await ctx.primitives.say_and_listen(rendered_question, **say_kwargs)
 
         if config.confirmation and answer:
             # 確認: 回答を読み上げて yes/no を聞く
             confirm_prompt = f"{answer} でよろしいですか？"
-            _, confirm_reply = await ctx.primitives.say_and_listen(confirm_prompt)
+            _, confirm_reply = await ctx.primitives.say_and_listen(confirm_prompt, **say_kwargs)
 
             if _is_negative(confirm_reply):
                 # 否定 → 1 回だけ再質問し、その答えを使う
-                _, answer = await ctx.primitives.say_and_listen(rendered_question)
+                _, answer = await ctx.primitives.say_and_listen(rendered_question, **say_kwargs)
 
         ctx.set_var(var_name, answer)
 
@@ -276,15 +282,22 @@ async def handle_ai_conversation(node: object, ctx: ChannelContext) -> None:
     else:
         greeting = ""
 
-    # ----- 2. LLM プロバイダ解決 -----
+    # ----- 2. LLM / TTS プロバイダ解決 -----
     llm = None
     if agent is not None:
         llm = await ctx.resolve_provider(agent.llm_provider_id)
 
+    # エージェントに TTS プロバイダが設定されていればそれで再生する
+    # （primitives 既定の workflow TTS ではなくエージェント設定を優先）。
+    tts = None
+    if agent is not None and getattr(agent, "tts_provider_id", None):
+        tts = await ctx.resolve_provider(agent.tts_provider_id)
+    say_kwargs = {"tts": tts} if tts is not None else {}
+
     # LLM または primitives が利用不可 → graceful skip（Task 9 で接続される）
     if llm is None or ctx.primitives is None:
         if greeting and ctx.primitives is not None:
-            await ctx.primitives.say(ctx.render(greeting))
+            await ctx.primitives.say(ctx.render(greeting), **say_kwargs)
         if llm is None:
             logger.warning(
                 "ai_conversation: LLM プロバイダを解決できません。"
@@ -294,7 +307,7 @@ async def handle_ai_conversation(node: object, ctx: ChannelContext) -> None:
 
     # ----- 3. 挨拶再生 -----
     if greeting:
-        await ctx.primitives.say(ctx.render(greeting))
+        await ctx.primitives.say(ctx.render(greeting), **say_kwargs)
 
     # ----- 4. ターンループ -----
     history: list[ChatMessage] = []
@@ -326,12 +339,12 @@ async def handle_ai_conversation(node: object, ctx: ChannelContext) -> None:
             # 終話マーカーが含まれている → マーカーを除去して残りを再生し、hangup
             clean_text = assistant_text.replace(_END_MARKER, "").strip()
             if clean_text:
-                await ctx.primitives.say(clean_text)
+                await ctx.primitives.say(clean_text, **say_kwargs)
             await ctx.hangup()
             break
 
         # 通常応答: 再生して履歴に追加
-        await ctx.primitives.say(assistant_text)
+        await ctx.primitives.say(assistant_text, **say_kwargs)
         history.append(ChatMessage("assistant", assistant_text))
 
         # 履歴トリミング（agent.max_history が 0 より大きい場合のみ）
