@@ -1,8 +1,10 @@
 """アプリ設定 API（管理者専用）。
 
-GET /api/settings  — 実効設定を返す。秘密値は実値を返さず「設定済みか否か」のみ返す。
-PUT /api/settings  — allowlist キーの上書き保存 / リセット。変更は監査ログに記録する
-                     （秘密値の実値はログに残さない）。
+GET  /api/settings                          — 実効設定を返す。秘密値は実値を返さず「設定済みか否か」のみ返す。
+PUT  /api/settings                          — allowlist キーの上書き保存 / リセット。変更は監査ログに記録する
+                                              （秘密値の実値はログに残さない）。
+POST /api/settings/saml/fetch-idp-metadata  — IdP フェデレーションメタデータ URL から
+                                              SAML 設定値を取得する（保存はしない）。
 """
 
 from typing import Any
@@ -11,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from millicall.app_settings import saml_metadata
 from millicall.app_settings.service import (
     EDITABLE_SETTINGS,
     SECRET_KEYS,
@@ -118,3 +121,51 @@ async def update_settings_api(
         await listener.notify(session)
 
     return await _build_read(svc)
+
+
+class SamlIdpMetadataFetchRequest(BaseModel):
+    """IdP フェデレーションメタデータ取込リクエスト。"""
+
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class SamlIdpMetadataFetchResponse(BaseModel):
+    """IdP メタデータから抽出した SAML 設定値（保存はしていない）。"""
+
+    idp_entity_id: str
+    idp_sso_url: str
+    idp_x509_cert: str
+
+
+@router.post("/saml/fetch-idp-metadata", response_model=SamlIdpMetadataFetchResponse)
+async def fetch_saml_idp_metadata_api(
+    body: SamlIdpMetadataFetchRequest,
+    request: Request,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> SamlIdpMetadataFetchResponse:
+    """IdP フェデレーションメタデータ URL から SAML 設定値を取得する（管理者専用）。
+
+    取得した値は保存せずレスポンスで返すのみ。フロントがフォームに反映し、
+    ユーザーが内容を確認して通常の保存フロー（PUT /api/settings）で保存する。
+
+    セキュリティ: https のみ許可 / SSRF ブロック（内部アドレス解決は 400）/
+    リダイレクト非追従 / サイズ上限 1 MiB / タイムアウト 10 秒。
+    監査ログには URL のみ記録する（証明書等の取得内容は記録しない）。
+    """
+    try:
+        result = await saml_metadata.fetch_idp_metadata(body.url)
+    except saml_metadata.MetadataFetchError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    await record_audit(
+        session,
+        actor_user_id=admin.id,
+        actor_label=admin.username,
+        action="settings.saml_metadata_fetch",
+        target_type="app_settings",
+        detail={"url": body.url},
+        ip_address=get_client_ip(request),
+    )
+    await session.commit()
+    return SamlIdpMetadataFetchResponse(**result)
