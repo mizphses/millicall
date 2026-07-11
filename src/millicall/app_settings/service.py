@@ -51,6 +51,7 @@ EDITABLE_SETTINGS: dict[str, SettingMeta] = {
     "saml_default_role": SettingMeta("sso"),
     "saml_allowed_clock_skew_seconds": SettingMeta("sso"),
     "scim_enabled": SettingMeta("sso"),
+    "scim_group_role_map": SettingMeta("sso"),
     # --- メール (SMTP) ---
     "smtp_host": SettingMeta("email"),
     "smtp_port": SettingMeta("email"),
@@ -119,6 +120,15 @@ def _validate_extra(key: str, value: object) -> None:
     elif key == "saml_default_role":
         if value not in ("user", "admin"):
             raise SettingValidationError(key, "user または admin を指定してください")
+    elif key == "scim_group_role_map" and isinstance(value, dict):
+        # キー: グループ displayName（非空）、値: 実在ロールのみ許可。
+        for group_name, role in value.items():
+            if not str(group_name).strip():
+                raise SettingValidationError(key, "グループ名が空です")
+            if role not in ("user", "admin"):
+                raise SettingValidationError(
+                    key, f"未知のロールです: '{role}'（user または admin のみ許可）"
+                )
     elif key in ("smtp_port",):
         _check_range(key, value, lambda v: 1 <= v <= 65535, "1〜65535 で指定してください")
     elif key in (
