@@ -157,6 +157,13 @@ class Trunk(Base):
     inbound_extension: Mapped[str] = mapped_column(
         String(20), nullable=False, default="", server_default=""
     )
+    # トランクごとの送信元 SIP ポート（sofia プロファイルの sip-port）。
+    # None = 自動採番（external_sip_port から +2 ずつ他ポートを避けて割り当て）。
+    # 明示指定すると、そのトランクは常にこのポートで REGISTER する。
+    # 目的: 全トランクが同一 IP:5080 から REGISTER すると一部 HGW が
+    # 2 本目以降に "904 no matching challenge" を返し登録がフラップするため、
+    # トランクごとにプロファイル/送信元ポートを分ける。
+    source_port: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )
