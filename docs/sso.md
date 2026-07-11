@@ -116,11 +116,22 @@ MILLICALL_SCIM_ENABLED=true
 ### SCIM 仕様
 
 - **対象**: `origin="scim"` のユーザーのみ。ローカルアカウントや SAML アカウントは SCIM で操作できません
-- **操作**: ユーザーの CRUD / PATCH + グループ（最小実装）+ discovery
+- **操作**: ユーザーの CRUD / PATCH + グループ（DB 永続化・CRUD/PATCH/DELETE）+ discovery
 - **デプロビジョニング**: `active: false`（PATCH/PUT）または DELETE → ユーザー無効化 + **既存セッション即時失効**
-- **ロール**: 新規 SCIM ユーザーは `role=user` 固定（SCIM 経由で admin は作れません）
+- **ロール**: 新規 SCIM ユーザーは `role=user` で作成されます（下記グループ → ロール割り当てで昇格可能）
 
-> Groups はインメモリ管理のため、プロセス再起動でリセットされます。role 昇格には使えません。
+### グループ → ロール自動付与
+
+管理 GUI `/settings` の「SSO / プロビジョニング」セクションで、SCIM グループの
+`displayName` と millicall ロールの対応（例: `millicall-admins` → `admin`）を設定できます。
+
+- グループの作成・メンバー変更・名前変更・削除のたびに、影響を受ける `origin="scim"`
+  ユーザーのロールを再計算します（所属するマップ済みグループの最上位ロールを採用。admin > user）
+- どのマップ済みグループにも属さなくなったユーザーは `user` に戻ります
+- マップに載っていないグループ名はロールに影響しません
+- マップが空（既定）の間は自動付与は行われず、既存ロールを保持します
+- ローカル / SAML アカウントのロールは SCIM グループでは変更されません
+- ロール変更は監査ログ `scim.user.role_change` に old/new 付きで記録されます
 
 ---
 
