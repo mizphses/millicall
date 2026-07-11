@@ -1,20 +1,24 @@
 /**
  * ログインページ（Phase 6 T9b 更新）。
  *
- * - 通常ログイン: POST /api/auth/login → UserRead → / へ遷移
+ * - 通常ログイン: POST /api/auth/login → UserRead → ロール別の遷移先へ
+ *   （admin はダッシュボード、user はアカウントページ）
  * - TOTP 有効ユーザー: 同エンドポイントが {totp_required: true, ticket} を返す
- *   → 2 段階目: TOTP コード（6 桁）入力 → POST /api/auth/login/totp → / へ遷移
+ *   → 2 段階目: TOTP コード（6 桁）入力 → POST /api/auth/login/totp → ロール別の遷移先へ
  *   → "リカバリコードを使う" トグルで code フィールドの制約を解除
  * - 401 → 誤りメッセージ、429 → ロックアウトメッセージ
+ * - SAML SSO 有効時（GET /api/auth/config）: 「SSO でログイン」ボタンを表示し、
+ *   /saml/login へフル遷移する（SPA ルーターを通さない）
  */
 
 import { useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { css, cx } from "styled-system/css";
 import { button, input, panel } from "styled-system/recipes";
 
 import { api, ensureCsrfCookie } from "../api/client";
+import { fetchLoginConfig, postLoginPath } from "../auth/auth";
 
 type LoginStep =
   | { kind: "credentials" }
@@ -35,6 +39,19 @@ export function LoginPage() {
   // ─── TOTP ステップ ───
   const [totpCode, setTotpCode] = useState("");
   const [useRecovery, setUseRecovery] = useState(false);
+
+  // ─── SAML SSO ───
+  // 公開設定（未認証で取得可能）から SAML 有効フラグを読む。無効/取得失敗時はボタン非表示。
+  const [samlEnabled, setSamlEnabled] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchLoginConfig().then((cfg) => {
+      if (!cancelled) setSamlEnabled(cfg.saml_enabled);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ─── Step 1: 認証情報送信 ───
   async function handleCredentials(e: React.FormEvent) {
@@ -58,16 +75,18 @@ export function LoginPage() {
         return;
       }
       // TOTP 必要チェック: data の shape を確認する
-      const body = data as { totp_required?: boolean; ticket?: string } | undefined;
+      const body = data as
+        | { totp_required?: boolean; ticket?: string; role?: string }
+        | undefined;
       if (body?.totp_required && body.ticket) {
         setStep({ kind: "totp", ticket: body.ticket });
         setTotpCode("");
         setUseRecovery(false);
         return;
       }
-      // 通常ログイン成功
+      // 通常ログイン成功: ロールに応じた遷移先へ（user はアカウントページ）
       await ensureCsrfCookie();
-      router.navigate({ to: "/" });
+      router.navigate({ to: postLoginPath(body?.role) });
     } finally {
       setBusy(false);
     }
@@ -80,7 +99,7 @@ export function LoginPage() {
     setError(null);
     setBusy(true);
     try {
-      const { response } = await api.POST("/api/auth/login/totp", {
+      const { data, response } = await api.POST("/api/auth/login/totp", {
         body: { ticket: step.ticket, code: totpCode },
       });
       if (response.status === 401) {
@@ -99,9 +118,9 @@ export function LoginPage() {
         setError("認証に失敗しました");
         return;
       }
-      // TOTP ログイン成功
+      // TOTP ログイン成功: ロールに応じた遷移先へ（user はアカウントページ）
       await ensureCsrfCookie();
-      router.navigate({ to: "/" });
+      router.navigate({ to: postLoginPath(data?.role) });
     } finally {
       setBusy(false);
     }
@@ -173,6 +192,27 @@ export function LoginPage() {
           >
             {busy ? "ログイン中…" : "ログイン"}
           </button>
+
+          {/* SAML SSO 有効時のみ表示。SPA ルーターを通さず /saml/login へフル遷移する */}
+          {samlEnabled ? (
+            <a
+              href="/saml/login"
+              className={cx(
+                button({ variant: "secondary" }),
+                css({
+                  w: "100%",
+                  mt: "2",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  textDecoration: "none",
+                }),
+              )}
+              style={{ height: "40px" }}
+            >
+              SSO でログイン
+            </a>
+          ) : null}
         </form>
       ) : (
         /* ─── TOTP ステップ ─── */

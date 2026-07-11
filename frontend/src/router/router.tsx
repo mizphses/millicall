@@ -6,7 +6,7 @@ import {
   redirect,
 } from "@tanstack/react-router";
 
-import { fetchCurrentUser } from "../auth/auth";
+import { fetchCurrentUser, USER_HOME_PATH } from "../auth/auth";
 import type { CurrentUser } from "../auth/auth";
 import { AppShell } from "../shell/AppShell";
 import { LoginPage } from "../pages/LoginPage";
@@ -60,65 +60,80 @@ const authLayoutRoute = createRoute({
 
 function AuthenticatedLayout() {
   const { user } = authLayoutRoute.useRouteContext();
-  return <AppShell username={user.display_name || user.username} />;
+  return <AppShell username={user.display_name || user.username} role={user.role} />;
 }
 
-const dashboardRoute = createRoute({
+/**
+ * admin 専用領域のレイアウトルート（パスなし）。
+ * 直接 URL を叩かれた場合も、admin 以外はアカウントページへリダイレクトする。
+ * バックエンド API は require_admin で保護済みだが、UI 側でも 403 画面を見せない。
+ */
+const adminLayoutRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
+  id: "admin",
+  beforeLoad: ({ context }) => {
+    if (context.user.role !== "admin") {
+      throw redirect({ to: USER_HOME_PATH });
+    }
+  },
+});
+
+const dashboardRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
   path: "/",
   component: DashboardPage,
 });
 
 const extensionsRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/extensions",
   component: ExtensionsPage,
 });
 
 const trunksRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/trunks",
   component: TrunksPage,
 });
 
 const routesRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/routes",
   component: RoutesPage,
 });
 
 const providersRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/providers",
   component: ProvidersPage,
 });
 
 const aiAgentsRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/ai-agents",
   component: AiAgentsPage,
 });
 
 const contactsRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/contacts",
   component: ContactsPage,
 });
 
 const cdrRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/cdr",
   component: CdrPage,
 });
 
 const workflowsRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/workflows",
   component: WorkflowsPage,
 });
 
 const workflowEditorRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/workflows/$workflowId",
   component: WorkflowEditorPage,
 });
@@ -126,20 +141,20 @@ const workflowEditorRoute = createRoute({
 // ネットワーク（内向き）: 電話管理用 LAN 側（LAN / DHCP / NAT）。
 // 従来の /network パスを互換のため維持する。
 const networkRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/network",
   component: NetworkPage,
 });
 
 // ネットワーク（外向き）: リモートアクセス側（Tailscale など）。
 const networkRemoteRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/network/remote",
   component: NetworkRemotePage,
 });
 
 const devicesRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/devices",
   component: DevicesPage,
 });
@@ -147,11 +162,13 @@ const devicesRoute = createRoute({
 // ─── Phase 6 認証強化ページ（T9b） ───
 
 const usersRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/users",
   component: UsersPage,
 });
 
+// セキュリティ（2FA 自己設定）は一般ユーザーにも開放するため
+// admin レイアウトの外（認証済みレイアウト直下）に置く。
 const securityRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: "/settings/security",
@@ -159,25 +176,25 @@ const securityRoute = createRoute({
 });
 
 const systemRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/system",
   component: SystemPage,
 });
 
 const auditRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/audit",
   component: AuditPage,
 });
 
 const ssoRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/sso",
   component: SsoPage,
 });
 
 const settingsRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: "/settings",
   component: SettingsPage,
 });
@@ -185,25 +202,27 @@ const settingsRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   loginRoute,
   authLayoutRoute.addChildren([
-    dashboardRoute,
-    extensionsRoute,
-    trunksRoute,
-    routesRoute,
-    providersRoute,
-    aiAgentsRoute,
-    contactsRoute,
-    cdrRoute,
-    workflowsRoute,
-    workflowEditorRoute,
-    networkRoute,
-    networkRemoteRoute,
-    devicesRoute,
-    usersRoute,
     securityRoute,
-    systemRoute,
-    auditRoute,
-    ssoRoute,
-    settingsRoute,
+    adminLayoutRoute.addChildren([
+      dashboardRoute,
+      extensionsRoute,
+      trunksRoute,
+      routesRoute,
+      providersRoute,
+      aiAgentsRoute,
+      contactsRoute,
+      cdrRoute,
+      workflowsRoute,
+      workflowEditorRoute,
+      networkRoute,
+      networkRemoteRoute,
+      devicesRoute,
+      usersRoute,
+      systemRoute,
+      auditRoute,
+      ssoRoute,
+      settingsRoute,
+    ]),
   ]),
 ]);
 

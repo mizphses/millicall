@@ -64,6 +64,15 @@ class LoginTotpRequest(BaseModel):
     code: str
 
 
+class PublicConfig(BaseModel):
+    """ログイン画面向けの公開設定レスポンス。
+
+    未認証で参照できるため、返す項目は最小限に保つこと（現状 saml_enabled のみ）。
+    """
+
+    saml_enabled: bool
+
+
 # ---------------------------------------------------------------------------
 # ユーティリティ
 # ---------------------------------------------------------------------------
@@ -372,6 +381,17 @@ async def logout_all(
 @router.get("/me", response_model=UserRead)
 async def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@router.get("/config", response_model=PublicConfig)
+async def public_config(request: Request) -> PublicConfig:
+    """ログイン画面向けの公開設定を返す（未認証で取得可能）。
+
+    SAML SSO が有効なとき、ログイン画面に「SSO でログイン」ボタンを表示するために使う。
+    認証不要のエンドポイントなので、秘匿情報や不要な設定値は決して含めないこと。
+    """
+    settings = await effective_settings(request.app.state)
+    return PublicConfig(saml_enabled=settings.saml_enabled)
 
 
 @router.get("/csrf")

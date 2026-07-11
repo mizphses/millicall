@@ -80,6 +80,26 @@ export const NAV_SECTIONS: NavSection[] = [
 /** 全セクションをフラットに並べた一覧（titleForPath などの探索用）。 */
 export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((s) => s.items);
 
+/**
+ * 一般ユーザー（role=user）にも表示するパスの一覧。
+ * バックエンドの管理 API はすべて require_admin で保護されているため、
+ * 一般ユーザーには自分のアカウント関連（2FA 設定など）だけを見せる。
+ */
+export const USER_ALLOWED_PATHS: readonly string[] = ["/settings/security"];
+
+/**
+ * ロールに応じたサイドナビのセクションを返す。
+ * - admin: 全セクション（従来どおり）
+ * - それ以外（user など未知のロールを含む）: アカウント関連のみ。
+ *   管理系項目は一切表示しない（安全側デフォルト）。
+ */
+export function navSectionsForRole(role: string): NavSection[] {
+  if (role === "admin") return NAV_SECTIONS;
+  const allowed = new Set(USER_ALLOWED_PATHS);
+  const items = NAV_ITEMS.filter((i) => allowed.has(i.path));
+  return items.length > 0 ? [{ title: "アカウント", items }] : [];
+}
+
 /** パスから画面題を引く（ヘッダ用）。プレフィックスは最長一致を優先する。 */
 export function titleForPath(pathname: string): string {
   const exact = NAV_ITEMS.find((n) => n.path === pathname);
