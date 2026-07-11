@@ -177,8 +177,17 @@ def test_allocate_explicit_equals_internal_raises():
 # --- build_reload_commands（純関数） ---
 
 
-def test_build_reload_commands_single_changed():
+def test_build_reload_commands_changed_present_restarts():
+    # changed が現存トランク集合にあれば restart（作成/更新）
     assert build_reload_commands(["hgw"], changed="hgw") == ["sofia profile external_hgw restart"]
+
+
+def test_build_reload_commands_changed_absent_stops():
+    # changed が現存集合に無ければ stop（削除）。旧 in-memory プロファイルを破棄し
+    # ゴースト登録を防ぐ。
+    assert build_reload_commands([], changed="hgw") == ["sofia profile external_hgw stop"]
+    # 他トランクが残っていても、削除対象が集合に無ければ stop
+    assert build_reload_commands(["aaa"], changed="bbb") == ["sofia profile external_bbb stop"]
 
 
 def test_build_reload_commands_all_sorted():
@@ -192,3 +201,9 @@ def test_build_reload_commands_all_sorted():
 def test_build_reload_commands_rejects_unsafe_name():
     with pytest.raises(ValueError):
         build_reload_commands(["a; rm -rf /"])
+
+
+def test_build_reload_commands_rejects_unsafe_changed_name():
+    # stop 経路でも名前を検証する
+    with pytest.raises(ValueError):
+        build_reload_commands([], changed="a; rm -rf /")
