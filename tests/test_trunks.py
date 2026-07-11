@@ -196,3 +196,111 @@ async def test_trunk_status_fs_unreachable_returns_unknown(admin_client, app):
 async def test_trunk_status_missing_trunk_404(admin_client):
     resp = await admin_client.get("/api/trunks/9999/status")
     assert resp.status_code == 404
+
+
+# --- source_port（トランクごと送信元 SIP ポート） ---
+
+
+async def test_create_trunk_defaults_source_port_null(admin_client):
+    """source_port 未指定なら null（自動採番）で作成される。"""
+    resp = await admin_client.post(
+        "/api/trunks",
+        json={"name": "hgw", "display_name": "A", "host": "h", "username": "u", "password": "p"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["source_port"] is None
+
+
+async def test_create_trunk_with_explicit_source_port(admin_client):
+    resp = await admin_client.post(
+        "/api/trunks",
+        json={
+            "name": "hgw",
+            "display_name": "A",
+            "host": "h",
+            "username": "u",
+            "password": "p",
+            "source_port": 5082,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["source_port"] == 5082
+
+
+async def test_create_trunk_source_port_conflicts_internal_400(admin_client):
+    """internal の sip_port(5060) との衝突は 400。"""
+    resp = await admin_client.post(
+        "/api/trunks",
+        json={
+            "name": "hgw",
+            "display_name": "A",
+            "host": "h",
+            "username": "u",
+            "password": "p",
+            "source_port": 5060,
+        },
+    )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_create_trunk_source_port_duplicate_400(admin_client):
+    """他トランクと同一の明示ポートは 400。"""
+    first = await admin_client.post(
+        "/api/trunks",
+        json={
+            "name": "aaa",
+            "display_name": "A",
+            "host": "h",
+            "username": "u",
+            "password": "p",
+            "source_port": 5090,
+        },
+    )
+    assert first.status_code == 201
+    dup = await admin_client.post(
+        "/api/trunks",
+        json={
+            "name": "bbb",
+            "display_name": "B",
+            "host": "h",
+            "username": "u",
+            "password": "p",
+            "source_port": 5090,
+        },
+    )
+    assert dup.status_code == 400, dup.text
+
+
+async def test_create_trunk_source_port_out_of_range_422(admin_client):
+    """範囲外(<1024)は pydantic バリデーションで 422。"""
+    resp = await admin_client.post(
+        "/api/trunks",
+        json={
+            "name": "hgw",
+            "display_name": "A",
+            "host": "h",
+            "username": "u",
+            "password": "p",
+            "source_port": 80,
+        },
+    )
+    assert resp.status_code == 422, resp.text
+
+
+async def test_patch_trunk_clears_source_port_to_auto(admin_client):
+    """明示ポートを null 送信すると自動採番へ戻る。"""
+    created = await admin_client.post(
+        "/api/trunks",
+        json={
+            "name": "hgw",
+            "display_name": "A",
+            "host": "h",
+            "username": "u",
+            "password": "p",
+            "source_port": 5082,
+        },
+    )
+    tid = created.json()["id"]
+    patched = await admin_client.patch(f"/api/trunks/{tid}", json={"source_port": None})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["source_port"] is None

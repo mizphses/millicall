@@ -7,7 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from millicall.deps import get_change_listener, get_esl_factory, get_session, require_admin
+from millicall.config import Settings
+from millicall.deps import (
+    get_change_listener,
+    get_esl_factory,
+    get_session,
+    get_settings_dep,
+    require_admin,
+)
 from millicall.models import Trunk
 from millicall.numberplan import find_number
 from millicall.telephony.esl import ESLError
@@ -35,6 +42,37 @@ class TrunkStatusResult(BaseModel):
     state: str
 
 
+async def _validate_source_port(
+    session: AsyncSession,
+    port: int | None,
+    settings: Settings,
+    *,
+    exclude_trunk_id: int | None = None,
+) -> None:
+    """送信元ポートを検証する。
+
+    - None（自動採番）は常に許可。
+    - internal の sip_port（既定 5060）とは衝突不可。
+    - 他トランクが明示採用済みのポートとは重複不可（400）。
+    """
+    if port is None:
+        return
+    if port == settings.sip_port:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"送信元ポート {port} は internal の sip_port と衝突しています",
+        )
+    stmt = select(Trunk).where(Trunk.source_port == port)
+    if exclude_trunk_id is not None:
+        stmt = stmt.where(Trunk.id != exclude_trunk_id)
+    dup = await session.scalar(stmt)
+    if dup is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"送信元ポート {port} は他のトランク（{dup.name}）と重複しています",
+        )
+
+
 async def _validate_inbound_extension(session: AsyncSession, number: str) -> None:
     """着信転送先が番号プラン（内線/AI/ワークフロー/グループ）に存在することを検証する。"""
     if number == "":
@@ -51,6 +89,7 @@ async def create_trunk(
     body: TrunkCreate,
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
+    settings: Settings = Depends(get_settings_dep),
 ) -> TrunkRead:
     existing = await session.scalar(select(Trunk).where(Trunk.name == body.name))
     if existing is not None:
@@ -58,6 +97,7 @@ async def create_trunk(
             status_code=status.HTTP_409_CONFLICT, detail="Trunk name already exists"
         )
     await _validate_inbound_extension(session, body.inbound_extension)
+    await _validate_source_port(session, body.source_port, settings)
     trunk = Trunk(
         name=body.name,
         display_name=body.display_name,
@@ -67,6 +107,7 @@ async def create_trunk(
         did_number=body.did_number,
         caller_id=body.caller_id,
         inbound_extension=body.inbound_extension,
+        source_port=body.source_port,
         enabled=body.enabled,
     )
     session.add(trunk)
@@ -136,6 +177,7 @@ async def update_trunk(
     body: TrunkUpdate,
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
+    settings: Settings = Depends(get_settings_dep),
 ) -> TrunkRead:
     trunk = await session.get(Trunk, trunk_id)
     if trunk is None:
@@ -155,6 +197,11 @@ async def update_trunk(
         val = getattr(body, fld)
         if val is not None:
             setattr(trunk, fld, val)
+    # source_port は None（自動採番）への変更もあり得るため、明示送信時のみ更新する。
+    # model_fields_set で「未指定」と「null 明示」を区別する。
+    if "source_port" in body.model_fields_set:
+        await _validate_source_port(session, body.source_port, settings, exclude_trunk_id=trunk_id)
+        trunk.source_port = body.source_port
     await session.commit()
     await session.refresh(trunk)
     # killgw + rescan で設定変更(パスワード等)を反映し REGISTER をやり直す

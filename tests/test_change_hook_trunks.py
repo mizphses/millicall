@@ -17,8 +17,9 @@ async def test_create_trunk_writes_external_profile(auth_client_with_telephony, 
         },
     )
     assert resp.status_code == 201
-    ext = (app.state.settings.fs_config_dir / "sip_profiles" / "external.xml").read_text()
+    ext = (app.state.settings.fs_config_dir / "sip_profiles" / "external_hgw.xml").read_text()
     assert 'gateway name="hgw"' in ext
+    assert 'name="external_hgw"' in ext
 
 
 @pytest.mark.asyncio
@@ -35,20 +36,20 @@ async def test_disabled_trunk_excluded_from_external(auth_client_with_telephony,
     )
     tid = created.json()["id"]
     await auth_client_with_telephony.patch(f"/api/trunks/{tid}", json={"enabled": False})
-    ext = (app.state.settings.fs_config_dir / "sip_profiles" / "external.xml").read_text()
-    assert 'gateway name="hgw"' not in ext
+    # 無効化で有効トランクが 0 本になるため external_hgw.xml は掃除されて残らない
+    assert not (app.state.settings.fs_config_dir / "sip_profiles" / "external_hgw.xml").exists()
 
 
 # ---------------------------------------------------------------------------
-# Wire-level: トランク変更で sofia ゲートウェイ同期(killgw + rescan)が飛ぶこと
+# Wire-level: トランク変更で sofia プロファイル再起動(external_<name> restart)が飛ぶこと
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_trunk_create_sends_gateway_sync(tmp_path) -> None:
-    """トランク作成時、reloadxml に加えて killgw + rescan が FreeSWITCH に送られること。
+    """トランク作成時、reloadxml に加えて external_<name> restart が FreeSWITCH に送られること。
 
-    rescan によりゲートウェイが即ロードされ、REGISTER が直ちに試行される
+    restart によりプロファイル(=ゲートウェイ)が即ロードされ、REGISTER が直ちに試行される
     (これが無いと FS 再起動まで HGW への REGISTER が一切飛ばない)。
     """
     from millicall.config import Settings
@@ -88,14 +89,11 @@ async def test_trunk_create_sends_gateway_sync(tmp_path) -> None:
         await server.wait_closed()
 
     reload_idx = next((i for i, cmd in enumerate(received) if "reloadxml" in cmd), None)
-    killgw_idx = next(
-        (i for i, cmd in enumerate(received) if "sofia profile external killgw hgw" in cmd), None
-    )
-    rescan_idx = next(
-        (i for i, cmd in enumerate(received) if "sofia profile external rescan" in cmd), None
+    restart_idx = next(
+        (i for i, cmd in enumerate(received) if "sofia profile external_hgw restart" in cmd),
+        None,
     )
     assert reload_idx is not None, f"reloadxml が送信されていない: {received}"
-    assert killgw_idx is not None, f"killgw が送信されていない: {received}"
-    assert rescan_idx is not None, f"rescan が送信されていない: {received}"
-    # reloadxml → killgw → rescan の順序(XML 再読込後にゲートウェイを再ロード)
-    assert reload_idx < killgw_idx < rescan_idx
+    assert restart_idx is not None, f"external_hgw restart が送信されていない: {received}"
+    # reloadxml → restart の順序(XML 再読込後にプロファイルを再ロード)
+    assert reload_idx < restart_idx

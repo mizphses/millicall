@@ -15,6 +15,8 @@ class TrunkCreate(BaseModel):
     caller_id: str = Field(default="", max_length=30)
     # 着信転送先の内線番号（統一番号プラン）。空 = 着信を受けない。
     inbound_extension: str = Field(default="", pattern=r"^(\d{2,6})?$")
+    # 送信元 SIP ポート（任意）。None = 自動採番。範囲は 1024〜65535。
+    source_port: int | None = Field(default=None, ge=1024, le=65535)
     enabled: bool = True
 
 
@@ -29,6 +31,9 @@ class TrunkUpdate(BaseModel):
     caller_id: str | None = Field(default=None, max_length=30)
     # None = 変更しない / "" = 着信を受けない / "NNN" = その内線へ転送
     inbound_extension: str | None = Field(default=None, pattern=r"^(\d{2,6})?$")
+    # 未指定 = 変更しない / null = 自動採番に戻す / 数値 = そのポートを明示指定。
+    # 「未指定」と「null 明示」は router 側で model_fields_set により区別する。
+    source_port: int | None = Field(default=None, ge=1024, le=65535)
     enabled: bool | None = None
 
 
@@ -43,6 +48,8 @@ class TrunkRead(BaseModel):
     did_number: str
     caller_id: str
     inbound_extension: str
+    # 送信元 SIP ポート。null = 自動採番。
+    source_port: int | None
     enabled: bool
     has_password: bool
 
@@ -57,6 +64,7 @@ class TrunkRead(BaseModel):
             did_number=t.did_number,
             caller_id=t.caller_id,
             inbound_extension=t.inbound_extension,
+            source_port=t.source_port,
             enabled=t.enabled,
             has_password=bool(t.password),
         )

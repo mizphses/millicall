@@ -1379,7 +1379,11 @@ export interface paths {
         get: operations["get_group_scim_v2_Groups__group_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Group
+         * @description グループ削除。所属していたメンバーのロールを再計算する。
+         */
+        delete: operations["delete_group_scim_v2_Groups__group_id__delete"];
         options?: never;
         head?: never;
         /** Patch Group */
@@ -2205,6 +2209,8 @@ export interface components {
             name: string;
             /** Password */
             password: string;
+            /** Source Port */
+            source_port?: number | null;
             /** Username */
             username: string;
         };
@@ -2228,6 +2234,8 @@ export interface components {
             inbound_extension: string;
             /** Name */
             name: string;
+            /** Source Port */
+            source_port: number | null;
             /** Username */
             username: string;
         };
@@ -2261,6 +2269,8 @@ export interface components {
             inbound_extension?: string | null;
             /** Password */
             password?: string | null;
+            /** Source Port */
+            source_port?: number | null;
             /** Username */
             username?: string | null;
         };
@@ -4862,7 +4872,11 @@ export interface operations {
     };
     list_groups_scim_v2_Groups_get: {
         parameters: {
-            query?: never;
+            query?: {
+                filter?: string | null;
+                startIndex?: number;
+                count?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4876,6 +4890,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -4934,6 +4957,35 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_group_scim_v2_Groups__group_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

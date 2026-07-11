@@ -57,6 +57,11 @@ class WorkflowConfig:
     ring_count: int = 0
 
 
+# トランク名（= sofia gateway 名 / プロファイル名の一部 / ファイル名の一部）に
+# 許可する文字。ファイル名インジェクション・XML/シェル混入を防ぐため厳格に制限する。
+_SAFE_TRUNK_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
+
+
 @dataclass(frozen=True)
 class TrunkConfig:
     name: str
@@ -68,6 +73,85 @@ class TrunkConfig:
     caller_id: str = ""
     # 着信転送先の内線番号（統一番号プラン）。空 = 着信を受けない。
     inbound_extension: str = ""
+    # 送信元 SIP ポート（明示指定）。None = 自動採番。
+    source_port: int | None = None
+
+
+def allocate_source_ports(
+    trunks: list["TrunkConfig"],
+    *,
+    external_sip_port: int = 5080,
+    internal_sip_port: int = 5060,
+) -> dict[str, int]:
+    """トランク一覧から各トランクの実効送信元 SIP ポートを決定する（決定論的な純関数）。
+
+    ルール:
+      - トランクを name 昇順でソートして処理する。
+      - source_port が明示されていればその値を採用する。
+      - 未指定(None)には external_sip_port から +2 ずつ候補ポートを生成し、
+        (a) internal の sip_port、(b) 他トランクが明示採用済みのポート、
+        (c) 既に自動採番で使ったポート、を避けて name 昇順で割り当てる。
+      - 結果、トランク 1 本なら 5080 のまま（後方互換）。
+
+    同一ポートの衝突（手動指定同士、または手動指定と internal の衝突）は
+    ValueError を送出する。
+
+    戻り値: {trunk.name: 実効送信元ポート}
+    """
+    ordered = sorted(trunks, key=lambda t: t.name)
+
+    # 明示指定の検証と収集（衝突検出）。internal との衝突もここで弾く。
+    reserved: dict[int, str] = {}  # port -> trunk.name（衝突メッセージ用）
+    for t in ordered:
+        if t.source_port is None:
+            continue
+        if t.source_port == internal_sip_port:
+            raise ValueError(
+                f"トランク '{t.name}' の送信元ポート {t.source_port} は "
+                f"internal の sip_port と衝突しています"
+            )
+        if t.source_port in reserved:
+            raise ValueError(
+                f"送信元ポート {t.source_port} が複数トランクで重複しています "
+                f"('{reserved[t.source_port]}' と '{t.name}')"
+            )
+        reserved[t.source_port] = t.name
+
+    result: dict[str, int] = {}
+    used: set[int] = set(reserved) | {internal_sip_port}
+    candidate = external_sip_port
+    for t in ordered:
+        if t.source_port is not None:
+            result[t.name] = t.source_port
+            continue
+        # 予約済み(手動指定/internal)・自動採番済みを避けて次の空きを探す
+        while candidate in used:
+            candidate += 2
+        result[t.name] = candidate
+        used.add(candidate)
+    return result
+
+
+def build_reload_commands(
+    trunk_names: list[str],
+    *,
+    changed: str | None = None,
+) -> list[str]:
+    """ESL リロード用の ESL(sofia) コマンド列を組み立てる（純関数・実行はしない）。
+
+    複数プロファイル(external_<name>)対応。各トランクプロファイルは
+    "sofia profile external_<name> restart" で新規ロード/変更反映の両方に対応する。
+
+    changed を指定するとそのトランクのプロファイルのみを対象にする（保存直後の
+    単一トランク反映用）。None なら全トランク分のコマンドを返す。
+    """
+    targets = [changed] if changed is not None else sorted(trunk_names)
+    cmds: list[str] = []
+    for name in targets:
+        if not _SAFE_TRUNK_NAME_RE.match(name):
+            raise ValueError(f"不正なトランク名です: {name!r}")
+        cmds.append(f"sofia profile external_{name} restart")
+    return cmds
 
 
 class FreeswitchConfigWriter:
@@ -162,6 +246,21 @@ class FreeswitchConfigWriter:
             for f in user_dir.glob("*.xml"):
                 f.unlink()
 
+    def _clear_external_profiles(self) -> None:
+        """旧構成の external.xml と全 external_*.xml を削除する。
+
+        削除されたトランクや旧単一プロファイルのファイルが残ると、sofia が
+        glob include で再ロードしてゴースト登録が発生するため、write 前に掃除する。
+        """
+        profiles_dir = self.output_dir / "sip_profiles"
+        if not profiles_dir.exists():
+            return
+        stale = profiles_dir / "external.xml"
+        if stale.exists():
+            stale.unlink()
+        for f in profiles_dir.glob("external_*.xml"):
+            f.unlink()
+
     def write_all(
         self,
         extensions: list[ExtensionConfig],
@@ -176,6 +275,9 @@ class FreeswitchConfigWriter:
         workflows = workflows or []
         (self.output_dir / "directory" / "default").mkdir(parents=True, exist_ok=True)
         self._clear_user_files()
+        (self.output_dir / "sip_profiles").mkdir(parents=True, exist_ok=True)
+        # stale 掃除: 旧 external.xml と全 external_*.xml を消してから今回分を書く
+        self._clear_external_profiles()
 
         written: list[Path] = []
         for ext in extensions:
@@ -194,11 +296,24 @@ class FreeswitchConfigWriter:
             self._write("directory/default.xml", self._render("directory_default.xml.j2"))
         )
         written.append(self._write("sip_profiles/internal.xml", self._render("internal.xml.j2")))
-        written.append(
-            self._write(
-                "sip_profiles/external.xml", self._render("external.xml.j2", {"trunks": trunks})
-            )
+        # トランクごとに external_<name>.xml を書く（1 プロファイル = 1 sip-port）。
+        # trunks が空なら external プロファイルは 1 つも書かない（掃除は上で済）。
+        source_ports = allocate_source_ports(
+            trunks,
+            external_sip_port=self._base["external_sip_port"],
+            internal_sip_port=self._base["sip_port"],
         )
+        for trunk in trunks:
+            if not _SAFE_TRUNK_NAME_RE.match(trunk.name):
+                raise ValueError(
+                    f"トランク名 '{trunk.name}' に使用できない文字が含まれています "
+                    f"（[A-Za-z0-9_-] のみ）"
+                )
+            content = self._render(
+                "external_trunk.xml.j2",
+                {"trunk": trunk, "source_port": source_ports[trunk.name]},
+            )
+            written.append(self._write(f"sip_profiles/external_{trunk.name}.xml", content))
         # _load_trunks は Trunk.name で ORDER BY 済みだが、直接呼び出し時の順序も保証するため
         # ここでも name でソートして先頭を選ぶ（决定論的なトランク選択）
         outbound_trunk = sorted(trunks, key=lambda t: t.name)[0] if trunks else None
