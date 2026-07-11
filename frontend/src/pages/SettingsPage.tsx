@@ -20,6 +20,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import {
+  AlertTriangle,
+  Check,
+  Copy,
+  Download,
+  Globe,
   KeyRound,
   Mail,
   MicVocal,
@@ -36,7 +41,16 @@ import { button, input, panel } from "styled-system/recipes";
 import { api } from "../api/client";
 import { APP_SETTINGS_KEY } from "../queryKeys";
 import { PageLayout } from "../components/PageLayout";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../toast/ToastProvider";
+import {
+  idpMetadataToFormValues,
+  isHttpsProtocol,
+  scimTenantUrlFromOrigin,
+  spValuesFromOrigin,
+  validateMetadataUrl,
+  type IdpMetadataResponse,
+} from "./settings/ssoSetup";
 
 // ---------------------------------------------------------------------------
 // API 型（schema.d.ts の SettingsRead / SettingsUpdate と対応）
@@ -67,6 +81,26 @@ async function updateSettings(payload: SettingsUpdate): Promise<SettingsRead> {
   }
   if (error || !data) throw new Error("設定の保存に失敗しました");
   return data as SettingsRead;
+}
+
+/** IdP フェデレーションメタデータ URL から SAML 設定値を取得する（保存はされない）。 */
+async function fetchIdpMetadata(url: string): Promise<IdpMetadataResponse> {
+  const { data, error, response } = await api.POST("/api/settings/saml/fetch-idp-metadata", {
+    body: { url },
+  });
+  if (response.status === 400) {
+    const body = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(body.detail ?? "IdP メタデータの取得に失敗しました");
+  }
+  if (error || !data) throw new Error("IdP メタデータの取得に失敗しました");
+  return data as IdpMetadataResponse;
+}
+
+/** SCIM Bearer トークンを発行（再発行）する。古いトークンは即座に無効になる。 */
+async function rotateScimToken(): Promise<string> {
+  const { data, error } = await api.POST("/api/scim/token");
+  if (error || !data) throw new Error("SCIM トークンの発行に失敗しました");
+  return (data as { token: string }).token;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +427,13 @@ export function SettingsPage() {
             title={section.title}
             description={section.description}
           >
+            {section.id === "sso" ? (
+              // SAML 設定の入力補助（フォーム値に反映するのみ。保存はユーザー操作）
+              <SamlSetupHelpers
+                disabled={saveMutation.isPending}
+                onApply={(values) => setForm((f) => ({ ...f, ...values }))}
+              />
+            ) : null}
             <form
               id={`settings-${section.id}-form`}
               onSubmit={(e) => {
@@ -452,6 +493,10 @@ export function SettingsPage() {
                 </button>
               </div>
             </form>
+            {section.id === "sso" ? (
+              // SCIM プロビジョニング補助（テナント URL 表示 + Bearer トークン発行）
+              <ScimProvisioningBlock scimEnabled={Boolean(data.values.scim_enabled)} />
+            ) : null}
           </SectionCard>
         ))}
       </div>
@@ -714,4 +759,267 @@ function SettingField({
 /** フィールドの補足説明。 */
 function FieldHelp({ text }: { text: string }) {
   return <p className={css({ fontSize: "sm", color: "text.subtle", mt: "1" })}>{text}</p>;
+}
+
+// ---------------------------------------------------------------------------
+// SSO セクション: SAML 設定の入力補助
+// ---------------------------------------------------------------------------
+
+/**
+ * SAML 設定の入力補助:
+ *   - IdP フェデレーションメタデータ URL からの一発取込（サーバー経由で取得・パース）
+ *   - 現在アクセス中のドメインからの SP 設定自動入力（HTTPS 時のみ）
+ * どちらもフォーム値に反映するだけで、保存はユーザーが内容を確認してから行う。
+ */
+function SamlSetupHelpers({
+  disabled,
+  onApply,
+}: {
+  disabled: boolean;
+  onApply: (values: Record<string, string>) => void;
+}) {
+  const toast = useToast();
+  const [metadataUrl, setMetadataUrl] = useState("");
+  const isHttps = isHttpsProtocol(window.location.protocol);
+
+  const importMutation = useMutation({
+    mutationFn: fetchIdpMetadata,
+    onSuccess: (resp) => {
+      onApply(idpMetadataToFormValues(resp));
+      toast.success("IdP 設定をフォームに反映しました。内容を確認して保存してください");
+    },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "IdP メタデータの取得に失敗しました"),
+  });
+
+  const importFromUrl = () => {
+    const validationError = validateMetadataUrl(metadataUrl);
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
+    importMutation.mutate(metadataUrl.trim());
+  };
+
+  const fillFromOrigin = () => {
+    onApply(spValuesFromOrigin(window.location.origin));
+    toast.success("SP 設定をフォームに反映しました。内容を確認して保存してください");
+  };
+
+  return (
+    <div
+      className={css({
+        display: "flex",
+        flexDirection: "column",
+        gap: "4",
+        mb: "4",
+        p: "3",
+        borderRadius: "md",
+        bg: "gray.50",
+        borderWidth: "1px",
+        borderStyle: "solid",
+        borderColor: "border",
+      })}
+    >
+      <div>
+        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+          IdP フェデレーションメタデータ URL から自動入力
+        </span>
+        <div className={css({ display: "flex", gap: "2" })}>
+          <input
+            className={cx(input(), css({ flex: "1" }))}
+            type="url"
+            value={metadataUrl}
+            onChange={(e) => setMetadataUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                importFromUrl();
+              }
+            }}
+            placeholder="https://login.microsoftonline.com/<tenant>/federationmetadata/2007-06/federationmetadata.xml?appid=<id>"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            className={button({ variant: "secondary" })}
+            style={{ height: "36px", flexShrink: 0 }}
+            onClick={importFromUrl}
+            disabled={disabled || importMutation.isPending}
+          >
+            <Download size={16} />
+            {importMutation.isPending ? "取得中…" : "取り込み"}
+          </button>
+        </div>
+        <FieldHelp text="Entra ID 等のメタデータ URL を貼ると、IdP Entity ID・IdP SSO URL・IdP X.509 証明書を取得してフォームに反映します（この時点では保存されません）。" />
+      </div>
+      <div>
+        <button
+          type="button"
+          className={button({ variant: "secondary" })}
+          style={{ height: "36px" }}
+          onClick={fillFromOrigin}
+          disabled={disabled || !isHttps}
+        >
+          <Globe size={16} />
+          このドメインから自動入力
+        </button>
+        <FieldHelp
+          text={
+            isHttps
+              ? "SP Entity ID と ACS URL に、現在アクセス中のドメインから組み立てた値を入力します。"
+              : "HTTPS でアクセス中のみ使用できます"
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SSO セクション: SCIM プロビジョニング補助
+// ---------------------------------------------------------------------------
+
+/**
+ * SCIM プロビジョニング補助:
+ *   - テナント URL（IdP のプロビジョニング設定に入れる値）の表示 + コピー
+ *   - SCIM Bearer トークンの発行 / 再発行（確認ダイアログ付き; 平文は一度だけ表示）
+ */
+function ScimProvisioningBlock({ scimEnabled }: { scimEnabled: boolean }) {
+  const toast = useToast();
+  const [token, setToken] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const tenantUrl = scimTenantUrlFromOrigin(window.location.origin);
+
+  const rotateMutation = useMutation({
+    mutationFn: rotateScimToken,
+    onSuccess: (t) => {
+      setToken(t);
+      toast.success("SCIM トークンを発行しました");
+    },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "SCIM トークンの発行に失敗しました"),
+  });
+
+  return (
+    <div
+      className={css({
+        display: "flex",
+        flexDirection: "column",
+        gap: "3",
+        mt: "4",
+        pt: "4",
+        borderTopWidth: "1px",
+        borderTopStyle: "solid",
+        borderTopColor: "border",
+      })}
+    >
+      <h3 className={css({ fontSize: "sm", fontWeight: "600" })}>SCIM プロビジョニング</h3>
+      <div>
+        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+          テナント URL
+        </span>
+        <CopyableValue value={tenantUrl} />
+        <FieldHelp text="Entra ID 等の IdP のプロビジョニング設定で「テナント URL」に入れる値です。" />
+      </div>
+      {scimEnabled ? (
+        <div className={css({ display: "flex", flexDirection: "column", gap: "2" })}>
+          <div>
+            <button
+              type="button"
+              className={button({ variant: "secondary" })}
+              style={{ height: "36px" }}
+              onClick={() => setConfirmOpen(true)}
+              disabled={rotateMutation.isPending}
+            >
+              <KeyRound size={16} />
+              {rotateMutation.isPending ? "発行中…" : "トークンを発行 / 再発行"}
+            </button>
+            <FieldHelp text="再発行すると古いトークンは即座に無効になります。" />
+          </div>
+          {token ? (
+            <div className={css({ display: "flex", flexDirection: "column", gap: "2" })}>
+              <p
+                className={css({
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "2",
+                  fontSize: "sm",
+                  color: "warn.text",
+                })}
+              >
+                <AlertTriangle size={14} />
+                このトークンはこの画面でしか表示されません。今すぐコピーして IdP に設定してください。
+              </p>
+              <CopyableValue value={token} />
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className={css({ fontSize: "sm", color: "text.muted" })}>
+          トークンの発行は「SCIM プロビジョニングを有効にする」をオンにして保存すると使用できます。
+        </p>
+      )}
+      <ConfirmDialog
+        open={confirmOpen}
+        title="SCIM トークンを発行しますか？"
+        message="再発行すると古いトークンは即座に無効になります。IdP に設定済みのトークンは差し替えが必要です。"
+        confirmLabel="発行する"
+        destructive
+        busy={rotateMutation.isPending}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          rotateMutation.mutate();
+        }}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </div>
+  );
+}
+
+/** 値の表示 + クリップボードコピー（SCIM テナント URL / トークン用）。 */
+function CopyableValue({ value }: { value: string }) {
+  const toast = useToast();
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("コピーに失敗しました");
+    }
+  };
+
+  return (
+    <div className={css({ display: "flex", gap: "2", alignItems: "center" })}>
+      <code
+        className={css({
+          flex: "1",
+          fontFamily: "mono",
+          fontSize: "sm",
+          p: "2",
+          bg: "gray.50",
+          borderRadius: "sm",
+          borderWidth: "1px",
+          borderStyle: "solid",
+          borderColor: "border",
+          wordBreak: "break-all",
+        })}
+      >
+        {value}
+      </code>
+      <button
+        type="button"
+        className={button({ variant: "secondary" })}
+        style={{ height: "32px", flexShrink: 0 }}
+        onClick={copy}
+      >
+        {copied ? <Check size={14} /> : <Copy size={14} />}
+        {copied ? "コピー済み" : "コピー"}
+      </button>
+    </div>
+  );
 }
