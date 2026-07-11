@@ -221,6 +221,14 @@ class TestRenderNftablesRuleset:
         ruleset = render_nftables_ruleset(**self._VALID_KWARGS)
         assert "eth0" in ruleset
 
+    def test_wan_interface_double_quoted_not_single(self):
+        # nftables はシングルクォートを受け付けない。インターフェイス名は
+        # ダブルクォートで囲む必要がある（Python repr の 'eth0' は構文エラーになる）。
+        ruleset = render_nftables_ruleset(**self._VALID_KWARGS)
+        assert 'oif "eth0" masquerade' in ruleset
+        assert 'iif "eth0"' in ruleset
+        assert "'eth0'" not in ruleset
+
     def test_enabled_has_postrouting_chain(self):
         ruleset = render_nftables_ruleset(**self._VALID_KWARGS)
         assert "postrouting" in ruleset
