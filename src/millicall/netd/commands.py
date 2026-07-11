@@ -51,7 +51,8 @@ async def apply_dhcp(
 ) -> dict:
     """DHCP サーバ設定を適用する。
 
-    dnsmasq.conf を生成して書き込み、dnsmasq を再起動する。
+    LAN インターフェイスへ IP を付与して up にし、dnsmasq.conf を生成して
+    書き込み、dnsmasq を再起動する。
 
     ペイロードフィールド:
         lan_interface (str): LAN インターフェイス名。
@@ -99,6 +100,21 @@ async def apply_dhcp(
         )
     except ValueError as exc:
         return _err(f"設定生成エラー: {exc}")
+
+    # --- LAN インターフェイスに IP を付与して up にする ---
+    # dnsmasq は bind-interfaces でこの IP にバインドするため、DHCP を配る前に
+    # インターフェイスへ LAN IP を割り当てておく必要がある（未割り当てだと
+    # dnsmasq が起動できず電話に IP を配れない）。lan_interface / lan_ip /
+    # lan_prefix は上で検証済み。argv リストで渡すためシェルインジェクションは無い。
+    # ip addr replace は冪等（存在すれば置換、無ければ追加）で再適用しても -ERR にならない。
+    rc, _stdout, stderr = await ops.run(["ip", "link", "set", "dev", str(lan_interface), "up"])
+    if rc != 0:
+        return _err(f"LAN インターフェイス up 失敗 (rc={rc}): {stderr[:200]}")
+    rc, _stdout, stderr = await ops.run(
+        ["ip", "addr", "replace", f"{lan_ip}/{int(lan_prefix)}", "dev", str(lan_interface)]
+    )
+    if rc != 0:
+        return _err(f"LAN IP 付与失敗 (rc={rc}): {stderr[:200]}")
 
     try:
         ops.write_file(settings.dnsmasq_conf_path, conf)
