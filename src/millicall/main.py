@@ -99,6 +99,36 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+async def _reapply_network_config_on_startup(app: FastAPI, settings: Settings) -> None:
+    """core 起動時に保存済みネットワーク設定を netd へ best-effort で再適用する。
+
+    netd はステートレスのため、インターフェース IP・nftables・dnsmasq 設定は
+    OS/コンテナ再起動で失われる。DB の NetworkConfig を読み、過去に一度でも
+    apply に成功している（applied=True）場合のみ netd へ apply_dhcp / apply_nat を
+    再送してホストのランタイム状態を復旧する。
+
+    設定が無い・applied=False の場合は何もしない（デフォルト設定のまま勝手に
+    インターフェースを掴むのを防ぐ）。netd 未起動・接続失敗・その他例外はすべて
+    warning ログのみで握りつぶし、例外を送出しない（core 起動を止めないため）。
+    """
+    from millicall.models import NetworkConfig
+    from millicall.network.apply import apply_network_config_to_netd
+
+    try:
+        async with app.state.sessionmaker() as session:
+            cfg = await session.get(NetworkConfig, 1)
+        if cfg is None or not cfg.applied:
+            # 未保存 or 未適用（デフォルトのまま）なら起動時再適用は行わない。
+            return
+        await apply_network_config_to_netd(cfg, app.state.netd_client, settings)
+        logger.info("起動時にネットワーク設定を netd へ再適用しました")
+    except Exception:  # noqa: BLE001 — netd 未起動/接続失敗/NetdError を含めて起動は止めない
+        logger.warning(
+            "起動時のネットワーク設定再適用に失敗しました（core 起動は継続します）",
+            exc_info=True,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings: Settings = app.state.settings
@@ -187,6 +217,14 @@ async def lifespan(app: FastAPI):
     # netd UNIX ソケットクライアント（接続は遅延生成 — 呼び出し時に毎回接続する）。
     # netd が起動していない開発・テスト環境でも app 起動は止めない。
     app.state.netd_client = NetdClient(settings.netd_socket_path)
+
+    # OS/コンテナ再起動後のネットワーク設定自動再適用（best-effort）。
+    # netd はステートレスなため、インターフェース IP・nftables・dnsmasq 設定は
+    # 再起動で消える。保存済み設定を起動時に netd へ再適用して子ネットワークを復旧する。
+    # applied=True（過去に手動 apply 済み）のときだけ再適用し、一度も適用していない
+    # デフォルト環境で勝手に enp3s0 を掴むのを防ぐ。netd 未起動・接続失敗・NetdError は
+    # warning ログのみで握りつぶし、core 起動は止めない（telephony の reloadxml と同じ思想）。
+    await _reapply_network_config_on_startup(app, settings)
 
     # AI 再生制御用の共有 ESL コマンドクライアント（発着信制御と別接続）。
     # ESL 未到達（接続拒否・ハング）でも起動を止めない — timeout 付きで試行し warning のみ。
