@@ -132,6 +132,20 @@ def allocate_source_ports(
     return result
 
 
+def _reload_command_for(name: str, *, present: bool) -> str:
+    """トランク名に対する sofia プロファイル操作コマンドを 1 つ返す。
+
+    present=True（現在トランクが存在）→ restart（新規ロード/変更反映）。
+    present=False（削除済みで XML/ファイルが無い）→ stop（旧 in-memory
+    プロファイルを破棄してゴースト登録を防ぐ）。
+    どちらの経路でも名前を検証する。
+    """
+    if not _SAFE_TRUNK_NAME_RE.match(name):
+        raise ValueError(f"不正なトランク名です: {name!r}")
+    action = "restart" if present else "stop"
+    return f"sofia profile external_{name} {action}"
+
+
 def build_reload_commands(
     trunk_names: list[str],
     *,
@@ -139,19 +153,18 @@ def build_reload_commands(
 ) -> list[str]:
     """ESL リロード用の ESL(sofia) コマンド列を組み立てる（純関数・実行はしない）。
 
-    複数プロファイル(external_<name>)対応。各トランクプロファイルは
-    "sofia profile external_<name> restart" で新規ロード/変更反映の両方に対応する。
+    trunk_names は「現在存在するトランク名」の一覧。複数プロファイル
+    (external_<name>) 対応。
 
-    changed を指定するとそのトランクのプロファイルのみを対象にする（保存直後の
-    単一トランク反映用）。None なら全トランク分のコマンドを返す。
+    - changed 指定時: そのトランクのみを対象にする（保存/削除直後の反映用）。
+      changed が trunk_names に**あれば restart**（新規ロード/変更反映）、
+      **無ければ stop**（削除済み。restart では XML が無くゴースト登録が残るため、
+      旧 in-memory プロファイルを stop で破棄する）。
+    - changed=None: 現存する全トランクを name 昇順で restart する。
     """
-    targets = [changed] if changed is not None else sorted(trunk_names)
-    cmds: list[str] = []
-    for name in targets:
-        if not _SAFE_TRUNK_NAME_RE.match(name):
-            raise ValueError(f"不正なトランク名です: {name!r}")
-        cmds.append(f"sofia profile external_{name} restart")
-    return cmds
+    if changed is not None:
+        return [_reload_command_for(changed, present=changed in set(trunk_names))]
+    return [_reload_command_for(name, present=True) for name in sorted(trunk_names)]
 
 
 class FreeswitchConfigWriter:
