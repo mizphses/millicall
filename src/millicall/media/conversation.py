@@ -10,7 +10,14 @@
     - 再生開始直後 `barge_in_grace_ms` はバージイン無効（誤検知抑制）。
     - 遅延計測: 「発話終端確定（on_utterance 入口）→ 最初の再生直前」の ms をログ出力し
       `on_turn` にも渡す。
-    - LLM 応答に `[END_CALL]` があれば発話後に（未中断時のみ）`hangup`。
+    - LLM 応答に終了タグ `<end_talk/>`（後方互換 `[END_CALL]` も可）があれば発話後に
+      （未中断時のみ）`hangup`。検出・除去は millicall.ai.end_talk に一本化。
+      タグは文境界文字を含まないため、確定した文単位で検出すればチャンク分割の影響を
+      受けない（end_talk モジュールの docstring 参照）。
+    - STT 結果は `sanitize_user_input` で制御トークンを除去してから履歴へ積む
+      （通話相手の発話による強制終了・乗っ取りの防止）。
+    - システムプロンプトには終了タグ案内とインジェクション対策指示を自動追記する
+      （`build_guarded_system_prompt`）。
 """
 
 import asyncio
@@ -21,12 +28,16 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from millicall.ai.audio import pcm8k_to_wav
+from millicall.ai.end_talk import (
+    build_guarded_system_prompt,
+    sanitize_user_input,
+    split_end_talk,
+)
 from millicall.ai.llm.base import ChatMessage
 
 logger = logging.getLogger("millicall.media.conversation")
 
 _BOUNDARIES = "。！？\n"
-_END_MARKER = "[END_CALL]"
 _INTERRUPTED = object()
 
 # on_turn は (role, text, latency_ms) のタプルを 1 引数で受ける。
@@ -59,6 +70,9 @@ class ConversationSession:
         self._tts_dir.mkdir(parents=True, exist_ok=True)
         self._call_uuid = call_uuid
         self._on_turn = on_turn
+        # 終了タグ案内 + インジェクション対策指示を自動追記したシステムプロンプト
+        # （agent.system_prompt はセッション中不変なので初期化時に一度だけ組み立てる）。
+        self._system_prompt = build_guarded_system_prompt(agent.system_prompt)
         self._clock = clock or time.perf_counter
         self._barge_in_grace_ms = barge_in_grace_ms
         self._prefetch = max(1, prefetch)
@@ -165,7 +179,12 @@ class ConversationSession:
     async def _handle_user_text(
         self, text: str, utterance_end: float, *, pcm_bytes: int | None = None
     ) -> None:
-        """確定した発話テキストを履歴へ積み、LLM→TTS で応答する（バッチ/ストリーミング共通）。"""
+        """確定した発話テキストを履歴へ積み、LLM→TTS で応答する（バッチ/ストリーミング共通）。
+
+        STT 結果は信頼できない入力なので、履歴へ積む前に制御トークン
+        （<end_talk> 系タグ・[END_CALL]）を除去する。除去後に空なら応答しない。
+        """
+        text = sanitize_user_input(text)
         logger.info(
             "STT 結果 (uuid=%s, pcm_bytes=%s, text_len=%d)%s",
             self._call_uuid,
@@ -178,7 +197,7 @@ class ConversationSession:
         self._history.append(ChatMessage("user", text))
         await self._emit_turn("user", text, 0)
         self._trim_history()
-        messages = [ChatMessage("system", self._agent.system_prompt), *self._history]
+        messages = [ChatMessage("system", self._system_prompt), *self._history]
         await self._speak(messages, utterance_end)
 
     async def _transcribe(self, pcm: bytes) -> str:
@@ -306,9 +325,11 @@ class ConversationSession:
             await self._call_control.hangup()
 
     async def _enqueue_sentence(self, sentence: str, sentence_q: asyncio.Queue, state) -> None:
-        if _END_MARKER in sentence:
+        # 終了タグ判定は境界分割で確定した文単位で行う（タグは境界文字を含まないため
+        # チャンク分割で泣き別れない — end_talk モジュール参照）。
+        clean, end = split_end_talk(sentence)
+        if end:
             state["end_call"] = True
-        clean = sentence.replace(_END_MARKER, "").strip()
         if clean:
             await sentence_q.put(clean)
 
