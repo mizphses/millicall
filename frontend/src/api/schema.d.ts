@@ -61,6 +61,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Config
+         * @description ログイン画面向けの公開設定を返す（未認証で取得可能）。
+         *
+         *     SAML SSO が有効なとき、ログイン画面に「SSO でログイン」ボタンを表示するために使う。
+         *     認証不要のエンドポイントなので、秘匿情報や不要な設定値は決して含めないこと。
+         */
+        get: operations["public_config_api_auth_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/csrf": {
         parameters: {
             query?: never;
@@ -1267,8 +1290,12 @@ export interface paths {
          * Saml Acs
          * @description SAML Assertion Consumer Service（ACS）。
          *
-         *     IdP が POST する SAMLResponse を受け取り、署名検証・条件検証・ユーザー upsert・
+         *     IdP が POST する SAMLResponse を受け取り、署名検証・条件検証・ユーザー照合・
          *     セッション発行を行う。
+         *
+         *     ユーザー照合は scim_enabled で分岐する（モジュール docstring 参照）:
+         *       - SCIM モード: origin="scim" のプロビジョニング済みユーザーのみ許可（JIT 作成なし）。
+         *       - 従来モード: origin="saml" のみ許可、未存在なら JIT 作成する。
          *
          *     失敗時は必ず 400 を返し、セッションは発行しない。
          *     アサーション内容はログ・監査に記録しない（理由コードのみ）。
@@ -1980,6 +2007,16 @@ export interface components {
             name?: string | null;
         };
         /**
+         * PublicConfig
+         * @description ログイン画面向けの公開設定レスポンス。
+         *
+         *     未認証で参照できるため、返す項目は最小限に保つこと（現状 saml_enabled のみ）。
+         */
+        PublicConfig: {
+            /** Saml Enabled */
+            saml_enabled: boolean;
+        };
+        /**
          * QuickProvisionBody
          * @description クイックプロビジョニングリクエストボディ。
          */
@@ -2560,6 +2597,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_config_api_auth_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicConfig"];
                 };
             };
         };

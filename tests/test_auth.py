@@ -1,3 +1,5 @@
+from httpx import ASGITransport, AsyncClient
+
 from millicall.auth.security import (
     hash_password,
     issue_session,
@@ -5,6 +7,8 @@ from millicall.auth.security import (
     verify_password,
 )
 from millicall.auth.service import ensure_admin_user
+from millicall.config import Settings
+from millicall.main import create_app
 from millicall.models import User
 
 
@@ -99,6 +103,40 @@ def test_user_role_default_is_user() -> None:
     assert col.server_default.arg == "user", (
         f"expected server_default 'user', got {col.server_default.arg!r}"
     )
+
+
+# 公開設定エンドポイント（ログイン画面向け）
+async def test_public_config_unauthenticated_saml_disabled(client) -> None:
+    """未認証で /api/auth/config を取得でき、SAML 無効時は false を返す。"""
+    resp = await client.get("/api/auth/config")
+    assert resp.status_code == 200
+    assert resp.json() == {"saml_enabled": False}
+
+
+async def test_public_config_saml_enabled(tmp_path) -> None:
+    """SAML 有効時は saml_enabled=true を返す（未認証で取得可能）。"""
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
+        fs_config_dir=tmp_path / "fs",
+        cookie_secure=False,
+        esl_timeout_seconds=1.0,
+        saml_enabled=True,
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/auth/config")
+            assert resp.status_code == 200
+            assert resp.json() == {"saml_enabled": True}
+
+
+async def test_public_config_minimal_shape(client) -> None:
+    """公開設定は最小限（saml_enabled のみ）で、秘匿情報を含まない。"""
+    resp = await client.get("/api/auth/config")
+    assert resp.status_code == 200
+    assert set(resp.json().keys()) == {"saml_enabled"}
 
 
 # M6: セキュリティヘッダーテスト

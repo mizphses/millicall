@@ -2,12 +2,17 @@ import { Link, useRouterState } from "@tanstack/react-router";
 
 import { css } from "styled-system/css";
 
-import { NAV_SECTIONS, activeNavPath } from "./nav";
+import { activeNavPath, navSectionsForRole } from "./nav";
 
-export function SideNav() {
+/**
+ * サイドナビ。role に応じて表示項目をフィルタする。
+ * role 未指定時は安全側（一般ユーザー相当 = 管理系項目なし）で描画する。
+ */
+export function SideNav({ role }: { role?: string }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // 入れ子パス（/network と /network/remote）でも 1 件だけを強調する
   const activePath = activeNavPath(pathname);
+  const sections = navSectionsForRole(role ?? "user");
 
   return (
     <nav
@@ -40,7 +45,7 @@ export function SideNav() {
         millicall
       </div>
       <div className={css({ p: "2", overflowY: "auto" })}>
-        {NAV_SECTIONS.map((section, i) => (
+        {sections.map((section, i) => (
           <div key={section.title ?? `section-${i}`}>
             {section.title ? (
               <div

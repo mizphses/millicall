@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { NAV_ITEMS, NAV_SECTIONS, activeNavPath, titleForPath } from "../shell/nav";
+import {
+  NAV_ITEMS,
+  NAV_SECTIONS,
+  USER_ALLOWED_PATHS,
+  activeNavPath,
+  navSectionsForRole,
+  titleForPath,
+} from "../shell/nav";
 
 /**
  * nav.ts のセクション構造テスト。
@@ -48,6 +55,57 @@ describe("NAV_SECTIONS", () => {
   it("パスに重複がない", () => {
     const paths = NAV_ITEMS.map((i) => i.path);
     expect(new Set(paths).size).toBe(paths.length);
+  });
+});
+
+describe("navSectionsForRole", () => {
+  it("admin には全セクションをそのまま返す", () => {
+    expect(navSectionsForRole("admin")).toEqual(NAV_SECTIONS);
+  });
+
+  it("user にはアカウント関連（セキュリティ）のみ返す", () => {
+    const sections = navSectionsForRole("user");
+    expect(sections).toHaveLength(1);
+    expect(sections[0].title).toBe("アカウント");
+    expect(sections[0].items.map((i) => i.path)).toEqual(["/settings/security"]);
+  });
+
+  it("user に管理系項目（内線・トランク・ユーザー管理・設定など）は一切表示しない", () => {
+    const paths = navSectionsForRole("user").flatMap((s) => s.items.map((i) => i.path));
+    const adminOnly = [
+      "/",
+      "/extensions",
+      "/trunks",
+      "/routes",
+      "/ai-agents",
+      "/workflows",
+      "/contacts",
+      "/providers",
+      "/devices",
+      "/network",
+      "/network/remote",
+      "/users",
+      "/system",
+      "/sso",
+      "/settings",
+      "/cdr",
+      "/audit",
+    ];
+    for (const p of adminOnly) {
+      expect(paths).not.toContain(p);
+    }
+  });
+
+  it("未知のロールは安全側（user と同じ表示）に倒す", () => {
+    expect(navSectionsForRole("superuser")).toEqual(navSectionsForRole("user"));
+    expect(navSectionsForRole("")).toEqual(navSectionsForRole("user"));
+  });
+
+  it("USER_ALLOWED_PATHS のパスはすべて NAV_ITEMS に存在する（表示漏れ防止）", () => {
+    const all = new Set(NAV_ITEMS.map((i) => i.path));
+    for (const p of USER_ALLOWED_PATHS) {
+      expect(all.has(p)).toBe(true);
+    }
   });
 });
 
