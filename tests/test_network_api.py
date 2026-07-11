@@ -540,6 +540,60 @@ async def test_apply_derives_provisioning_url_when_empty(auth_client_with_teleph
 
 
 @pytest.mark.asyncio
+async def test_apply_sets_applied_flag(auth_client_with_telephony, app):
+    """apply 成功後に network_config.applied が True にセットされること。
+
+    applied フラグは OS/コンテナ再起動後の起動時自動再適用の判定に使う。
+    """
+    fake = _FakeNetdClient()
+    _inject_fake_netd(app, fake)
+    try:
+        c = auth_client_with_telephony
+        # 初期状態では applied=False であることを確認する。
+        from millicall.models import NetworkConfig
+
+        async with app.state.sessionmaker() as session:
+            cfg = await session.get(NetworkConfig, 1)
+            if cfg is None:
+                cfg = NetworkConfig(id=1)
+                session.add(cfg)
+                await session.commit()
+            assert cfg.applied is False
+
+        resp = await c.post("/api/network/apply")
+        assert resp.status_code == 200
+
+        # apply 成功後に applied=True になること。
+        async with app.state.sessionmaker() as session:
+            cfg = await session.get(NetworkConfig, 1)
+        assert cfg is not None
+        assert cfg.applied is True
+    finally:
+        _remove_fake_netd(app)
+
+
+@pytest.mark.asyncio
+async def test_apply_netd_error_keeps_applied_false(auth_client_with_telephony, app):
+    """apply が失敗（NetdError）したときは applied を True にしないこと。"""
+    fake = _FakeNetdClient()
+    fake.fail_apply_dhcp = True
+    _inject_fake_netd(app, fake)
+    try:
+        c = auth_client_with_telephony
+        resp = await c.post("/api/network/apply")
+        assert resp.status_code == 502
+
+        from millicall.models import NetworkConfig
+
+        async with app.state.sessionmaker() as session:
+            cfg = await session.get(NetworkConfig, 1)
+        assert cfg is not None
+        assert cfg.applied is False
+    finally:
+        _remove_fake_netd(app)
+
+
+@pytest.mark.asyncio
 async def test_apply_netd_error_returns_502(auth_client_with_telephony, app):
     """netd が失敗したとき 502 を返すこと。"""
     fake = _FakeNetdClient()
