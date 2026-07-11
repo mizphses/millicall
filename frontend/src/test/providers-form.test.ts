@@ -40,12 +40,22 @@ describe("KIND_CATALOG / typeForKind", () => {
     expect(KIND_CATALOG.anthropic.usesApiKey).toBe(true);
     expect(KIND_CATALOG.gemini.usesApiKey).toBe(true);
     expect(KIND_CATALOG.whisper.usesApiKey).toBe(true);
-    // coefont は api_key 欄に access secret を入れる（access key は config 側）
+    // coefont は api_key 欄にアクセスシークレットを入れる（アクセスキーは config 側）
     expect(KIND_CATALOG.coefont.usesApiKey).toBe(true);
     expect(KIND_CATALOG.vertex_ai.usesApiKey).toBe(false);
     expect(KIND_CATALOG.voicevox.usesApiKey).toBe(false);
     expect(KIND_CATALOG.openjtalk.usesApiKey).toBe(false);
     expect(KIND_CATALOG.google_stt.usesApiKey).toBe(false);
+  });
+
+  it("coefont の資格情報は「アクセスキー」→「アクセスシークレット」の名称・順序で表示する", () => {
+    const def = KIND_CATALOG.coefont;
+    expect(def.fields[0]).toMatchObject({ key: "access_key", label: "アクセスキー" });
+    // アクセスシークレット欄はアクセスキー欄の直後に表示される
+    expect(def.apiKeyField).toMatchObject({
+      label: "アクセスシークレット",
+      afterConfigKey: "access_key",
+    });
   });
 
   it("SA JSON を使う kind は vertex_ai / google_stt のみ", () => {

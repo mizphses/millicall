@@ -34,6 +34,12 @@ export interface KindDef {
   /** api_key を使う kind か（registry が api_key を渡す kind のみ true）。 */
   usesApiKey: boolean;
   /**
+   * api_key 入力欄の表示定義（省略時はラベル「API キー」・config 欄の前に表示）。
+   * afterConfigKey を指定すると、その config フィールドの直後に表示する
+   * （coefont: アクセスキー → アクセスシークレット の順にするため）。
+   */
+  apiKeyField?: { label: string; placeholder?: string; afterConfigKey?: string };
+  /**
    * api_key の実体をサービスアカウント JSON として扱う kind か。
    * true の場合、UI は API キー入力欄の代わりに JSON アップロード欄を出し、
    * 読み取った JSON 文字列を payload の api_key として送る（vertex_ai / google_stt）。
@@ -57,7 +63,7 @@ export const TYPE_LABEL: Record<ProviderType, string> = {
  * - vertex_ai: project / location / model / temperature（SA JSON 認証）
  * - voicevox: engine_url / speaker（api_key なし）
  * - openjtalk: dict_dir / voice_path（api_key なし・サーバ側パス）
- * - coefont: access_key / coefont / speed / pitch（api_key = access secret）
+ * - coefont: access_key / coefont / speed / pitch（api_key = アクセスシークレット）
  * - whisper: model / language（api_key あり）
  * - google_stt: project / location / language / model（SA JSON 認証 or ADC）
  */
@@ -156,10 +162,16 @@ export const KIND_CATALOG: Record<ProviderKind, KindDef> = {
     kind: "coefont",
     type: "tts",
     label: "CoeFont",
-    description: "CoeFont CLOUD による音声合成（API キー欄には access secret を入力）",
+    description: "CoeFont CLOUD による音声合成",
     usesApiKey: true,
+    // アクセスシークレットは write-only の api_key として送る（アクセスキーは config 側）。
+    apiKeyField: {
+      label: "アクセスシークレット",
+      placeholder: "CoeFont のアクセスシークレット",
+      afterConfigKey: "access_key",
+    },
     fields: [
-      { key: "access_key", label: "アクセスキー", valueType: "string", placeholder: "CoeFont の access key" },
+      { key: "access_key", label: "アクセスキー", valueType: "string", placeholder: "CoeFont のアクセスキー" },
       { key: "coefont", label: "CoeFont ID (声の UUID)", valueType: "string", placeholder: "xxxxxxxx-xxxx-..." },
       { key: "speed", label: "話速 (0.1–10)", valueType: "number", placeholder: "1" },
       { key: "pitch", label: "ピッチ (-3000–3000)", valueType: "number", placeholder: "0" },

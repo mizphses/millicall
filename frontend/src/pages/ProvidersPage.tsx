@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { PlugZap, Pencil, Trash2 } from "lucide-react";
 
 import { css, cx } from "styled-system/css";
@@ -221,6 +221,44 @@ export function ProvidersPage() {
   const showSaJsonInput = Boolean(activeKind.usesSaJson) && authMethod === "sa";
   const showApiKeyInput =
     activeKind.usesApiKey || (Boolean(activeKind.usesSaJson) && authMethod === "api_key");
+  // api_key 欄の表示定義（kind ごとにラベル・位置を差し替え可能。既定は「API キー」・config 欄の前）。
+  const apiKeyLabel = activeKind.apiKeyField?.label ?? "API キー";
+  const apiKeyAfterConfigKey = activeKind.apiKeyField?.afterConfigKey;
+
+  const apiKeyInput = showApiKeyInput ? (
+    <div>
+      <div className={css({ display: "flex", alignItems: "flex-end", gap: "2" })}>
+        <label className={css({ display: "block", flex: "1" })}>
+          <span
+            className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
+          >
+            {editing ? `${apiKeyLabel}（空のまま＝変更しない）` : `${apiKeyLabel}（任意）`}
+          </span>
+          <input
+            className={cx(input(), css({ width: "100%" }))}
+            type={showApiKey ? "text" : "password"}
+            value={form.api_key}
+            onChange={(e) => setForm((f) => ({ ...f, api_key: e.target.value }))}
+            placeholder={
+              editing
+                ? editing.api_key_masked
+                  ? `現在: ${editing.api_key_masked}`
+                  : "変更する場合のみ入力"
+                : (activeKind.apiKeyField?.placeholder ?? "sk-...")
+            }
+            autoComplete="new-password"
+          />
+        </label>
+        <button
+          type="button"
+          className={button({ variant: "secondary", size: "sm" })}
+          onClick={() => setShowApiKey((v) => !v)}
+        >
+          {showApiKey ? "隠す" : "表示"}
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <PageLayout
@@ -363,40 +401,7 @@ export function ProvidersPage() {
             />
           </Field>
 
-          {showApiKeyInput ? (
-            <div>
-              <div className={css({ display: "flex", alignItems: "flex-end", gap: "2" })}>
-                <label className={css({ display: "block", flex: "1" })}>
-                  <span
-                    className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
-                  >
-                    {editing ? "API キー（空のまま＝変更しない）" : "API キー（任意）"}
-                  </span>
-                  <input
-                    className={cx(input(), css({ width: "100%" }))}
-                    type={showApiKey ? "text" : "password"}
-                    value={form.api_key}
-                    onChange={(e) => setForm((f) => ({ ...f, api_key: e.target.value }))}
-                    placeholder={
-                      editing
-                        ? editing.api_key_masked
-                          ? `現在: ${editing.api_key_masked}`
-                          : "変更する場合のみ入力"
-                        : "sk-..."
-                    }
-                    autoComplete="new-password"
-                  />
-                </label>
-                <button
-                  type="button"
-                  className={button({ variant: "secondary", size: "sm" })}
-                  onClick={() => setShowApiKey((v) => !v)}
-                >
-                  {showApiKey ? "隠す" : "表示"}
-                </button>
-              </div>
-            </div>
-          ) : null}
+          {apiKeyAfterConfigKey === undefined ? apiKeyInput : null}
 
           {showSaJsonInput ? (
             <div>
@@ -454,39 +459,42 @@ export function ProvidersPage() {
           ) : null}
 
           {activeKind.fields.map((field) => (
-            <Field key={field.key} label={field.label} error={errors.config[field.key]}>
-              {field.valueType === "select" ? (
-                <select
-                  className={input()}
-                  value={form.config[field.key] ?? field.options?.[0]?.value ?? ""}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      config: { ...f.config, [field.key]: e.target.value },
-                    }))
-                  }
-                >
-                  {(field.options ?? []).map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  className={input({ invalid: errors.config[field.key] ? true : undefined })}
-                  inputMode={field.valueType === "number" ? "decimal" : undefined}
-                  value={form.config[field.key] ?? ""}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      config: { ...f.config, [field.key]: e.target.value },
-                    }))
-                  }
-                  placeholder={field.placeholder}
-                />
-              )}
-            </Field>
+            <Fragment key={field.key}>
+              <Field label={field.label} error={errors.config[field.key]}>
+                {field.valueType === "select" ? (
+                  <select
+                    className={input()}
+                    value={form.config[field.key] ?? field.options?.[0]?.value ?? ""}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        config: { ...f.config, [field.key]: e.target.value },
+                      }))
+                    }
+                  >
+                    {(field.options ?? []).map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className={input({ invalid: errors.config[field.key] ? true : undefined })}
+                    inputMode={field.valueType === "number" ? "decimal" : undefined}
+                    value={form.config[field.key] ?? ""}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        config: { ...f.config, [field.key]: e.target.value },
+                      }))
+                    }
+                    placeholder={field.placeholder}
+                  />
+                )}
+              </Field>
+              {field.key === apiKeyAfterConfigKey ? apiKeyInput : null}
+            </Fragment>
           ))}
 
           <label
