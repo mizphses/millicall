@@ -16,13 +16,21 @@
     スキームを含まない）のみ許可する。
   - 監査: saml.login.success / saml.login.failure（理由コードのみ; アサーション内容は記録しない）。
 
-ユーザー upsert ポリシー:
-  - メールアドレスで照合する（SAML NameID または属性）。
-  - 既存ユーザーが存在する場合: display_name を更新し、enabled を確認する。
-    role はそのまま維持する（既存ロールを尊重）。
-  - 既存ユーザーが存在しない場合: origin="saml", role=saml_default_role,
-    username=email（50 文字に切り捨て）で新規作成する。
-    hashed_password はランダム Argon2 ハッシュ（ローカルログイン不可）。
+ユーザー upsert ポリシー（scim_enabled で分岐）:
+  - scim_enabled=False（従来モード）:
+    - メールアドレスで照合する（SAML NameID または属性）。
+    - 既存ユーザーが存在する場合: origin="saml" のみ許可。display_name を更新し、
+      enabled を確認する。role はそのまま維持する（既存ロールを尊重）。
+    - 既存ユーザーが存在しない場合: origin="saml", role=saml_default_role,
+      username=email（50 文字に切り捨て）で JIT 新規作成する。
+      hashed_password はランダム Argon2 ハッシュ（ローカルログイン不可）。
+  - scim_enabled=True（SCIM モード）:
+    - JIT 作成は行わない。プロビジョニングは SCIM のみが担当する。
+    - 照合は email → username の順（SCIM の userName は UPN であり、NameID も
+      UPN のことが多い。email 未設定の SCIM ユーザーを username で救済する）。
+    - origin="scim" のユーザーのみログイン許可。それ以外・未存在は 400。
+    - display_name は上書きしない（SCIM が属性のソースオブトゥルース）。
+    - enabled=False は拒否（SCIM の deactivate が即座に効く）。
 """
 
 import base64
@@ -308,8 +316,12 @@ async def saml_acs(
 ) -> RedirectResponse:
     """SAML Assertion Consumer Service（ACS）。
 
-    IdP が POST する SAMLResponse を受け取り、署名検証・条件検証・ユーザー upsert・
+    IdP が POST する SAMLResponse を受け取り、署名検証・条件検証・ユーザー照合・
     セッション発行を行う。
+
+    ユーザー照合は scim_enabled で分岐する（モジュール docstring 参照）:
+      - SCIM モード: origin="scim" のプロビジョニング済みユーザーのみ許可（JIT 作成なし）。
+      - 従来モード: origin="saml" のみ許可、未存在なら JIT 作成する。
 
     失敗時は必ず 400 を返し、セッションは発行しない。
     アサーション内容はログ・監査に記録しない（理由コードのみ）。
@@ -503,44 +515,76 @@ async def saml_acs(
         await _fail("replay_detected")
         raise HTTPException(status_code=400, detail="Replay detected")
 
-    # ---- Step 8: ユーザー upsert ----
+    # ---- Step 8: ユーザー照合 / upsert（scim_enabled で分岐）----
     async with request.app.state.sessionmaker() as db_session:
-        existing_user = await db_session.scalar(select(User).where(User.email == email))
+        if settings.scim_enabled:
+            # SCIM モード: JIT 作成は行わず、SCIM でプロビジョニング済みの
+            # ユーザーのみログインを許可する。
+            # 照合順: email → username（SCIM の userName は UPN であり、NameID も
+            # UPN のことが多い。email 未設定の SCIM ユーザーを username で救済する）。
+            scim_user = await db_session.scalar(select(User).where(User.email == email))
+            if scim_user is None:
+                scim_user = await db_session.scalar(select(User).where(User.username == email))
 
-        if existing_user is not None:
-            # セキュリティ（レビュー H-1）: SAML でローカル(または SCIM)由来アカウントへ
-            # ログインさせない。email 一致だけで origin="local" の（管理者含む）アカウントの
-            # セッションを発行できると、IdP が当該 email をアサートするだけで乗っ取りになる。
-            # 採用は origin="saml" のアカウントに限定する（明示リンク機構は将来対応）。
-            if existing_user.origin != "saml":
-                await _fail("origin_conflict", actor_label=email)
+            if scim_user is None:
+                await _fail("user_not_provisioned", actor_label=email)
                 raise HTTPException(
                     status_code=400,
-                    detail="この email は SSO 以外のアカウントに紐づいています",
+                    detail="このユーザーは SCIM でプロビジョニングされていません",
                 )
-            # 既存 SAML ユーザー: enabled 確認・display_name 更新（role は維持）
-            if not existing_user.enabled:
+            # セキュリティ: SCIM モードでは origin="scim" 以外（local/saml）への
+            # ログインを許可しない。email 一致だけで他由来アカウントのセッションを
+            # 発行できると、IdP のアサートだけで乗っ取りになる（レビュー H-1 と同旨）。
+            if scim_user.origin != "scim":
+                await _fail("not_scim_provisioned", actor_label=email)
+                raise HTTPException(
+                    status_code=400,
+                    detail="このユーザーは SCIM でプロビジョニングされていません",
+                )
+            # SCIM の deactivate（enabled=False）を即座に反映する
+            if not scim_user.enabled:
                 await _fail("user_disabled", actor_label=email)
                 raise HTTPException(status_code=400, detail="User account is disabled")
-            existing_user.display_name = display_name
-            db_session.add(existing_user)
-            user = existing_user
+            # display_name は上書きしない（SCIM が属性のソースオブトゥルース）
+            user = scim_user
         else:
-            # 新規 SAML ユーザー作成
-            # username は email（最大 50 文字; DB unique 制約あり）
-            username = email[:50]
-            # ローカルログイン不可: 使用不能なランダムパスワードをハッシュ化
-            unusable_pw = hash_password(secrets.token_hex(32))
-            user = User(
-                username=username,
-                hashed_password=unusable_pw,
-                display_name=display_name,
-                email=email,
-                role=settings.saml_default_role,
-                origin="saml",
-                enabled=True,
-            )
-            db_session.add(user)
+            # 従来モード: origin="saml" のみ許可し、未存在なら JIT 作成する
+            existing_user = await db_session.scalar(select(User).where(User.email == email))
+
+            if existing_user is not None:
+                # セキュリティ（レビュー H-1）: SAML でローカル(または SCIM)由来アカウントへ
+                # ログインさせない。email 一致だけで origin="local" の（管理者含む）アカウントの
+                # セッションを発行できると、IdP が当該 email をアサートするだけで乗っ取りになる。
+                # 採用は origin="saml" のアカウントに限定する（明示リンク機構は将来対応）。
+                if existing_user.origin != "saml":
+                    await _fail("origin_conflict", actor_label=email)
+                    raise HTTPException(
+                        status_code=400,
+                        detail="この email は SSO 以外のアカウントに紐づいています",
+                    )
+                # 既存 SAML ユーザー: enabled 確認・display_name 更新（role は維持）
+                if not existing_user.enabled:
+                    await _fail("user_disabled", actor_label=email)
+                    raise HTTPException(status_code=400, detail="User account is disabled")
+                existing_user.display_name = display_name
+                db_session.add(existing_user)
+                user = existing_user
+            else:
+                # 新規 SAML ユーザー作成
+                # username は email（最大 50 文字; DB unique 制約あり）
+                username = email[:50]
+                # ローカルログイン不可: 使用不能なランダムパスワードをハッシュ化
+                unusable_pw = hash_password(secrets.token_hex(32))
+                user = User(
+                    username=username,
+                    hashed_password=unusable_pw,
+                    display_name=display_name,
+                    email=email,
+                    role=settings.saml_default_role,
+                    origin="saml",
+                    enabled=True,
+                )
+                db_session.add(user)
 
         await db_session.flush()  # user.id を確定させる
 
