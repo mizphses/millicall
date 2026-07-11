@@ -36,6 +36,12 @@ if [ ! -f /etc/freeswitch/freeswitch.xml ]; then
   rm -rf /etc/freeswitch/sip_profiles/internal \
          /etc/freeswitch/sip_profiles/external \
          /etc/freeswitch/sip_profiles/external-ipv6
+  # vanilla の外線プロファイル external.xml も除去する。core はトランクごとに
+  # external_<name>.xml を生成し、統合 external.xml は生成しない。残すと vanilla
+  # external プロファイルが sip-port 5080 を先取りして external_<先頭トランク> の
+  # bind と衝突し外線が登録できなくなる（sip_profiles をディレクトリマウントにした
+  # 構成では vanilla external.xml がホスト側 dir にコピーされ再発するため必須）。
+  rm -f /etc/freeswitch/sip_profiles/external.xml
 fi
 
 # mod_audio_stream（イメージ同梱、AI 音声フォーク用）を自動ロードに追加する。
