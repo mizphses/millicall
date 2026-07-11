@@ -151,6 +151,38 @@ async def test_reloadxml_wire_on_extension_create(tmp_path) -> None:
     )
 
 
+async def test_reloadxml_wire_on_startup(tmp_path) -> None:
+    """起動時にも reloadxml を FreeSWITCH に送ること。
+
+    core だけが更新・再起動されるケース（millicallctl update 等）では FreeSWITCH は
+    動き続けているため、lifespan がテンプレート変更を含む設定を再生成しても
+    reloadxml を送らなければ FreeSWITCH のキャッシュ済み dialplan が古いまま残る
+    （実機で start_dtmf 追加が反映されず DTMF が全滅した事象の根本原因）。
+    """
+    server, port, received = await _start_accepting_fake_fs()
+
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
+        fs_config_dir=tmp_path / "fs",
+        cookie_secure=False,
+        esl_host="127.0.0.1",
+        esl_port=port,
+        esl_timeout_seconds=2.0,
+    )
+    application = create_app(settings)
+    try:
+        async with application.router.lifespan_context(application):
+            pass
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert any("reloadxml" in cmd for cmd in received), (
+        f"startup で reloadxml が FreeSWITCH に送られていない; commands seen: {received}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Finding 3: disabled extension is excluded from the generated FS config
 # ---------------------------------------------------------------------------

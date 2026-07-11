@@ -163,8 +163,12 @@ async def lifespan(app: FastAPI):
             "(この表示は一度きりです。安全に保管してください)"
         )
 
+    # 設定を再生成し、reloadxml まで送る（notify）。core のみ更新・再起動される
+    # ケースでは FreeSWITCH が動き続けているため、reloadxml を送らないと
+    # テンプレート変更が反映されずキャッシュ済み dialplan が古いまま残る。
+    # FreeSWITCH 未起動（初回同時起動）なら notify 内で警告ログのみ出して継続する。
     async with app.state.sessionmaker() as session:
-        await listener.regenerate(session)
+        await listener.notify(session)
 
     recorder = CdrRecorder(app.state.sessionmaker)
 
