@@ -43,6 +43,8 @@ import { APP_SETTINGS_KEY } from "../queryKeys";
 import { PageLayout } from "../components/PageLayout";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../toast/ToastProvider";
+import { ScimRoleMapField } from "./settings/ScimRoleMapField";
+import { roleMapToRowsJson, rowsJsonToRoleMap } from "./settings/scimRoleMap";
 import {
   idpMetadataToFormValues,
   isHttpsProtocol,
@@ -110,7 +112,7 @@ async function rotateScimToken(): Promise<string> {
 type FieldDef = {
   key: string;
   label: string;
-  type: "text" | "number" | "boolean" | "secret" | "textarea" | "select";
+  type: "text" | "number" | "boolean" | "secret" | "textarea" | "select" | "scim_role_map";
   options?: { value: string; label: string }[];
   placeholder?: string;
   /** 入力欄の下に出す補足説明。 */
@@ -180,6 +182,12 @@ const SECTIONS: SectionDef[] = [
         type: "number",
       },
       { key: "scim_enabled", label: "SCIM プロビジョニングを有効にする", type: "boolean" },
+      {
+        key: "scim_group_role_map",
+        label: "SCIM グループ → ロール割り当て",
+        type: "scim_role_map",
+        help: "IdP から同期したグループの displayName に一致するメンバーへロールを自動付与します（admin が最優先）。どの割り当て済みグループにも属さない SCIM ユーザーは user に戻ります。空にすると自動付与は無効です。",
+      },
     ],
   },
   {
@@ -314,6 +322,8 @@ function settingsToForm(data: SettingsRead): FormState {
     for (const field of section.fields) {
       if (field.type === "secret") {
         form[field.key] = ""; // 書き込み専用（現在値は表示しない）
+      } else if (field.type === "scim_role_map") {
+        form[field.key] = roleMapToRowsJson(data.values[field.key]);
       } else if (field.type === "boolean") {
         form[field.key] = Boolean(data.values[field.key]);
       } else {
@@ -333,6 +343,9 @@ function sectionToValues(section: SectionDef, form: FormState): Record<string, u
     if (field.type === "secret") {
       // 空欄 = 変更しない（書き込み専用）
       if (typeof raw === "string" && raw !== "") values[field.key] = raw;
+    } else if (field.type === "scim_role_map") {
+      // rows JSON → map（グループ名重複は Error → toast で通知）
+      values[field.key] = rowsJsonToRoleMap(raw);
     } else if (field.type === "boolean") {
       values[field.key] = Boolean(raw);
     } else if (field.type === "number") {
@@ -692,6 +705,16 @@ function SettingField({
           placeholder={field.placeholder}
         />
         <FieldHelp text="入力した値は暗号化して保存されます。保存後は表示できません。空欄のまま保存すると既存の値を保持します。" />
+      </div>
+    );
+  }
+
+  if (field.type === "scim_role_map") {
+    return (
+      <div className={css({ gridColumn: "1 / -1" })}>
+        {labelRow}
+        <ScimRoleMapField value={String(value)} onChange={(v) => onChange(v)} />
+        {field.help ? <FieldHelp text={field.help} /> : null}
       </div>
     );
   }
