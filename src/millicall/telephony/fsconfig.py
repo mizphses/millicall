@@ -184,6 +184,11 @@ class FreeswitchConfigWriter:
         # SIP多層防御 (Phase 6 Task 7): 信頼CIDR と 匿名着信拒否フラグ
         sip_trusted_cidrs: list[str] | None = None,
         sip_reject_anonymous: bool = False,
+        # 子LAN（netd DHCP 配下）対応: 子ネットワーク適用時に internal プロファイルの
+        # バインドIP／ドメインを子LAN GW IP に切り替えるためのパラメータ。
+        # どちらも None のときは従来動作（sip_bind_ip / sip_domain へフォールバック）。
+        internal_bind_ip: str | None = None,
+        internal_domain: str | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         safe_prefixes: list[str] = international_allow_prefixes or []
@@ -197,8 +202,20 @@ class FreeswitchConfigWriter:
                 )
         # デフォルト: RFC1918プライベート全帯域 + loopback（HGW 192.168.1.1 は192.168.0.0/16に内包）
         _default_cidrs = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"]
+        # internal プロファイルの実効バインドIP／ドメインを決定する。
+        # - internal_bind_ip 指定時（子LAN適用時）: そのIPを sip-ip/rtp-ip に使う。
+        #   未指定なら従来どおり sip_bind_ip（None なら sip_ip/rtp_ip）へフォールバック。
+        # - internal_domain 指定時（子LAN適用時）: そのIPを internal のドメインに使う。
+        #   未指定なら従来どおり sip_domain へフォールバック。
+        # external プロファイルは常に sip_bind_ip（上流IP）を使うため影響しない。
+        effective_internal_bind_ip = (
+            internal_bind_ip if internal_bind_ip is not None else sip_bind_ip
+        )
+        effective_internal_domain = internal_domain if internal_domain is not None else sip_domain
         self._base = {
             "sip_domain": sip_domain,
+            "internal_bind_ip": effective_internal_bind_ip,
+            "internal_domain": effective_internal_domain,
             "sip_port": sip_port,
             "sip_ip": sip_ip,
             "rtp_ip": rtp_ip,
@@ -239,6 +256,28 @@ class FreeswitchConfigWriter:
                 )
         self._base["international_allow_prefixes"] = list(international_allow_prefixes)
         self._base["sip_reject_anonymous"] = sip_reject_anonymous
+
+    def set_internal_network(
+        self, internal_bind_ip: str | None, internal_domain: str | None
+    ) -> None:
+        """internal プロファイルの実効バインドIP／ドメインを差し替える。
+
+        子LAN（netd DHCP ネットワーク）適用状態は DB の NetworkConfig で決まるため、
+        __init__ 後（regenerate 時）に最新値へ更新するために使う。
+
+        - internal_bind_ip: 子LAN GW IP（適用時）or None → None なら sip_bind_ip
+          （さらに None なら sip_ip/rtp_ip）へフォールバック。
+        - internal_domain: 子LAN GW IP（適用時）or None → None なら sip_domain へ
+          フォールバック。
+
+        external プロファイルは常に sip_bind_ip（上流IP）を使うため影響しない。
+        """
+        self._base["internal_bind_ip"] = (
+            internal_bind_ip if internal_bind_ip is not None else self._base["sip_bind_ip"]
+        )
+        self._base["internal_domain"] = (
+            internal_domain if internal_domain is not None else self._base["sip_domain"]
+        )
 
     def _render(self, template: str, extra: dict | None = None) -> str:
         context = dict(self._base)

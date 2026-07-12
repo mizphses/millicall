@@ -14,7 +14,7 @@
         <action application="log" data="INFO ===== RING GROUP {{ group.number }} ({{ group.member_numbers | length }} members) ====="/>
         <action application="set" data="ignore_early_media=true"/>
         <action application="set" data="hangup_after_bridge=true"/>
-        <action application="bridge" data="{% for m in group.member_numbers %}user/{{ m }}@{{ sip_domain }}{% if not loop.last %},{% endif %}{% endfor %}"/>
+        <action application="bridge" data="{% for m in group.member_numbers %}user/{{ m }}@{{ internal_domain }}{% if not loop.last %},{% endif %}{% endfor %}"/>
         <action application="hangup" data="NO_ANSWER"/>
       </condition>
     </extension>
@@ -54,7 +54,7 @@
       <condition field="destination_number" expression="^(\d{2,6})$">
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="continue_on_fail=true"/>
-        <action application="bridge" data="user/${destination_number}@{{ sip_domain }}"/>
+        <action application="bridge" data="user/${destination_number}@{{ internal_domain }}"/>
         <action application="hangup" data="NO_ROUTE_DESTINATION"/>
       </condition>
     </extension>
