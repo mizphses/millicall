@@ -25,6 +25,7 @@ ctx への要求:
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from millicall.workflows.executor import register_handler
@@ -37,6 +38,9 @@ _VALID_DIGITS: frozenset[str] = frozenset("0123456789")
 
 # beep 再生に使う FreeSWITCH tone_stream（200ms音 + 100ms無音、800Hz）
 _BEEP_TONE = "tone_stream://%(200,100,800)"
+
+# バージイン監視ループのポーリング間隔（秒）
+_BARGEIN_POLL_SEC = 0.05
 
 
 # --------------------------------------------------------------------------- #
@@ -66,6 +70,50 @@ async def _play_prompt(
     # "none" は何もしない
 
 
+async def _play_prompt_with_bargein(
+    prompt_mode: str,
+    prompt_text: str,
+    ctx: ChannelContext,
+    tts_provider_id: int | None = None,
+) -> None:
+    """バージイン対応のプロンプト再生。
+
+    プロンプト再生中に DTMF が押されたら（``ctx.dtmf.pending()`` が True）、
+    ``ctx.call_control.stop_playback()`` で再生を止めて即座に処理を返す。
+    押下済みの桁は消費しないため、後続の ``collect()`` がそのまま拾う。
+
+    バージイン不可のケース（``prompt_mode == "none"`` / ``ctx.dtmf is None`` /
+    ``ctx.call_control is None``）では従来の :func:`_play_prompt` をそのまま呼ぶ。
+
+    設計理由（合成→再生の境界の扱い）:
+      TTS プロンプトは「合成 → 再生」の順で進み、合成中はまだ再生が始まって
+      いない。合成中にキーが押された場合、バージイン検出直後に stop_playback を
+      呼んでも再生前なので no-op になる。そのため **バージイン検出後は play_task が
+      完了するまで毎ループ stop_playback を呼び続け**、再生が始まった瞬間に
+      uuid_break で確実に切る。既に押されている場合はプロンプトがほぼ再生されず
+      スキップされる（望ましい挙動）。
+    """
+    # バージイン不可のケースは従来動作にフォールバック
+    if prompt_mode == "none" or ctx.dtmf is None or ctx.call_control is None:
+        await _play_prompt(prompt_mode, prompt_text, ctx, tts_provider_id)
+        return
+
+    play_task = asyncio.create_task(_play_prompt(prompt_mode, prompt_text, ctx, tts_provider_id))
+    try:
+        bargein = False
+        while not play_task.done():
+            if not bargein and ctx.dtmf.pending():
+                bargein = True
+            if bargein:
+                # 再生中なら uuid_break で停止。合成中/無再生なら -ERR で無害。
+                # 合成→再生の境界をまたぐため、完了まで毎ループ呼び続ける。
+                await ctx.call_control.stop_playback()
+            await asyncio.sleep(_BARGEIN_POLL_SEC)
+    finally:
+        # 再生タスクを必ず回収する（例外・キャンセル安全）
+        await play_task
+
+
 # --------------------------------------------------------------------------- #
 # dtmf_input ハンドラ
 # --------------------------------------------------------------------------- #
@@ -85,8 +133,10 @@ async def handle_dtmf_input(node: object, ctx: ChannelContext) -> str:
     """
     config = node.config  # type: ignore[attr-defined]
 
-    # 1. プロンプト再生
-    await _play_prompt(config.prompt_mode, config.prompt_text, ctx, config.tts_provider_id)
+    # 1. プロンプト再生（バージイン対応: 再生中の DTMF で即停止）
+    await _play_prompt_with_bargein(
+        config.prompt_mode, config.prompt_text, ctx, config.tts_provider_id
+    )
 
     # 2. DTMF コレクタ未接続 → タイムアウト扱い
     if ctx.dtmf is None:
@@ -137,8 +187,10 @@ async def handle_menu(node: object, ctx: ChannelContext) -> str:
         return "timeout"
 
     for attempt in range(config.max_retries + 1):
-        # プロンプト再生（リトライ時も毎回再生）
-        await _play_prompt(config.prompt_mode, config.prompt_text, ctx, config.tts_provider_id)
+        # プロンプト再生（リトライ時も毎回再生 / バージイン対応: 再生中の DTMF で即停止）
+        await _play_prompt_with_bargein(
+            config.prompt_mode, config.prompt_text, ctx, config.tts_provider_id
+        )
 
         # 単桁収集（終端キーなし: terminator=""）
         digit: str = await ctx.dtmf.collect(

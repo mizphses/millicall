@@ -211,3 +211,44 @@ async def test_only_terminator_pressed_returns_empty() -> None:
     collector, bound = make_collector_with_digits("u10", "#")
     result = await bound.collect(max_digits=3, timeout=1.0, terminator="#")
     assert result == ""
+
+
+# --------------------------------------------------------------------------- #
+# pending() — バージイン判定
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_pending_false_when_no_digits() -> None:
+    """桁がキューにないとき pending() は False。"""
+    collector = DtmfCollector()
+    collector.register("p1")
+    bound = collector.bind("p1")
+    assert bound.pending() is False
+
+
+@pytest.mark.asyncio
+async def test_pending_true_after_feed() -> None:
+    """feed 後は pending() が True（桁は消費しない）。"""
+    collector, bound = make_collector_with_digits("p2", "1")
+    assert bound.pending() is True
+    # 参照しても消費しないので再度 True
+    assert bound.pending() is True
+
+
+@pytest.mark.asyncio
+async def test_pending_false_after_collect_consumes() -> None:
+    """collect で桁を消費した後は pending() が False。"""
+    collector, bound = make_collector_with_digits("p3", "1")
+    assert bound.pending() is True
+    result = await bound.collect(max_digits=1, timeout=1.0, terminator="")
+    assert result == "1"
+    assert bound.pending() is False
+
+
+@pytest.mark.asyncio
+async def test_pending_false_for_unregistered_uuid() -> None:
+    """未登録 uuid の pending() は False（自動登録しない）。"""
+    collector = DtmfCollector()
+    bound = collector.bind("never-registered")
+    assert bound.pending() is False

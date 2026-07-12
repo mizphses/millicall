@@ -69,6 +69,14 @@ class BoundDtmf:
 
         return "".join(result)
 
+    def pending(self) -> bool:
+        """該当 uuid のキューに未消費の桁が 1 つ以上あれば True を返す（消費しない）。
+
+        バージイン（プロンプト再生中の DTMF 検出）判定に使う。桁は消費せず、
+        後続の ``collect()`` がそのまま拾えるようにする。
+        """
+        return self._collector.has_pending(self._uuid)
+
 
 class DtmfCollector:
     """全通話共有の DTMF バッファレジストリ。
@@ -114,6 +122,15 @@ class DtmfCollector:
             return
         q = self._get_or_create_queue(uuid)
         q.put_nowait(digit)
+
+    def has_pending(self, uuid: str) -> bool:
+        """uuid のキューに未消費の桁があれば True（消費しない）。
+
+        未登録 uuid は False を返す（自動登録しない — 純粋な参照系）。
+        ``BoundDtmf.pending()`` から呼ばれる。
+        """
+        q = self._queues.get(uuid)
+        return q is not None and not q.empty()
 
     # --- バインド ---------------------------------------------------------- #
 
