@@ -7,6 +7,7 @@ LAN 内 IP からのアクセスのみ許可し、エンドポイントの存在
 
 import ipaddress
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, Response
@@ -20,6 +21,7 @@ from millicall.network.validation import normalize_mac
 from millicall.provisioning.templates import (
     render_panasonic_common,
     render_panasonic_config,
+    render_panasonic_model_file,
     render_panasonic_phonebook,
     render_yealink_boot,
     render_yealink_common,
@@ -28,6 +30,12 @@ from millicall.provisioning.templates import (
 )
 
 logger = logging.getLogger("millicall.provisioning.router")
+
+# Panasonic のプレプロビジョニング入口ファイル名（{MODEL}.cfg）を判定する正規表現。
+# KX-HDV130N / KX-HDV230N / KX-HDV330N / KX-HDV430N などの N サフィックス、
+# および NB サフィックス（KX-HDV130NB 等）を含め「KX-HDV で始まり英数字・ハイフンが続く」
+# ものを広く受理する。Yealink の {mac}.cfg（12桁hex）とは決して衝突しない。
+_PANASONIC_MODEL_RE = re.compile(r"^KX-HDV[A-Za-z0-9-]+$")
 
 router = APIRouter(prefix="/provisioning", tags=["provisioning"])
 
@@ -287,22 +295,40 @@ async def root_yealink_mac_boot(
     return await yealink_boot(nc=nc, settings=settings)
 
 
-@router.get("/{mac}.cfg", response_class=PlainTextResponse)
-async def root_yealink_device_config(
-    mac: str,
+@router.get("/{name}.cfg", response_class=PlainTextResponse)
+async def root_cfg_dispatcher(
+    name: str,
     token: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
     nc: NetworkConfig = Depends(_require_lan),
     settings: Settings = Depends(get_settings_dep),
 ) -> PlainTextResponse:
-    """option 66 直下の Yealink 端末固有設定を返す（既存 /Yealink/{mac}.cfg に相当）。
+    """option 66 直下の ``{name}.cfg`` を単一ディスパッチャで振り分ける。
 
-    Yealink は boot 経由（絶対 URL include）で /Yealink/{mac}.cfg を取得するため
-    直下 {mac}.cfg が無くても無害だが、堅牢性のため直下でも同一設定を提供する。
-    SIP 認証情報を含むため、LAN 制限 + known-device + トークンゲートを維持する。
+    ``ConfigCommon.cfg`` / ``Config{mac}.cfg`` は上位の固定・具体ルートで処理済みのため
+    ここには到達しない。この直下 ``{name}.cfg`` に来るのは主に次の 2 系統:
+
+    - Panasonic プレプロビジョニング入口ファイル ``{MODEL}.cfg``
+      （KX-HDV130N / KX-HDV230N / KX-HDV330N / KX-HDV430N とその NB サフィックス等）。
+      SIP 認証情報を含まない最小の入口ファイルのため、LAN 制限のみでトークン不要。
+    - Yealink 端末固有設定 ``{mac}.cfg``（12桁hex）。SIP 認証情報を含むため
+      LAN 制限 + known-device + トークンゲートを維持する。
+
+    ``{model}.cfg`` と ``{mac}.cfg`` は同じ ``X.cfg`` にマッチし FastAPI では
+    ルート衝突するため、ファイル名パターンで確実に分岐する（KX-HDV* → 入口ファイル、
+    それ以外 → 従来どおり MAC 検証を経て Yealink 端末設定）。
     """
+    # Panasonic プレプロビジョニング入口ファイル（{MODEL}.cfg）
+    if _PANASONIC_MODEL_RE.match(name):
+        content = render_panasonic_model_file(network_config=nc, settings=settings)
+        return PlainTextResponse(content, media_type="text/plain")
+
+    # それ以外は従来どおり Yealink 端末固有設定として MAC 検証を経て提供する。
+    # Yealink は boot 経由（絶対 URL include）で /Yealink/{mac}.cfg を取得するため
+    # 直下 {mac}.cfg が無くても無害だが、堅牢性のため直下でも同一設定を提供する。
+    # SIP 認証情報を含むため、LAN 制限 + known-device + トークンゲートを維持する。
     return await yealink_device_config(
-        mac=mac, token=token, session=session, nc=nc, settings=settings
+        mac=name, token=token, session=session, nc=nc, settings=settings
     )
 
 

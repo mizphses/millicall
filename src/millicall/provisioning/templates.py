@@ -172,6 +172,30 @@ def render_panasonic_config(
     return "\r\n".join(lines) + "\r\n"
 
 
+def render_panasonic_model_file(
+    *,
+    network_config: NetworkConfig,
+    settings: Settings,
+) -> str:
+    """{MODEL}.cfg（プレプロビジョニング入口ファイル）を生成する。
+
+    Panasonic KX-HDV は DHCP option 66 = ``http://<lan_ip>/provisioning/``（末尾 ``/``）の
+    とき、最初に ``{MODEL}.cfg``（例 ``KX-HDV130N.cfg``）を入口ファイルとして GET する。
+    この入口ファイルは CFG_STANDARD_FILE_PATH / CFG_MASTER_FILE_PATH を設定するだけで、
+    そこから実設定（Config{MAC}.cfg・ConfigCommon.cfg）へ連鎖する。
+
+    ``{MAC}`` は電話機側が置換するマクロのため、リテラル文字列としてそのまま出力する
+    （Python 側では展開しない）。行区切りは LF。
+    """
+    base = _provisioning_base(network_config, settings)
+    lines = [
+        "# Millicall PBX - Panasonic pre-provisioning (model entry)",
+        f'CFG_STANDARD_FILE_PATH="{base}/provisioning/Panasonic/Config{{MAC}}.cfg"',
+        f'CFG_MASTER_FILE_PATH="{base}/provisioning/Panasonic/ConfigCommon.cfg"',
+    ]
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Yealink
 # ---------------------------------------------------------------------------
