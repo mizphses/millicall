@@ -130,7 +130,6 @@ def render_panasonic_config(
     行区切りは CRLF（Panasonic 標準）。
     """
     lan_ip = network_config.lan_ip
-    sip_domain = settings.sip_domain
     number = extension.number
     display = _panasonic_escape(extension.display_name)
     password = extension.sip_password
@@ -148,7 +147,11 @@ def render_panasonic_config(
         'SIP_PRXY_PORT_1="5060"',
         f'SIP_OUTPROXY_ADDR_1="{lan_ip}"',
         'SIP_OUTPROXY_PORT_1="5060"',
-        f'SIP_SVCDOMAIN_1="{sip_domain}"',
+        # SIP サービスドメインは登録先（internal プロファイル）のドメインと一致させる。
+        # 子LAN では internal は lan_ip をドメインにするため、ここも lan_ip にしないと
+        # 電話が <ext>@<sip_domain> で登録して "Can't find user" になる（Yealink は
+        # サーバ=lan_ip をそのままドメインに使うため一致していた。Panasonic のみ明示ずれ）。
+        f'SIP_SVCDOMAIN_1="{lan_ip}"',
         f'SIP_AUTHID_1="{number}"',
         f'SIP_PASS_1="{password}"',
         f'SIP_URI_1="{number}"',
@@ -189,11 +192,17 @@ def render_panasonic_model_file(
     """
     base = _provisioning_base(network_config, settings)
     lines = [
+        # Panasonic は設定ファイル先頭にこのマジック行が必須。無いとフォーマット不正で
+        # ファイル全体を破棄し、CFG_*_FILE_PATH も読まれず実設定へ連鎖しない（実機で発覚）。
+        "# Panasonic SIP Phone Standard Format File #",
+        "# DO NOT CHANGE THIS LINE!",
+        "",
         "# Millicall PBX - Panasonic pre-provisioning (model entry)",
         f'CFG_STANDARD_FILE_PATH="{base}/provisioning/Panasonic/Config{{MAC}}.cfg"',
         f'CFG_MASTER_FILE_PATH="{base}/provisioning/Panasonic/ConfigCommon.cfg"',
     ]
-    return "\n".join(lines) + "\n"
+    # 他の Panasonic ファイルと同じく CRLF 区切り。
+    return "\r\n".join(lines) + "\r\n"
 
 
 # ---------------------------------------------------------------------------

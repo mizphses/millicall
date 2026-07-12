@@ -157,6 +157,24 @@ def test_panasonic_config_contains_lan_ip() -> None:
     assert "10.10.0.1" in content
 
 
+def test_panasonic_config_svcdomain_uses_lan_ip_not_sip_domain() -> None:
+    """SIP サービスドメインは lan_ip（= internal のドメイン）と一致し、sip_domain は使わない。
+
+    子LAN では internal プロファイルのドメインが lan_ip になるため、電話も
+    <ext>@<lan_ip> で登録する必要がある。SIP_SVCDOMAIN に sip_domain を使うと
+    ドメイン不一致で登録が拒否される。
+    """
+    from millicall.provisioning.templates import render_panasonic_config
+
+    ext = _MockExtension()
+    nc = _MockNetworkConfig(lan_ip="172.20.0.1")
+    settings = _MockSettings(sip_domain="192.168.1.2")
+    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
+
+    assert 'SIP_SVCDOMAIN_1="172.20.0.1"' in content
+    assert "192.168.1.2" not in content
+
+
 def test_panasonic_config_display_name_with_special_chars() -> None:
     """表示名に特殊文字（ダブルクォート）が含まれても設定ファイルが壊れない。"""
     from millicall.provisioning.templates import render_panasonic_config
@@ -229,27 +247,27 @@ def test_panasonic_model_file_mac_is_literal() -> None:
     assert "Config{MAC}.cfg" in content
 
 
-def test_panasonic_model_file_has_comment_header() -> None:
-    """先頭にプレプロビジョニングを示すコメント行を含む。"""
+def test_panasonic_model_file_has_magic_header() -> None:
+    """先頭に Panasonic 必須のマジックヘッダ行を含む（無いと電話がファイルを破棄する）。"""
     from millicall.provisioning.templates import render_panasonic_model_file
 
     nc = _MockNetworkConfig()
     settings = _MockSettings()
     content = render_panasonic_model_file(network_config=nc, settings=settings)
 
-    assert content.startswith("# Millicall PBX - Panasonic pre-provisioning (model entry)")
+    assert content.startswith("# Panasonic SIP Phone Standard Format File #")
+    assert "# Millicall PBX - Panasonic pre-provisioning (model entry)" in content
 
 
-def test_panasonic_model_file_uses_lf() -> None:
-    """入口ファイルは LF で行区切りされる（CRLF を含まない）。"""
+def test_panasonic_model_file_uses_crlf() -> None:
+    """入口ファイルは他の Panasonic ファイルと同じく CRLF で行区切りされる。"""
     from millicall.provisioning.templates import render_panasonic_model_file
 
     nc = _MockNetworkConfig()
     settings = _MockSettings()
     content = render_panasonic_model_file(network_config=nc, settings=settings)
 
-    assert "\r\n" not in content
-    assert "\n" in content
+    assert "\r\n" in content
 
 
 def test_panasonic_model_file_fallback_base_url() -> None:
