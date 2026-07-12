@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.config import Settings
-from millicall.models import AiAgent, Extension, Trunk, Workflow
+from millicall.models import AiAgent, Extension, NetworkConfig, Trunk, Workflow
 from millicall.numberplan import load_ring_groups_with_members
 from millicall.secrets_store import Secrets
 from millicall.telephony.esl import ESLClient, ESLError
@@ -126,6 +126,19 @@ class TelephonyChangeListener:
         )
         return [AiAgentConfig(number=a.number or "", agent_id=a.id) for a in result]
 
+    async def _load_child_lan_ip(self, session: AsyncSession) -> str | None:
+        """子LAN（netd DHCP ネットワーク）が適用済みなら子LAN GW IP を返す。
+
+        NetworkConfig（id=1 単一行）を読み、applied=True かつ lan_ip が非空の場合のみ
+        その lan_ip を返す。未適用・未設定なら None（＝従来動作へフォールバック）。
+        """
+        cfg = await session.get(NetworkConfig, 1)
+        if cfg is None:
+            return None
+        if cfg.applied and cfg.lan_ip:
+            return cfg.lan_ip
+        return None
+
     async def _load_workflows(self, session: AsyncSession) -> list[WorkflowConfig]:
         result = await session.scalars(
             select(Workflow).where(Workflow.enabled.is_(True)).order_by(Workflow.number)
@@ -161,6 +174,11 @@ class TelephonyChangeListener:
         ring_groups = await self._load_ring_groups(session)
         ai_agents = await self._load_ai_agents(session)
         workflows = await self._load_workflows(session)
+        # 子LAN 適用時は internal プロファイル（sip-ip/rtp-ip/ドメイン）と
+        # ディレクトリ・dialplan のドメインを子LAN GW IP へ切り替える。
+        # 未適用時は None を渡して従来動作（sip_bind_ip / sip_domain）を維持する。
+        child_lan_ip = await self._load_child_lan_ip(session)
+        self._writer.set_internal_network(child_lan_ip, child_lan_ip)
         self._writer.write_all(
             configs,
             trunks,
