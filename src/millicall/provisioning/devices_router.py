@@ -149,6 +149,14 @@ async def quick_provision_endpoint(
 
     内線割り当て後、best-effort で電話機への HTTP resync 要求も送る。
     """
+    # 実効設定を先に取得する。電話機管理者資格情報（username と password の両方が
+    # 非空）が設定されている場合のみワンタイムトークンを設定する。
+    # 理由: トークンを配送できる手段（資格情報を使った resync）が無いと、DHCP-ZTP の
+    # 電話はトークン無しで cfg を取りに来て 404 となり ZTP がブロックされるため。
+    # resync 判定（下）と同一の資格情報条件で整合させる。
+    settings = await effective_settings(request.app.state)
+    phone_admin_configured = bool(settings.phone_admin_username and settings.phone_admin_password)
+
     try:
         device = await quick_provision(
             session=session,
@@ -156,13 +164,13 @@ async def quick_provision_endpoint(
             extension_number=body.extension_number,
             display_name=body.display_name,
             telephony_notify=listener.notify,
+            set_token=phone_admin_configured,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     # best-effort resync（失敗しても 200 を返す）。管理者資格情報は実効設定由来
     # （管理画面/DB で上書き可能。パスワードは暗号化保存され、ここで復号済み値を使う）。
-    settings = await effective_settings(request.app.state)
     try:
         await resync_phone(
             device,
