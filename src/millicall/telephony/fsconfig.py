@@ -279,6 +279,16 @@ class FreeswitchConfigWriter:
             internal_domain if internal_domain is not None else self._base["sip_domain"]
         )
 
+    @property
+    def internal_bind_ip(self) -> str | None:
+        """internal プロファイルの実効バインドIP（set_internal_network 反映後の値）。"""
+        return self._base["internal_bind_ip"]
+
+    @property
+    def internal_domain(self) -> str | None:
+        """internal プロファイルの実効ドメイン（set_internal_network 反映後の値）。"""
+        return self._base["internal_domain"]
+
     def _render(self, template: str, extra: dict | None = None) -> str:
         context = dict(self._base)
         if extra:

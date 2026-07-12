@@ -73,6 +73,12 @@ class TelephonyChangeListener:
         self._writer = writer
         self._esl_factory = esl_factory
         self._esl_timeout = esl_timeout
+        # 前回 regenerate 時の internal 実効バインド（sip-ip と domain）を保持する。
+        # reloadxml では sofia プロファイルの sip-ip / bind は再バインドされないため、
+        # この値が前回と変化した場合、または初回（None）の場合にのみ
+        # `sofia profile internal restart` を送る（notify を参照）。初期値 None は
+        # 「まだ一度も restart していない＝初回」を意味する。
+        self._last_internal_bind: tuple[str | None, str | None] | None = None
 
     async def _load_configs(self, session: AsyncSession) -> list[ExtensionConfig]:
         result = await session.scalars(
@@ -187,14 +193,35 @@ class TelephonyChangeListener:
             workflows=workflows,
         )
 
+    def _current_internal_bind(self) -> tuple[str | None, str | None]:
+        """今回生成に使う internal の実効バインド（sip-ip, domain）を返す。
+
+        PR #57 で導入された internal_bind_ip / internal_domain のロジック（子LAN 適用時は
+        lan_ip、そうでなければ sip_bind_ip / sip_domain）は set_internal_network で
+        writer 側へ反映済みのため、その実効値を writer から取得して重複計算を避ける。
+        """
+        return (
+            self._writer.internal_bind_ip,
+            self._writer.internal_domain,
+        )
+
     @staticmethod
     async def _esl_connect_and_reload(
         client: ESLClient,
         sync_gateway: str | None = None,
         current_trunk_names: list[str] | None = None,
+        *,
+        restart_internal: bool = False,
     ) -> None:
         await client.connect()
         await client.reloadxml()
+        if restart_internal:
+            # internal の実効バインド（sip-ip / domain）が前回生成時から変化した、または
+            # 初回（core 起動相当）のケース。reloadxml だけでは sofia プロファイルの
+            # sip-ip / bind は再バインドされないため、profile restart で確実に新しい IP へ
+            # バインドし直す。internal は固定プロファイル名のため安全な固定文字列を使う。
+            # 外線トランクの restart（build_reload_commands）とは独立に送る。
+            await client.api("sofia profile internal restart")
         if sync_gateway is not None:
             # トランクごとに external_<name> プロファイルが分かれたため、
             # 対象トランクのプロファイルを操作する。current_trunk_names（現存する
@@ -212,12 +239,29 @@ class TelephonyChangeListener:
         # regenerate 後の DB 状態から現存トランク名を取得する。削除直後は対象が
         # ここに含まれないため、_esl_connect_and_reload が stop を選択する。
         current_trunk_names = [t.name for t in await self._load_trunks(session)]
+        # internal の実効バインド（sip-ip / domain）が前回生成時と異なる、または初回
+        # （前回値 None＝core 起動時の最初の notify）の場合に internal restart を送る。
+        # sync_gateway とは独立に「internal バインドが変わったか / 初回か」で判定する。
+        # 初回は稼働中 FreeSWITCH が古い設定の可能性があるため必ず restart する。
+        current_internal_bind = self._current_internal_bind()
+        restart_internal = (
+            self._last_internal_bind is None or self._last_internal_bind != current_internal_bind
+        )
         client = self._esl_factory()
         try:
             await asyncio.wait_for(
-                self._esl_connect_and_reload(client, sync_gateway, current_trunk_names),
+                self._esl_connect_and_reload(
+                    client,
+                    sync_gateway,
+                    current_trunk_names,
+                    restart_internal=restart_internal,
+                ),
                 timeout=self._esl_timeout,
             )
+            # ESL 実行に成功した場合のみ保持値を更新する。失敗時に更新すると
+            # 次回に restart を送れず古い IP のまま取り残される恐れがあるため。
+            if restart_internal:
+                self._last_internal_bind = current_internal_bind
         except TimeoutError:
             logger.warning(
                 "reloadxml skipped (ESL connect timed out after %.1fs)", self._esl_timeout
