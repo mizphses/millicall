@@ -32,3 +32,19 @@ class ExtensionRead(BaseModel):
     display_name: str
     enabled: bool
     calling_permission: str
+
+
+class ExtensionCredentials(BaseModel):
+    """内線の SIP 接続情報（ソフトフォン手動設定用・管理者専用）。
+
+    平文パスワードを含むため、専用エンドポイント（GET /api/extensions/{id}/credentials）
+    でのみ返す。一覧・取得（ExtensionRead）には決して含めない。
+    """
+
+    number: str  # SIP ユーザー名 / 認証ID
+    password: str  # sip_password 平文
+    sip_server: str  # ソフトフォンの接続先ホスト（internal が待ち受ける IP）
+    sip_port: int  # SIP ポート（通常 5060）
+    domain: str  # SIP レルム / ドメイン
+    display_name: str
+    transport: str = "UDP"  # トランスポート（UDP 固定）
