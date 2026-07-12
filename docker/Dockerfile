@@ -3,7 +3,7 @@
 # (schema.d.ts はコミット済みが正。openapi.json 生成に Python が要るため)。
 # node_modules/dist/styled-system は .dockerignore で除外され、npm ci と
 # panda codegen (npm run build 内) で再生成される。
-FROM node:22-slim AS webbuilder
+FROM node:26-slim AS webbuilder
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
 # --ignore-scripts: prepare(panda codegen) はソース未 COPY 段階では失敗するため抑止。
