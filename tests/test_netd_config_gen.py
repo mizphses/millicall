@@ -244,6 +244,26 @@ class TestRenderNftablesRuleset:
         ruleset = render_nftables_ruleset(**kwargs)
         assert "masquerade" not in ruleset
 
+    def test_enabled_idempotent_add_then_delete_before_define(self):
+        # 再適用でルールが重複蓄積しないよう、各テーブルは
+        # add table（無ければ作成）→ delete table（中身ごと削除）→ 再定義 の順にする。
+        ruleset = render_nftables_ruleset(**self._VALID_KWARGS)
+        for table in ("ip millicall_filter", "ip millicall_nat"):
+            i_add = ruleset.find(f"add table {table}")
+            i_del = ruleset.find(f"delete table {table}")
+            i_def = ruleset.find(f"table {table} {{")
+            assert i_add != -1 and i_del != -1 and i_def != -1, f"{table} の add/delete/定義が揃っていない"
+            assert i_add < i_del < i_def, f"{table} は add→delete→定義 の順である必要がある"
+
+    def test_disabled_nat_delete_is_idempotent(self):
+        # NAT 無効時、テーブルが未存在でも nft がエラーにならないよう
+        # add table してから delete table する（冪等）。
+        kwargs = {**self._VALID_KWARGS, "enabled": False}
+        ruleset = render_nftables_ruleset(**kwargs)
+        i_add = ruleset.find("add table ip millicall_nat")
+        i_del = ruleset.find("delete table ip millicall_nat")
+        assert i_add != -1 and i_del != -1 and i_add < i_del
+
     def test_ends_with_newline(self):
         ruleset = render_nftables_ruleset(**self._VALID_KWARGS)
         assert ruleset.endswith("\n")

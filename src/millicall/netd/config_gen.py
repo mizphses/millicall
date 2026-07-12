@@ -212,6 +212,10 @@ def render_nftables_ruleset(
     # 無効なので上の is_valid_interface 検証で弾かれている）。
     filter_lines = [
         "# Millicall netd: HTTP 管理面 INPUT フィルタ（NAT 有無にかかわらず適用）",
+        # 冪等リロード: add（無ければ作成）→ delete（中身ごと削除）→ 再定義。
+        # これをしないと再適用のたびに同一ルールが重複蓄積する。
+        "add table ip millicall_filter",
+        "delete table ip millicall_filter",
         "table ip millicall_filter {",
         "  chain input {",
         "    type filter hook input priority 0; policy accept;",
@@ -231,6 +235,9 @@ def render_nftables_ruleset(
     if enabled:
         nat_lines = [
             "# Millicall netd: NAT マスカレードルールセット",
+            # 冪等リロード: add → delete → 再定義（重複蓄積を防ぐ）。
+            f"add table ip {table_name}",
+            f"delete table ip {table_name}",
             f"table ip {table_name} {{",
             "  chain postrouting {",
             "    type nat hook postrouting priority 100; policy accept;",
@@ -240,9 +247,11 @@ def render_nftables_ruleset(
             "",
         ]
     else:
-        # NAT 無効時はテーブルを削除する
+        # NAT 無効時はテーブルを削除する。テーブルが未存在でも nft が
+        # エラーにならないよう add してから delete する（冪等）。
         nat_lines = [
             "# Millicall netd: NAT 無効 — テーブルを削除します。",
+            f"add table ip {table_name}",
             f"delete table ip {table_name}",
             "",
         ]
