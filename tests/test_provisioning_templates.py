@@ -196,6 +196,73 @@ def test_panasonic_config_uses_crlf() -> None:
 
 
 # ---------------------------------------------------------------------------
+# render_panasonic_model_file（{MODEL}.cfg プレプロビジョニング入口ファイル）
+# ---------------------------------------------------------------------------
+
+
+def test_panasonic_model_file_contains_cfg_paths() -> None:
+    """入口ファイルは Config{MAC}.cfg / ConfigCommon.cfg を指す 2 行を含む。"""
+    from millicall.provisioning.templates import render_panasonic_model_file
+
+    nc = _MockNetworkConfig(provisioning_base_url="http://10.0.0.1:8000")
+    settings = _MockSettings()
+    content = render_panasonic_model_file(network_config=nc, settings=settings)
+
+    assert (
+        'CFG_STANDARD_FILE_PATH="http://10.0.0.1:8000/provisioning/Panasonic/Config{MAC}.cfg"'
+        in content
+    )
+    assert (
+        'CFG_MASTER_FILE_PATH="http://10.0.0.1:8000/provisioning/Panasonic/ConfigCommon.cfg"'
+        in content
+    )
+
+
+def test_panasonic_model_file_mac_is_literal() -> None:
+    """{MAC} はリテラル文字列としてそのまま出力される（Python 展開されない）。"""
+    from millicall.provisioning.templates import render_panasonic_model_file
+
+    nc = _MockNetworkConfig()
+    settings = _MockSettings()
+    content = render_panasonic_model_file(network_config=nc, settings=settings)
+
+    assert "Config{MAC}.cfg" in content
+
+
+def test_panasonic_model_file_has_comment_header() -> None:
+    """先頭にプレプロビジョニングを示すコメント行を含む。"""
+    from millicall.provisioning.templates import render_panasonic_model_file
+
+    nc = _MockNetworkConfig()
+    settings = _MockSettings()
+    content = render_panasonic_model_file(network_config=nc, settings=settings)
+
+    assert content.startswith("# Millicall PBX - Panasonic pre-provisioning (model entry)")
+
+
+def test_panasonic_model_file_uses_lf() -> None:
+    """入口ファイルは LF で行区切りされる（CRLF を含まない）。"""
+    from millicall.provisioning.templates import render_panasonic_model_file
+
+    nc = _MockNetworkConfig()
+    settings = _MockSettings()
+    content = render_panasonic_model_file(network_config=nc, settings=settings)
+
+    assert "\r\n" not in content
+    assert "\n" in content
+
+
+def test_panasonic_model_file_fallback_base_url() -> None:
+    """provisioning_base_url が空なら LAN IP + HTTP ポートにフォールバックする。"""
+    from millicall.provisioning.templates import render_panasonic_model_file
+
+    nc = _MockNetworkConfig(lan_ip="10.0.0.1", provisioning_base_url="")
+    content = render_panasonic_model_file(network_config=nc, settings=_MockSettings())
+
+    assert "http://10.0.0.1/provisioning/Panasonic/Config{MAC}.cfg" in content
+
+
+# ---------------------------------------------------------------------------
 # render_yealink_boot
 # ---------------------------------------------------------------------------
 

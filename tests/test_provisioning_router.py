@@ -554,6 +554,110 @@ async def test_root_yealink_device_config_unknown_mac(app) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Panasonic プレプロビジョニング入口ファイル（{MODEL}.cfg）
+#
+# Panasonic KX-HDV は option 66 = http://<lan_ip>/provisioning/（末尾 /）のとき
+# 最初に {MODEL}.cfg（例 KX-HDV130N.cfg）を入口ファイルとして GET する。
+# この入口ファイルは Config{MAC}.cfg / ConfigCommon.cfg のパスを設定するだけ。
+# ---------------------------------------------------------------------------
+
+
+async def test_panasonic_model_file_content(app) -> None:
+    """KX-HDV130N.cfg が 200 で CFG パス 2 行（Config{MAC}.cfg・ConfigCommon.cfg）を含む。"""
+    await _insert_network_config(app, lan_ip="10.0.0.1")
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/KX-HDV130N.cfg")
+
+    assert resp.status_code == 200
+    assert "CFG_STANDARD_FILE_PATH=" in resp.text
+    assert "CFG_MASTER_FILE_PATH=" in resp.text
+    assert "Panasonic/Config{MAC}.cfg" in resp.text
+    assert "Panasonic/ConfigCommon.cfg" in resp.text
+
+
+async def test_panasonic_model_file_mac_literal(app) -> None:
+    """{MAC} がリテラルで含まれる（Python 展開されていない）。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/KX-HDV130N.cfg")
+
+    assert resp.status_code == 200
+    assert "Config{MAC}.cfg" in resp.text
+
+
+async def test_panasonic_model_file_multiple_models_n(app) -> None:
+    """N サフィックスの複数モデルでも 200 を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app) as c:
+        for model in ("KX-HDV130N", "KX-HDV230N", "KX-HDV330N", "KX-HDV430N"):
+            resp = await c.get(f"/provisioning/{model}.cfg")
+            assert resp.status_code == 200, model
+            assert "CFG_STANDARD_FILE_PATH=" in resp.text
+
+
+async def test_panasonic_model_file_multiple_models_nb(app) -> None:
+    """NB サフィックスの複数モデルでも 200 を返す（正規表現が NB を落とさない）。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app) as c:
+        for model in ("KX-HDV130NB", "KX-HDV230NB", "KX-HDV330NB", "KX-HDV430NB"):
+            resp = await c.get(f"/provisioning/{model}.cfg")
+            assert resp.status_code == 200, model
+            assert "CFG_STANDARD_FILE_PATH=" in resp.text
+            assert "Config{MAC}.cfg" in resp.text
+
+
+async def test_panasonic_model_file_lan_blocked(app) -> None:
+    """LAN 外からの {MODEL}.cfg リクエストは 404 を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app, client_ip="8.8.8.8") as c:
+        resp = await c.get("/provisioning/KX-HDV130N.cfg")
+
+    assert resp.status_code == 404
+
+
+async def test_panasonic_model_file_no_token_required(app) -> None:
+    """入口ファイルは SIP 認証情報を含まないためトークン不要で 200 を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/KX-HDV430NB.cfg")
+
+    assert resp.status_code == 200
+
+
+async def test_non_panasonic_cfg_falls_to_yealink(app) -> None:
+    """非 Panasonic 名の {name}.cfg は Yealink {mac}.cfg ルートに振り分けられる。
+
+    KX-HDV 以外は従来どおり MAC 検証を経て Yealink 端末設定として扱われ、
+    provisioned=None のデバイスの MAC なら 200、未知 MAC なら 404 になる。
+    """
+    await _insert_network_config(app)
+    ext_id = await _insert_extension(app, number="3001")
+    await _insert_device(
+        app,
+        mac_address="11:22:33:44:55:66",
+        extension_id=ext_id,
+        provisioned=True,
+        provision_token=None,
+    )
+
+    async with _make_client(app) as c:
+        # 既知 MAC の Yealink 端末設定として取得できる
+        resp = await c.get("/provisioning/112233445566.cfg")
+        assert resp.status_code == 200
+        assert "3001" in resp.text
+
+        # KX-HDV でも MAC でもない名前は 404（不正 MAC 扱い）
+        resp2 = await c.get("/provisioning/foo.cfg")
+        assert resp2.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # 電話帳エンドポイント
 # ---------------------------------------------------------------------------
 
