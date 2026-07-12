@@ -112,11 +112,32 @@ async def quick_provision(
     extension_number: str,
     display_name: str,
     telephony_notify: Callable[[AsyncSession], Awaitable[None]],
+    *,
+    set_token: bool = False,
 ) -> Device:
     """デバイスに内線を割り当ててプロビジョニング完了状態にする。
 
     Extension が存在しない場合は新規作成する（SIP パスワードは自動生成）。
-    ワンタイムプロビジョニングトークンを設定し、FreeSWITCH 設定を再生成する。
+    ``set_token=True`` のときのみワンタイムプロビジョニングトークンを設定し、
+    FreeSWITCH 設定を再生成する。
+
+    トークンを設定するかどうか（``set_token``）について:
+        端末固有 cfg ルート（``_get_provisioned_device``）は「provision_token が
+        設定されていれば ?token= 一致必須、無ければ LAN + known-device で通過」という
+        ゲートを持つ。しかし DHCP-ZTP の電話は boot/共通 cfg の絶対 URL から
+        ``$MAC.cfg`` をトークン無しで取得しにくるため、トークンを配送する手段が
+        必要になる。現状その配送手段は ``resync_phone`` のみだが、``resync_phone`` は
+        電話へ「自分の option66 URL から再取得せよ」と促すだけで **URL に
+        provision_token を含めない**（＝トークンは消費されない）。加えて
+        ``resync_phone`` は電話機管理者資格情報（``phone_admin_username`` /
+        ``phone_admin_password``）が未設定だとスキップされる。
+
+        したがって資格情報が未設定のまま常にトークンを設定すると、電話は
+        トークン無しで cfg を取りに来て 404 となり登録できない（ZTP がブロックされる）。
+        トークンを配送できる見込みがある場合（＝資格情報が設定済み）のみトークンを
+        設定する方針とし、それ以外は ``provision_token=None`` のままにして
+        LAN + known-device ゲートで ZTP を通す。呼び出し元が資格情報の有無を
+        判定して ``set_token`` に渡す。
 
     Args:
         session: SQLAlchemy 非同期セッション。
@@ -125,6 +146,7 @@ async def quick_provision(
         display_name: 内線の表示名（既存 Extension がある場合は更新しない）。
         telephony_notify: TelephonyChangeListener.notify のような非同期 callable。
                           call signature: ``async (session) -> None``。
+        set_token: True のときのみ provision_token を設定する。既定 False。
 
     Returns:
         更新済みの Device オブジェクト。
@@ -150,7 +172,10 @@ async def quick_provision(
 
     device.extension_id = ext.id
     device.provisioned = True
-    device.provision_token = secrets.token_urlsafe(32)
+    # トークンは配送できる見込みがある場合（資格情報設定済み）のみ設定する。
+    # 未設定なら None のままにして LAN + known-device ゲートで ZTP を通す。
+    if set_token:
+        device.provision_token = secrets.token_urlsafe(32)
 
     await session.commit()
     await session.refresh(device)

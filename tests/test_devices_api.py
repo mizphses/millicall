@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from httpx import ASGITransport, AsyncClient
+
 from millicall.models import Device, Extension, NetworkConfig
 from millicall.network.client import NetdError
 
@@ -321,6 +323,137 @@ async def test_quick_provision_not_found_device(auth_client_with_telephony) -> N
         json={"extension_number": "9001", "display_name": "Ghost"},
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# ZTP トークンゲート: phone_admin 資格情報の有無で provision_token の設定可否が変わる
+# ---------------------------------------------------------------------------
+
+
+async def _get_provision_token(app, device_id: int) -> str | None:
+    """指定デバイスの provision_token を DB から直接読む（テスト検証用）。"""
+    sm = app.state.sessionmaker
+    async with sm() as session:
+        device = await session.get(Device, device_id)
+        assert device is not None
+        return device.provision_token
+
+
+async def _set_phone_admin(app, username: str, password: str) -> None:
+    """settings_service 経由で電話機管理者資格情報を設定する（管理画面設定と同等）。"""
+    svc = app.state.settings_service
+    sm = app.state.sessionmaker
+    async with sm() as session:
+        await svc.apply_update(
+            session,
+            {"phone_admin_username": username, "phone_admin_password": password},
+        )
+        await session.commit()
+    svc.invalidate()
+
+
+async def test_quick_provision_no_phone_admin_leaves_token_none(
+    app, auth_client_with_telephony
+) -> None:
+    """phone_admin 未設定なら provision_token は None のまま（トークン無し = ZTP 可）。"""
+    await _insert_network_config(app)
+    device_id = await _insert_device(app, mac_address="AA:BB:CC:DD:EE:10")
+
+    resp = await auth_client_with_telephony.post(
+        f"/api/devices/{device_id}/quick-provision",
+        json={"extension_number": "6100", "display_name": "ZTP User"},
+    )
+    assert resp.status_code == 200
+
+    # トークンは設定されない（配送手段が無いため）
+    assert await _get_provision_token(app, device_id) is None
+
+
+async def test_quick_provision_no_phone_admin_cfg_fetch_succeeds(
+    app, auth_client_with_telephony
+) -> None:
+    """phone_admin 未設定でクイックプロビジョニング後、トークン無しで端末 cfg を取得できる（200）。"""
+    await _insert_network_config(app)
+    device_id = await _insert_device(app, mac_address="AA:BB:CC:DD:EE:11")
+
+    resp = await auth_client_with_telephony.post(
+        f"/api/devices/{device_id}/quick-provision",
+        json={"extension_number": "6101", "display_name": "ZTP User"},
+    )
+    assert resp.status_code == 200
+    assert await _get_provision_token(app, device_id) is None
+
+    # DHCP-ZTP の電話を模して、トークン無しで LAN 内 IP から端末 cfg を取得
+    transport = ASGITransport(app=app, client=("10.0.0.50", 54321))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        cfg_resp = await c.get("/provisioning/Yealink/AABBCCDDEE11.cfg")
+
+    assert cfg_resp.status_code == 200
+    assert "6101" in cfg_resp.text
+
+
+async def test_quick_provision_with_phone_admin_sets_token(app, auth_client_with_telephony) -> None:
+    """phone_admin（両方非空）設定ありなら provision_token が設定される（従来どおり）。"""
+    await _insert_network_config(app)
+    await _set_phone_admin(app, "admin", "adminpass")
+    device_id = await _insert_device(app, mac_address="AA:BB:CC:DD:EE:12")
+
+    resp = await auth_client_with_telephony.post(
+        f"/api/devices/{device_id}/quick-provision",
+        json={"extension_number": "6102", "display_name": "Token User"},
+    )
+    assert resp.status_code == 200
+
+    token = await _get_provision_token(app, device_id)
+    assert token is not None
+    assert token != ""
+
+
+async def test_quick_provision_with_phone_admin_token_gates_cfg(
+    app, auth_client_with_telephony
+) -> None:
+    """phone_admin 設定時: トークン無し取得は 404、トークン一致で 200 + 消費。"""
+    await _insert_network_config(app)
+    await _set_phone_admin(app, "admin", "adminpass")
+    device_id = await _insert_device(app, mac_address="AA:BB:CC:DD:EE:13")
+
+    resp = await auth_client_with_telephony.post(
+        f"/api/devices/{device_id}/quick-provision",
+        json={"extension_number": "6103", "display_name": "Token User"},
+    )
+    assert resp.status_code == 200
+    token = await _get_provision_token(app, device_id)
+    assert token is not None
+
+    transport = ASGITransport(app=app, client=("10.0.0.50", 54321))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        # トークン無しは 404
+        no_token = await c.get("/provisioning/Yealink/AABBCCDDEE13.cfg")
+        assert no_token.status_code == 404
+
+        # トークン一致で 200
+        with_token = await c.get(f"/provisioning/Yealink/AABBCCDDEE13.cfg?token={token}")
+        assert with_token.status_code == 200
+        assert "6103" in with_token.text
+
+    # トークンは消費され None になる
+    assert await _get_provision_token(app, device_id) is None
+
+
+async def test_quick_provision_only_username_leaves_token_none(
+    app, auth_client_with_telephony
+) -> None:
+    """phone_admin が username のみ（password 空）なら不完全とみなしトークンは設定されない。"""
+    await _insert_network_config(app)
+    await _set_phone_admin(app, "admin", "")
+    device_id = await _insert_device(app, mac_address="AA:BB:CC:DD:EE:14")
+
+    resp = await auth_client_with_telephony.post(
+        f"/api/devices/{device_id}/quick-provision",
+        json={"extension_number": "6104", "display_name": "Partial User"},
+    )
+    assert resp.status_code == 200
+    assert await _get_provision_token(app, device_id) is None
 
 
 # ---------------------------------------------------------------------------
