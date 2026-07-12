@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -36,15 +37,24 @@ def make_fake_primitives() -> MagicMock:
 def make_fake_call_control() -> MagicMock:
     cc = MagicMock()
     cc.play_file = AsyncMock()
+    cc.stop_playback = AsyncMock()
     return cc
 
 
 class FakeBoundDtmf:
-    """canned digits を返すフェイク BoundDtmf。"""
+    """canned digits を返すフェイク BoundDtmf。
 
-    def __init__(self, digits: str) -> None:
+    ``pending`` はデフォルトで False（バージイン非発生）。バージインを
+    シミュレートしたいテストは ``pending`` を書き換える。
+    """
+
+    def __init__(self, digits: str, pending: bool = False) -> None:
         self._digits = digits
+        self._pending = pending
         self.collect = AsyncMock(return_value=digits)
+
+    def pending(self) -> bool:
+        return self._pending
 
 
 def make_dtmf_input_node(
@@ -495,6 +505,124 @@ async def test_dtmf_input_tts_prompt_uses_provider_override() -> None:
     await handle_dtmf_input(node, ctx)
 
     ctx.primitives.say.assert_awaited_once_with("番号を押してください", tts=override_tts)
+
+
+# =========================================================================== #
+# dtmf_input / menu — バージイン（プロンプト再生中の DTMF で即停止）
+# =========================================================================== #
+
+
+class BlockingBoundDtmf:
+    """バージインをシミュレートするフェイク BoundDtmf。
+
+    ``pending()`` は常に True を返す（再生中に既に桁が押されている状態）。
+    ``collect`` は canned digits を返す。テスト側でこの dtmf を使い、
+    再生（say/play_file）はイベントで待たせておき、バージインループが
+    ``stop_playback`` を呼んだらそのイベントを解放する（uuid_break→PLAYBACK_STOP
+    相当）ことで、一連の停止フローを検証する。
+    """
+
+    def __init__(self, digits: str) -> None:
+        self.collect = AsyncMock(return_value=digits)
+
+    def pending(self) -> bool:
+        return True
+
+
+def make_blocking_call_control() -> tuple[MagicMock, asyncio.Event]:
+    """再生をブロックし、stop_playback で解放する fake call_control を返す。
+
+    - ``play_file`` はイベントが set されるまで待つ（再生中を模擬）。
+    - ``stop_playback`` は呼ばれるとイベントを set する（uuid_break で再生停止）。
+    """
+    release = asyncio.Event()
+
+    async def _play_file(_path: str) -> None:
+        await release.wait()
+
+    async def _stop_playback() -> None:
+        release.set()
+
+    cc = MagicMock()
+    cc.play_file = AsyncMock(side_effect=_play_file)
+    cc.stop_playback = AsyncMock(side_effect=_stop_playback)
+    return cc, release
+
+
+@pytest.mark.asyncio
+async def test_dtmf_input_bargein_stops_playback_and_collects() -> None:
+    """再生中に DTMF 押下 → stop_playback が呼ばれて再生停止 → 押下桁を collect。"""
+    ctx = make_ctx()
+    cc, _release = make_blocking_call_control()
+    ctx.call_control = cc
+    ctx.dtmf = BlockingBoundDtmf("7")
+    node = make_dtmf_input_node(max_digits=1, prompt_mode="beep")
+
+    result = await asyncio.wait_for(handle_dtmf_input(node, ctx), timeout=2.0)
+
+    assert result == "7"
+    cc.stop_playback.assert_awaited()
+    ctx.dtmf.collect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dtmf_input_no_bargein_when_not_pending() -> None:
+    """押下がなければ stop_playback は呼ばれず、通常どおり collect する。"""
+    ctx = make_ctx()
+    ctx.call_control = make_fake_call_control()
+    # pending=False → バージイン非発生
+    ctx.dtmf = FakeBoundDtmf("3", pending=False)
+    node = make_dtmf_input_node(max_digits=1, prompt_mode="beep")
+
+    result = await asyncio.wait_for(handle_dtmf_input(node, ctx), timeout=2.0)
+
+    assert result == "3"
+    ctx.call_control.stop_playback.assert_not_called()
+    ctx.call_control.play_file.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dtmf_input_bargein_skipped_when_prompt_none() -> None:
+    """prompt_mode=none ではバージインロジックを通らない（stop_playback 未呼び出し）。"""
+    ctx = make_ctx()
+    ctx.call_control = make_fake_call_control()
+    ctx.dtmf = FakeBoundDtmf("2", pending=True)
+    node = make_dtmf_input_node(max_digits=1, prompt_mode="none")
+
+    result = await handle_dtmf_input(node, ctx)
+
+    assert result == "2"
+    ctx.call_control.stop_playback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dtmf_input_bargein_skipped_when_no_call_control() -> None:
+    """ctx.call_control が None のときはバージインなしで従来動作（say のみ）。"""
+    ctx = make_ctx()
+    ctx.primitives = make_fake_primitives()
+    # call_control 未接続 → フォールバック
+    ctx.dtmf = FakeBoundDtmf("4", pending=True)
+    node = make_dtmf_input_node(max_digits=1, prompt_mode="tts", prompt_text="番号を押してください")
+
+    result = await handle_dtmf_input(node, ctx)
+
+    assert result == "4"
+    ctx.primitives.say.assert_awaited_once_with("番号を押してください")
+
+
+@pytest.mark.asyncio
+async def test_menu_bargein_stops_playback_and_returns_digit() -> None:
+    """menu: 再生中の DTMF で停止 → 有効桁を返す。"""
+    ctx = make_ctx()
+    cc, _release = make_blocking_call_control()
+    ctx.call_control = cc
+    ctx.dtmf = BlockingBoundDtmf("5")
+    node = make_menu_node(prompt_mode="beep", max_retries=1)
+
+    result = await asyncio.wait_for(handle_menu(node, ctx), timeout=2.0)
+
+    assert result == "5"
+    cc.stop_playback.assert_awaited()
 
 
 @pytest.mark.asyncio
