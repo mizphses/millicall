@@ -210,6 +210,103 @@ async def yealink_device_config(
 
 
 # ---------------------------------------------------------------------------
+# option 66 直下エントリファイル（/provisioning/ 直下）
+#
+# DHCP option 66 のプロビジョニング URL は http://<lan_ip>/provisioning/ であり、
+# 電話機はこの base URL に**ファイル名を直接付けて**取得しにくる。
+# 既存のベンダーサブディレクトリ配下ルート（/Yealink/・/Panasonic/）は
+# boot の絶対 URL include（/Yealink/common.cfg, /Yealink/$MAC.cfg）が参照するため
+# 互換のため残し、ここでは直下エントリファイルを既存ハンドラへ委譲する。
+#
+# 固定ルート（ConfigCommon.cfg, y000000000000.boot）をパスパラメータ付きルート
+# （Config{mac}.cfg, {mac}.boot, {mac}.cfg）より先に宣言し、ルート衝突を防ぐ。
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ConfigCommon.cfg", response_class=PlainTextResponse)
+async def root_panasonic_common_config(
+    nc: NetworkConfig = Depends(_require_lan),
+    settings: Settings = Depends(get_settings_dep),
+) -> PlainTextResponse:
+    """option 66 直下の Panasonic 共通設定を返す（既存 /Panasonic/ConfigCommon.cfg に相当）。
+
+    Panasonic KX-HDV は option 66 直下に ConfigCommon.cfg を直接要求する。
+    セキュリティ・レンダリングは既存ハンドラと同一（LAN 制限のみ）。
+    """
+    return await panasonic_common_config(nc=nc, settings=settings)
+
+
+@router.get("/y000000000000.boot", response_class=PlainTextResponse)
+async def root_yealink_common_boot(
+    nc: NetworkConfig = Depends(_require_lan),
+    settings: Settings = Depends(get_settings_dep),
+) -> PlainTextResponse:
+    """option 66 直下の Yealink 共通 boot ファイルを返す（既存 /Yealink/y000000000000.boot に相当）。
+
+    boot 内の絶対 URL include（/Yealink/common.cfg, /Yealink/$MAC.cfg）経由で
+    残りの設定は既存の /Yealink/ ルートに到達する。セキュリティは LAN 制限のみ。
+    """
+    return await yealink_boot(nc=nc, settings=settings)
+
+
+@router.get("/Config{mac}.cfg", response_class=PlainTextResponse)
+async def root_panasonic_device_config(
+    mac: str,
+    token: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+    nc: NetworkConfig = Depends(_require_lan),
+    settings: Settings = Depends(get_settings_dep),
+) -> PlainTextResponse:
+    """option 66 直下の Panasonic 端末固有設定を返す（既存 /Panasonic/Config{mac}.cfg に相当）。
+
+    SIP 認証情報を含むため、LAN 制限 + known-device + トークンゲートを維持する。
+    """
+    return await panasonic_device_config(
+        mac=mac, token=token, session=session, nc=nc, settings=settings
+    )
+
+
+@router.get("/{mac}.boot", response_class=PlainTextResponse)
+async def root_yealink_mac_boot(
+    mac: str,
+    nc: NetworkConfig = Depends(_require_lan),
+    settings: Settings = Depends(get_settings_dep),
+) -> PlainTextResponse:
+    """option 66 直下の Yealink MAC 別 boot ファイルを返す（共通 boot と同一内容）。
+
+    Yealink は起動時に <MAC>.boot を先に要求し、無ければ共通 boot にフォールバックする。
+    boot 内容は $MAC 展開されるため共通 boot と同一で良い。
+    不正な MAC 形式は 404 を返す（固定ルートを食わないよう検証）。
+    セキュリティは LAN 制限のみ（共通 boot と同様）。
+    """
+    # MAC 正規化: 不正な形式は 404（存在を明かさない）
+    try:
+        normalize_mac(mac)
+    except ValueError:
+        raise HTTPException(status_code=404) from None
+    return await yealink_boot(nc=nc, settings=settings)
+
+
+@router.get("/{mac}.cfg", response_class=PlainTextResponse)
+async def root_yealink_device_config(
+    mac: str,
+    token: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+    nc: NetworkConfig = Depends(_require_lan),
+    settings: Settings = Depends(get_settings_dep),
+) -> PlainTextResponse:
+    """option 66 直下の Yealink 端末固有設定を返す（既存 /Yealink/{mac}.cfg に相当）。
+
+    Yealink は boot 経由（絶対 URL include）で /Yealink/{mac}.cfg を取得するため
+    直下 {mac}.cfg が無くても無害だが、堅牢性のため直下でも同一設定を提供する。
+    SIP 認証情報を含むため、LAN 制限 + known-device + トークンゲートを維持する。
+    """
+    return await yealink_device_config(
+        mac=mac, token=token, session=session, nc=nc, settings=settings
+    )
+
+
+# ---------------------------------------------------------------------------
 # 電話帳エンドポイント
 # ---------------------------------------------------------------------------
 
