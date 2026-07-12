@@ -112,3 +112,119 @@ async def test_delete_extension(auth_client) -> None:
     assert dele.status_code == 204
     gone = await auth_client.get(f"/api/extensions/{ext_id}")
     assert gone.status_code == 404
+
+
+# --- SIP 認証情報エンドポイント（GET /api/extensions/{id}/credentials）---
+
+
+async def _set_network_config(app, *, lan_ip: str, applied: bool) -> None:
+    """テスト用に NetworkConfig(id=1) を設定する。"""
+    from millicall.models import NetworkConfig
+
+    sm = app.state.sessionmaker
+    async with sm() as session:
+        cfg = await session.get(NetworkConfig, 1)
+        if cfg is None:
+            cfg = NetworkConfig(id=1)
+            session.add(cfg)
+        cfg.lan_ip = lan_ip
+        cfg.applied = applied
+        await session.commit()
+
+
+async def test_credentials_requires_auth(client) -> None:
+    """認証情報エンドポイントは未認証で 401。"""
+    resp = await client.get("/api/extensions/1/credentials")
+    assert resp.status_code == 401
+
+
+async def test_credentials_requires_admin(client, user_factory) -> None:
+    """認証情報エンドポイントは非管理者で 403。"""
+    username, password = await user_factory(username="reguser", password="User123!", role="user")
+    await client.post("/api/auth/login", json={"username": username, "password": password})
+    resp = await client.get("/api/extensions/1/credentials")
+    assert resp.status_code == 403
+
+
+async def test_credentials_returns_values(auth_client) -> None:
+    """admin で 200、内線番号・平文パスワード・SIP 情報を返す。"""
+    created = await auth_client.post(
+        "/api/extensions", json={"number": "1100", "display_name": "Cred"}
+    )
+    ext_id = created.json()["id"]
+    resp = await auth_client.get(f"/api/extensions/{ext_id}/credentials")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["number"] == "1100"
+    assert body["display_name"] == "Cred"
+    assert body["transport"] == "UDP"
+    assert body["sip_port"] == 5060
+    # 平文パスワードが返る（自動生成 64 文字）
+    assert isinstance(body["password"], str) and len(body["password"]) > 0
+    assert "sip_server" in body
+    assert "domain" in body
+
+
+async def test_credentials_uses_settings_when_not_applied(auth_client, app) -> None:
+    """子LAN 未適用時: domain=sip_domain、sip_server=sip_bind_ip or sip_domain。"""
+    settings = app.state.settings
+    created = await auth_client.post(
+        "/api/extensions", json={"number": "1101", "display_name": "Main"}
+    )
+    ext_id = created.json()["id"]
+    await _set_network_config(app, lan_ip="172.20.0.1", applied=False)
+    resp = await auth_client.get(f"/api/extensions/{ext_id}/credentials")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["domain"] == settings.sip_domain
+    expected_server = settings.sip_bind_ip or settings.sip_domain
+    assert body["sip_server"] == expected_server
+
+
+async def test_credentials_uses_lan_ip_when_applied(auth_client, app) -> None:
+    """子LAN 適用時: sip_server / domain = lan_ip。"""
+    created = await auth_client.post(
+        "/api/extensions", json={"number": "1102", "display_name": "Child"}
+    )
+    ext_id = created.json()["id"]
+    await _set_network_config(app, lan_ip="172.20.0.1", applied=True)
+    resp = await auth_client.get(f"/api/extensions/{ext_id}/credentials")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sip_server"] == "172.20.0.1"
+    assert body["domain"] == "172.20.0.1"
+
+
+async def test_credentials_not_found(auth_client) -> None:
+    """存在しない内線は 404。"""
+    resp = await auth_client.get("/api/extensions/999999/credentials")
+    assert resp.status_code == 404
+
+
+async def test_credentials_records_audit_without_password(auth_client, app) -> None:
+    """閲覧が監査ログに記録され、平文パスワードが detail に含まれない。"""
+    from sqlalchemy import select
+
+    from millicall.models import AuditLog
+
+    created = await auth_client.post(
+        "/api/extensions", json={"number": "1103", "display_name": "Audit"}
+    )
+    ext_id = created.json()["id"]
+    resp = await auth_client.get(f"/api/extensions/{ext_id}/credentials")
+    assert resp.status_code == 200
+    password = resp.json()["password"]
+
+    sm = app.state.sessionmaker
+    async with sm() as s:
+        log = await s.scalar(
+            select(AuditLog)
+            .where(AuditLog.action == "extension.credentials.view")
+            .where(AuditLog.target_id == str(ext_id))
+        )
+    assert log is not None
+    assert log.target_type == "extension"
+    # パスワードが detail に含まれてはならない（内線番号のみ）
+    assert log.detail is not None
+    assert password not in log.detail
+    assert "1103" in log.detail
