@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Check, Copy, Eye, EyeOff, KeyRound, Pencil, Trash2 } from "lucide-react";
 
 import { css } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
+
+import type { components } from "../api/schema";
 
 import { api } from "../api/client";
 import { EXTENSIONS_KEY } from "../queryKeys";
@@ -65,6 +67,16 @@ async function deleteExtension(id: number): Promise<void> {
   if (error) throw new Error("内線の削除に失敗しました");
 }
 
+type ExtensionCredentials = components["schemas"]["ExtensionCredentials"];
+
+async function fetchCredentials(id: number): Promise<ExtensionCredentials> {
+  const { data, error } = await api.GET("/api/extensions/{ext_id}/credentials", {
+    params: { path: { ext_id: id } },
+  });
+  if (error || !data) throw new Error("認証情報の取得に失敗しました");
+  return data;
+}
+
 export function ExtensionsPage() {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -80,6 +92,13 @@ export function ExtensionsPage() {
   >({});
 
   const [deleteTarget, setDeleteTarget] = useState<ExtensionRead | null>(null);
+
+  // 認証情報パネル: 対象内線（開いたときだけ取得する）。
+  const [credentialsTarget, setCredentialsTarget] = useState<ExtensionRead | null>(null);
+
+  function openCredentials(ext: ExtensionRead) {
+    setCredentialsTarget(ext);
+  }
 
   function openCreate() {
     setEditing(null);
@@ -165,10 +184,17 @@ export function ExtensionsPage() {
     {
       key: "actions",
       header: "操作",
-      width: "160px",
+      width: "260px",
       align: "right",
       render: (row) => (
         <div className={css({ display: "flex", gap: "2", justifyContent: "flex-end" })}>
+          <button
+            type="button"
+            className={button({ variant: "ghost", size: "sm" })}
+            onClick={() => openCredentials(row)}
+          >
+            <KeyRound size={14} />認証情報
+          </button>
           <button
             type="button"
             className={button({ variant: "secondary", size: "sm" })}
@@ -311,7 +337,160 @@ export function ExtensionsPage() {
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         onCancel={() => setDeleteTarget(null)}
       />
+
+      <CredentialsPanel target={credentialsTarget} onClose={() => setCredentialsTarget(null)} />
     </PageLayout>
+  );
+}
+
+/** SIP 認証情報パネル。開いたときだけ /credentials を取得し、ソフトフォン設定値を表示する。 */
+function CredentialsPanel({
+  target,
+  onClose,
+}: {
+  target: ExtensionRead | null;
+  onClose: () => void;
+}) {
+  const open = target !== null;
+  const credentialsQuery = useQuery({
+    queryKey: ["extension-credentials", target?.id],
+    queryFn: () => fetchCredentials(target!.id),
+    // 開いたときだけ取得する（一覧では取得しない）。
+    enabled: open,
+    // 平文パスワードのため長期キャッシュしない。
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+  return (
+    <SlidePanel
+      open={open}
+      title={target ? `認証情報（内線 ${target.number}）` : "認証情報"}
+      onClose={onClose}
+      footer={
+        <button type="button" className={button({ variant: "secondary" })} onClick={onClose}>
+          閉じる
+        </button>
+      }
+    >
+      <div className={css({ display: "flex", flexDirection: "column", gap: "4" })}>
+        <p className={css({ fontSize: "sm", color: "text.muted", lineHeight: "1.6" })}>
+          Zoiper 等のソフトフォンに以下の値を入力してください。ソフトフォンは電話機と同じ社内LAN（子ネットワーク）上に接続してください。
+        </p>
+
+        {credentialsQuery.isLoading ? (
+          <p className={css({ fontSize: "sm", color: "text.muted" })}>読み込み中…</p>
+        ) : credentialsQuery.isError ? (
+          <p className={css({ fontSize: "sm", color: "danger.text" })}>
+            認証情報の取得に失敗しました。
+          </p>
+        ) : credentialsQuery.data ? (
+          <CredentialsFields data={credentialsQuery.data} />
+        ) : null}
+      </div>
+    </SlidePanel>
+  );
+}
+
+function CredentialsFields({ data }: { data: ExtensionCredentials }) {
+  const [revealed, setRevealed] = useState(false);
+
+  return (
+    <div className={css({ display: "flex", flexDirection: "column", gap: "3" })}>
+      <CopyRow label="ユーザー名 / 認証ID" value={data.number} />
+      <CopyRow
+        label="パスワード"
+        value={data.password}
+        secret
+        revealed={revealed}
+        onToggleReveal={() => setRevealed((v) => !v)}
+      />
+      <CopyRow label="SIP サーバ" value={data.sip_server} />
+      <CopyRow label="ポート" value={String(data.sip_port)} />
+      <CopyRow label="ドメイン" value={data.domain} />
+      <CopyRow label="表示名" value={data.display_name} />
+      <CopyRow label="トランスポート" value={data.transport} />
+    </div>
+  );
+}
+
+/** ラベル + 値（伏字/表示トグル対応）+ コピーボタンの 1 行。 */
+function CopyRow({
+  label,
+  value,
+  secret = false,
+  revealed = false,
+  onToggleReveal,
+}: {
+  label: string;
+  value: string;
+  secret?: boolean;
+  revealed?: boolean;
+  onToggleReveal?: () => void;
+}) {
+  const toast = useToast();
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("コピーに失敗しました");
+    }
+  }
+
+  const display = secret && !revealed ? "•".repeat(Math.min(value.length, 24)) : value;
+
+  return (
+    <div>
+      <span
+        className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
+      >
+        {label}
+      </span>
+      <div className={css({ display: "flex", gap: "2", alignItems: "center" })}>
+        <code
+          className={css({
+            flex: 1,
+            minWidth: 0,
+            fontSize: "sm",
+            fontFamily: "mono",
+            bg: "gray.50",
+            borderWidth: "1px",
+            borderStyle: "solid",
+            borderColor: "border",
+            borderRadius: "md",
+            px: "3",
+            py: "2",
+            overflowX: "auto",
+            whiteSpace: "nowrap",
+            wordBreak: "break-all",
+          })}
+        >
+          {display}
+        </code>
+        {secret ? (
+          <button
+            type="button"
+            aria-label={revealed ? "パスワードを隠す" : "パスワードを表示"}
+            className={button({ variant: "ghost", size: "sm" })}
+            onClick={onToggleReveal}
+          >
+            {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          aria-label={`${label}をコピー`}
+          className={button({ variant: "secondary", size: "sm" })}
+          onClick={copy}
+        >
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+        </button>
+      </div>
+    </div>
   );
 }
 

@@ -495,6 +495,32 @@ export interface paths {
         patch: operations["update_extension_api_extensions__ext_id__patch"];
         trace?: never;
     };
+    "/api/extensions/{ext_id}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Extension Credentials
+         * @description 内線の SIP 接続情報（平文パスワード含む）を返す（管理者専用）。
+         *
+         *     ソフトフォン（Zoiper 等）を社内LAN から手動設定するための資格情報を返す。
+         *     sip_server / domain は telephony 設定生成（PR #57）の internal ロジックと
+         *     同じ結果になるよう resolve_internal_sip_endpoint で算出する。
+         *     閲覧は監査ログに記録するが、パスワードそのものはログに残さない。
+         *     存在しない内線は 404。
+         */
+        get: operations["get_extension_credentials_api_extensions__ext_id__credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/network": {
         parameters: {
             query?: never;
@@ -1131,6 +1157,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/provisioning/ConfigCommon.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Panasonic Common Config
+         * @description option 66 直下の Panasonic 共通設定を返す（既存 /Panasonic/ConfigCommon.cfg に相当）。
+         *
+         *     Panasonic KX-HDV は option 66 直下に ConfigCommon.cfg を直接要求する。
+         *     セキュリティ・レンダリングは既存ハンドラと同一（LAN 制限のみ）。
+         */
+        get: operations["root_panasonic_common_config_provisioning_ConfigCommon_cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/Config{mac}.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Panasonic Device Config
+         * @description option 66 直下の Panasonic 端末固有設定を返す（既存 /Panasonic/Config{mac}.cfg に相当）。
+         *
+         *     SIP 認証情報を含むため、LAN 制限 + known-device + トークンゲートを維持する。
+         */
+        get: operations["root_panasonic_device_config_provisioning_Config_mac__cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/provisioning/Panasonic/ConfigCommon.cfg": {
         parameters: {
             query?: never;
@@ -1269,6 +1340,87 @@ export interface paths {
          * @description Yealink XML 電話帳を返す（LAN 制限のみ）。
          */
         get: operations["yealink_phonebook_provisioning_phonebook_yealink_xml_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/y000000000000.boot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Yealink Common Boot
+         * @description option 66 直下の Yealink 共通 boot ファイルを返す（既存 /Yealink/y000000000000.boot に相当）。
+         *
+         *     boot 内の絶対 URL include（/Yealink/common.cfg, /Yealink/$MAC.cfg）経由で
+         *     残りの設定は既存の /Yealink/ ルートに到達する。セキュリティは LAN 制限のみ。
+         */
+        get: operations["root_yealink_common_boot_provisioning_y000000000000_boot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/{mac}.boot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Yealink Mac Boot
+         * @description option 66 直下の Yealink MAC 別 boot ファイルを返す（共通 boot と同一内容）。
+         *
+         *     Yealink は起動時に <MAC>.boot を先に要求し、無ければ共通 boot にフォールバックする。
+         *     boot 内容は $MAC 展開されるため共通 boot と同一で良い。
+         *     不正な MAC 形式は 404 を返す（固定ルートを食わないよう検証）。
+         *     セキュリティは LAN 制限のみ（共通 boot と同様）。
+         */
+        get: operations["root_yealink_mac_boot_provisioning__mac__boot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/{name}.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Cfg Dispatcher
+         * @description option 66 直下の ``{name}.cfg`` を単一ディスパッチャで振り分ける。
+         *
+         *     ``ConfigCommon.cfg`` / ``Config{mac}.cfg`` は上位の固定・具体ルートで処理済みのため
+         *     ここには到達しない。この直下 ``{name}.cfg`` に来るのは主に次の 2 系統:
+         *
+         *     - Panasonic プレプロビジョニング入口ファイル ``{MODEL}.cfg``
+         *       （KX-HDV130N / KX-HDV230N / KX-HDV330N / KX-HDV430N とその NB サフィックス等）。
+         *       SIP 認証情報を含まない最小の入口ファイルのため、LAN 制限のみでトークン不要。
+         *     - Yealink 端末固有設定 ``{mac}.cfg``（12桁hex）。SIP 認証情報を含むため
+         *       LAN 制限 + known-device + トークンゲートを維持する。
+         *
+         *     ``{model}.cfg`` と ``{mac}.cfg`` は同じ ``X.cfg`` にマッチし FastAPI では
+         *     ルート衝突するため、ファイル名パターンで確実に分岐する（KX-HDV* → 入口ファイル、
+         *     それ以外 → 従来どおり MAC 検証を経て Yealink 端末設定）。
+         */
+        get: operations["root_cfg_dispatcher_provisioning__name__cfg_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1769,6 +1921,32 @@ export interface components {
             display_name: string;
             /** Number */
             number: string;
+        };
+        /**
+         * ExtensionCredentials
+         * @description 内線の SIP 接続情報（ソフトフォン手動設定用・管理者専用）。
+         *
+         *     平文パスワードを含むため、専用エンドポイント（GET /api/extensions/{id}/credentials）
+         *     でのみ返す。一覧・取得（ExtensionRead）には決して含めない。
+         */
+        ExtensionCredentials: {
+            /** Display Name */
+            display_name: string;
+            /** Domain */
+            domain: string;
+            /** Number */
+            number: string;
+            /** Password */
+            password: string;
+            /** Sip Port */
+            sip_port: number;
+            /** Sip Server */
+            sip_server: string;
+            /**
+             * Transport
+             * @default UDP
+             */
+            transport: string;
         };
         /** ExtensionRead */
         ExtensionRead: {
@@ -3381,6 +3559,37 @@ export interface operations {
             };
         };
     };
+    get_extension_credentials_api_extensions__ext_id__credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ext_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionCredentials"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_network_config_api_network_get: {
         parameters: {
             query?: never;
@@ -4620,6 +4829,59 @@ export interface operations {
             };
         };
     };
+    root_panasonic_common_config_provisioning_ConfigCommon_cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    root_panasonic_device_config_provisioning_Config_mac__cfg_get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                mac: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     panasonic_common_config_provisioning_Panasonic_ConfigCommon_cfg_get: {
         parameters: {
             query?: never;
@@ -4782,6 +5044,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    root_yealink_common_boot_provisioning_y000000000000_boot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    root_yealink_mac_boot_provisioning__mac__boot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mac: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    root_cfg_dispatcher_provisioning__name__cfg_get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
