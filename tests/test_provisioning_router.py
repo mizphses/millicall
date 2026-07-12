@@ -386,6 +386,174 @@ async def test_yealink_device_token_consumed(app) -> None:
 
 
 # ---------------------------------------------------------------------------
+# option 66 直下エントリファイル（/provisioning/ 直下）
+#
+# 電話機は DHCP option 66 の base URL（http://<lan_ip>/provisioning/）に
+# ファイル名を直接付けて取得しにくる。ベンダーサブディレクトリ配下ではなく
+# /provisioning/ 直下でもエントリファイルを提供できることを検証する。
+# ---------------------------------------------------------------------------
+
+
+async def test_root_yealink_common_boot(app) -> None:
+    """/provisioning/y000000000000.boot が既存 boot と同一内容を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/y000000000000.boot")
+
+    assert resp.status_code == 200
+    # boot 内の絶対 URL include 行を含む（この URL 経由で /Yealink/ ルートに到達する）
+    assert "include:config" in resp.text
+
+
+async def test_root_yealink_common_boot_lan_blocked(app) -> None:
+    """LAN 外からの直下 boot リクエストは 404 を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app, client_ip="8.8.8.8") as c:
+        resp = await c.get("/provisioning/y000000000000.boot")
+
+    assert resp.status_code == 404
+
+
+async def test_root_yealink_mac_boot(app) -> None:
+    """/provisioning/{mac}.boot（正しい MAC）が 200 で共通 boot 内容を返す。
+
+    Yealink は起動時に <MAC>.boot を先に要求する。共通 boot を返しても
+    boot 内容は $MAC 展開されるため同一で良い。
+    """
+    await _insert_network_config(app)
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/805ec0cd8a95.boot")
+
+    assert resp.status_code == 200
+    assert "include:config" in resp.text
+
+
+async def test_root_yealink_mac_boot_invalid_mac(app) -> None:
+    """不正な MAC 形式の .boot は 404 を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/invalidmac.boot")
+
+    assert resp.status_code == 404
+
+
+async def test_root_yealink_mac_boot_lan_blocked(app) -> None:
+    """LAN 外からの直下 {mac}.boot リクエストは 404 を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app, client_ip="8.8.8.8") as c:
+        resp = await c.get("/provisioning/805ec0cd8a95.boot")
+
+    assert resp.status_code == 404
+
+
+async def test_root_panasonic_common_config(app) -> None:
+    """/provisioning/ConfigCommon.cfg が Panasonic 共通設定を返す。"""
+    await _insert_network_config(app, lan_ip="10.0.0.1")
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/ConfigCommon.cfg")
+
+    assert resp.status_code == 200
+    assert "10.0.0.1" in resp.text
+
+
+async def test_root_panasonic_common_config_lan_blocked(app) -> None:
+    """LAN 外からの直下 ConfigCommon.cfg リクエストは 404 を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app, client_ip="203.0.113.1") as c:
+        resp = await c.get("/provisioning/ConfigCommon.cfg")
+
+    assert resp.status_code == 404
+
+
+async def test_root_panasonic_device_config_no_token(app) -> None:
+    """provision_token=None のデバイスは直下 Config{mac}.cfg をトークンなしで取得できる。"""
+    await _insert_network_config(app, lan_ip="10.0.0.1")
+    ext_id = await _insert_extension(app, number="2001")
+    await _insert_device(
+        app,
+        mac_address="AA:BB:CC:DD:EE:FF",
+        extension_id=ext_id,
+        provisioned=True,
+        provision_token=None,
+    )
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/ConfigAABBCCDDEEFF.cfg")
+
+    assert resp.status_code == 200
+    assert "2001" in resp.text
+    assert "10.0.0.1" in resp.text
+
+
+async def test_root_panasonic_device_config_unknown_mac(app) -> None:
+    """未 provisioned（未知 MAC）の直下 Config{mac}.cfg は 404 を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/ConfigAABBCCDDEEFF.cfg")
+
+    assert resp.status_code == 404
+
+
+async def test_root_panasonic_device_config_token_wrong(app) -> None:
+    """provision_token 設定済みで間違ったトークンの直下 Config{mac}.cfg は 404 を返す。"""
+    await _insert_network_config(app)
+    ext_id = await _insert_extension(app)
+    await _insert_device(
+        app,
+        mac_address="AA:BB:CC:DD:EE:FF",
+        extension_id=ext_id,
+        provisioned=True,
+        provision_token="correcttoken",
+    )
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/ConfigAABBCCDDEEFF.cfg?token=wrongtoken")
+
+    assert resp.status_code == 404
+
+
+async def test_root_yealink_device_config_no_token(app) -> None:
+    """堅牢性: provision_token=None のデバイスは直下 {mac}.cfg をトークンなしで取得できる。
+
+    Yealink は boot 経由（絶対 URL include）で /Yealink/{mac}.cfg を取得するため
+    直下 {mac}.cfg が無くても無害だが、堅牢性のため直下でも同一設定を提供する。
+    """
+    await _insert_network_config(app)
+    ext_id = await _insert_extension(app, number="3001")
+    await _insert_device(
+        app,
+        mac_address="11:22:33:44:55:66",
+        extension_id=ext_id,
+        provisioned=True,
+        provision_token=None,
+    )
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/112233445566.cfg")
+
+    assert resp.status_code == 200
+    assert "3001" in resp.text
+
+
+async def test_root_yealink_device_config_unknown_mac(app) -> None:
+    """未 provisioned の直下 {mac}.cfg は 404 を返す。"""
+    await _insert_network_config(app)
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/112233445566.cfg")
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # 電話帳エンドポイント
 # ---------------------------------------------------------------------------
 
