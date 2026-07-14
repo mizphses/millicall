@@ -142,6 +142,11 @@ class Trunk(Base):
     name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     host: Mapped[str] = mapped_column(String(100), nullable=False)  # HGW の LAN 側 IP
+    # トランク種別: "hgw"（NTT フレッツ光 HGW・LAN 内。既定）/ "sip"（インターネット越しの
+    # SIP プロバイダ。Brastel my050 等）。テンプレートが種別で DTMF/NAT/ACL を分岐する。
+    trunk_type: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="hgw", server_default="hgw"
+    )
     username: Mapped[str] = mapped_column(String(50), nullable=False)  # 認証ID = 内線番号
     # HGW 側で決まるユーザー入力値。平文保存(暗号化は Phase 6)。API レスポンスには出さない。
     password: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -164,6 +169,12 @@ class Trunk(Base):
     # 2 本目以降に "904 no matching challenge" を返し登録がフラップするため、
     # トランクごとにプロファイル/送信元ポートを分ける。
     source_port: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    # SIP 種別トランクの着信許可 CIDR（カンマ区切り）。空 = ACL を掛けない。
+    # public コンテキストへ届くプロバイダのグローバル IP 帯をここで許可する
+    # （HGW 種別は従来どおり全体の millicall_trusted=RFC1918 で足りるため未使用）。
+    inbound_cidrs: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )

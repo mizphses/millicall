@@ -337,12 +337,27 @@ export function TrunksPage() {
             />
           </Field>
 
+          <Field label="種別" error={fieldErrors.trunk_type}>
+            <select
+              className={input({ invalid: fieldErrors.trunk_type ? true : undefined })}
+              value={form.trunk_type}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, trunk_type: e.target.value as "hgw" | "sip" }))
+              }
+            >
+              <option value="hgw">HGW（NTT フレッツ光・LAN 内）</option>
+              <option value="sip">インターネット SIP（Brastel my050 等）</option>
+            </select>
+          </Field>
+
           <Field label="ホスト名" error={fieldErrors.host}>
             <input
               className={input({ invalid: fieldErrors.host ? true : undefined })}
               value={form.host}
               onChange={(e) => setForm((f) => ({ ...f, host: e.target.value }))}
-              placeholder="sip.provider.example.com"
+              placeholder={
+                form.trunk_type === "sip" ? "softphone.spc.brastel.ne.jp" : "192.168.1.1"
+              }
             />
           </Field>
 
@@ -423,6 +438,24 @@ export function TrunksPage() {
               placeholder="自動採番（5080 から +2 ずつ）"
             />
           </Field>
+
+          {form.trunk_type === "sip" && (
+            <Field
+              label="着信許可 IP 帯（CIDR・改行区切り）"
+              error={fieldErrors.inbound_cidrs}
+            >
+              <textarea
+                className={input({ invalid: fieldErrors.inbound_cidrs ? true : undefined })}
+                rows={3}
+                value={form.inbound_cidrs}
+                onChange={(e) => setForm((f) => ({ ...f, inbound_cidrs: e.target.value }))}
+                placeholder={"プロバイダの IP 帯を 1 行 1 件\n例: 203.0.113.0/24"}
+              />
+              <p className={css({ fontSize: "sm", color: "fg.muted", marginTop: "1" })}>
+                空欄にすると着信 ACL を掛けません（SIP ポートが開放されます）。
+              </p>
+            </Field>
+          )}
 
           <label
             className={css({

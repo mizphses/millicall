@@ -18,6 +18,8 @@ const original: TrunkRead = {
   caller_id: "0312345678",
   inbound_extension: "200",
   source_port: null,
+  trunk_type: "hgw",
+  inbound_cidrs: [],
   enabled: true,
   has_password: true,
 };
@@ -33,6 +35,8 @@ function formOf(overrides: Partial<TrunkFormValues>): TrunkFormValues {
     caller_id: "0312345678",
     inbound_extension: "200",
     source_port: "",
+    trunk_type: "hgw",
+    inbound_cidrs: "",
     enabled: true,
     ...overrides,
   };
@@ -64,6 +68,24 @@ describe("buildCreatePayload", () => {
   it("source_port: 空文字 = null（自動採番）、数値文字列 = number", () => {
     expect(buildCreatePayload(formOf({ source_port: "", password: "x" })).source_port).toBeNull();
     expect(buildCreatePayload(formOf({ source_port: "5082", password: "x" })).source_port).toBe(5082);
+  });
+
+  it("trunk_type と inbound_cidrs を含める（改行/カンマ区切りを配列へ）", () => {
+    const payload = buildCreatePayload(
+      formOf({
+        trunk_type: "sip",
+        inbound_cidrs: "203.0.113.0/24\n198.51.100.7, 192.0.2.0/24",
+        password: "x",
+      }),
+    );
+    expect(payload.trunk_type).toBe("sip");
+    expect(payload.inbound_cidrs).toEqual(["203.0.113.0/24", "198.51.100.7", "192.0.2.0/24"]);
+  });
+
+  it("既定は hgw / inbound_cidrs は空配列", () => {
+    const payload = buildCreatePayload(formOf({ password: "x" }));
+    expect(payload.trunk_type).toBe("hgw");
+    expect(payload.inbound_cidrs).toEqual([]);
   });
 });
 
@@ -149,6 +171,26 @@ describe("buildUpdatePayload（編集フォーム → PATCH payload 変換）", 
     expect(payload.source_port).toBeNull();
   });
 
+  it("trunk_type を変更したら含める", () => {
+    const payload = buildUpdatePayload(formOf({ trunk_type: "sip" }), original);
+    expect(payload.trunk_type).toBe("sip");
+  });
+
+  it("inbound_cidrs を変更したら配列で含める / unchanged なら含めない", () => {
+    const changed = buildUpdatePayload(
+      formOf({ trunk_type: "sip", inbound_cidrs: "203.0.113.0/24" }),
+      original,
+    );
+    expect(changed.inbound_cidrs).toEqual(["203.0.113.0/24"]);
+
+    const same: TrunkRead = { ...original, inbound_cidrs: ["203.0.113.0/24"] };
+    const unchanged = buildUpdatePayload(
+      formOf({ inbound_cidrs: "203.0.113.0/24" }),
+      same,
+    );
+    expect(unchanged.inbound_cidrs).toBeUndefined();
+  });
+
   it("複数フィールドを同時に変更したら全て含める", () => {
     const payload = buildUpdatePayload(
       formOf({ display_name: "別名称", password: "changed", enabled: false }),
@@ -209,5 +251,31 @@ describe("validateForm（編集モード）", () => {
     expect(validateForm(formOf({ source_port: "70000" }), "edit").source_port).toBeTruthy();
     expect(validateForm(formOf({ source_port: "5082" }), "edit").source_port).toBeUndefined();
     expect(validateForm(formOf({ source_port: "" }), "edit").source_port).toBeUndefined();
+  });
+});
+
+describe("validateForm（着信許可 CIDR）", () => {
+  it("SIP 種別で不正な CIDR を弾く", () => {
+    const errors = validateForm(
+      formOf({ trunk_type: "sip", inbound_cidrs: "203.0.113.0/24\nnot-an-ip", password: "x" }),
+      "create",
+    );
+    expect(errors.inbound_cidrs).toBeTruthy();
+  });
+
+  it("SIP 種別で正しい CIDR/アドレスはエラーなし", () => {
+    const errors = validateForm(
+      formOf({ trunk_type: "sip", inbound_cidrs: "203.0.113.0/24\n198.51.100.7", password: "x" }),
+      "create",
+    );
+    expect(errors.inbound_cidrs).toBeUndefined();
+  });
+
+  it("HGW 種別では CIDR 検証しない（不正でも無視）", () => {
+    const errors = validateForm(
+      formOf({ trunk_type: "hgw", inbound_cidrs: "garbage", password: "x" }),
+      "create",
+    );
+    expect(errors.inbound_cidrs).toBeUndefined();
   });
 });

@@ -56,6 +56,7 @@ millicall は **フレッツ光電話（NTT HGW）に特化したローカル PB
 | [クイックスタート](quickstart.md) | ワンライナーインストールと初回ログイン |
 | [ネットワーク設定](network.md) | LAN/DHCP/NAT と netd の概要 |
 | [HGW/フレッツ設定](hgw-flets.md) | NTT HGW への内線登録と SDP 設定の注意点 |
+| [インターネット SIP トランク](sip-trunk.md) | Brastel my050 / 一般 SIP 050 の登録・受発信 |
 | [SSO 設定](sso.md) | SAML SP と SCIM プロビジョニング |
 | [プロバイダ追加](providers.md) | LLM / TTS / STT プロバイダの登録方法 |
 | [ワークフロー作成](workflows.md) | IVR・AI フローの構築 |

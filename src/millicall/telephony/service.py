@@ -49,6 +49,7 @@ def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfi
         event_socket_ip=settings.event_socket_ip,
         event_socket_port=settings.esl_port,
         external_sip_port=settings.external_sip_port,
+        sip_external_ip=settings.sip_external_ip,
         international_allow_prefixes=raw_prefixes,
         # SIP多層防御 (Phase 6 Task 7)
         sip_trusted_cidrs=settings.sip_trusted_cidrs,
@@ -109,6 +110,8 @@ class TelephonyChangeListener:
                 caller_id=t.caller_id,
                 inbound_extension=t.inbound_extension,
                 source_port=t.source_port,
+                trunk_type=t.trunk_type,
+                inbound_cidrs=[c for c in t.inbound_cidrs.split(",") if c],
             )
             for t in result
         ]

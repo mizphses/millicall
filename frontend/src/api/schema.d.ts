@@ -2378,6 +2378,8 @@ export interface components {
             enabled: boolean;
             /** Host */
             host: string;
+            /** Inbound Cidrs */
+            inbound_cidrs?: string[];
             /**
              * Inbound Extension
              * @default
@@ -2389,6 +2391,12 @@ export interface components {
             password: string;
             /** Source Port */
             source_port?: number | null;
+            /**
+             * Trunk Type
+             * @default hgw
+             * @enum {string}
+             */
+            trunk_type: "hgw" | "sip";
             /** Username */
             username: string;
         };
@@ -2408,12 +2416,19 @@ export interface components {
             host: string;
             /** Id */
             id: number;
+            /** Inbound Cidrs */
+            inbound_cidrs: string[];
             /** Inbound Extension */
             inbound_extension: string;
             /** Name */
             name: string;
             /** Source Port */
             source_port: number | null;
+            /**
+             * Trunk Type
+             * @enum {string}
+             */
+            trunk_type: "hgw" | "sip";
             /** Username */
             username: string;
         };
@@ -2443,12 +2458,16 @@ export interface components {
             enabled?: boolean | null;
             /** Host */
             host?: string | null;
+            /** Inbound Cidrs */
+            inbound_cidrs?: string[] | null;
             /** Inbound Extension */
             inbound_extension?: string | null;
             /** Password */
             password?: string | null;
             /** Source Port */
             source_port?: number | null;
+            /** Trunk Type */
+            trunk_type?: ("hgw" | "sip") | null;
             /** Username */
             username?: string | null;
         };
