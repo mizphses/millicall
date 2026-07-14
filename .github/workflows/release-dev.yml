@@ -80,8 +80,8 @@ jobs:
           body: |
             main ブランチのプレリリースイメージ (自動更新)。
 
-            - `ghcr.io/mizphses/millicall-core:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64)
-            - `ghcr.io/mizphses/millicall-freeswitch:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64)
-            - `ghcr.io/mizphses/millicall-netd:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64)
+            - `ghcr.io/mizphses/millicall-core:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64/arm64)
+            - `ghcr.io/mizphses/millicall-freeswitch:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64/arm64)
+            - `ghcr.io/mizphses/millicall-netd:dev` / `:${{ needs.prepare.outputs.sha_tag }}` (amd64/arm64)
 
             利用: `MILLICALL_VERSION=dev millicallctl update`

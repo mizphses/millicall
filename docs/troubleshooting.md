@@ -232,6 +232,8 @@ FreeSWITCH は core が `service_healthy` になってから起動します。co
 
 ## arm64 ホストで動作しない
 
-現時点で全イメージ（core / freeswitch / netd）が **amd64 専用**です。arm64 ホストへのデプロイは将来課題です。
+全イメージ（core / freeswitch / netd）は **amd64 / arm64 のマルチアーチ**で公開しており、arm64 ホスト（aarch64 / arm64）でも `install.sh` でそのまま導入できる。Docker が manifest list からホストのアーキに合ったイメージを自動選択する。
+
+古い単一アーキイメージを掴んでいる場合は `millicallctl update`（= `docker compose pull` + 再起動）で最新のマルチアーチイメージを取り直すこと。`docker buildx imagetools inspect ghcr.io/mizphses/millicall-freeswitch:latest` で `linux/amd64` と `linux/arm64` の両エントリを確認できる。
 
 詳細: [ops/deployment.md](ops/deployment.md)
