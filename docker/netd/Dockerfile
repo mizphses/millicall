@@ -6,7 +6,8 @@
 # ホストカーネルの名前空間 (network_mode: host + NET_ADMIN/NET_RAW cap) 上で
 # 動作するため、Debian slim-python ではなく Ubuntu フルパッケージを使う。
 #
-# ターゲット: linux/amd64 (Ubuntu 24.04 の Tailscale 公式 apt リポジトリ "noble")
+# ターゲット: linux/amd64 / linux/arm64 (Ubuntu 24.04 の Tailscale 公式 apt
+# リポジトリ "noble" は両アーキを提供。ubuntu:24.04 ベースもマルチアーチ)
 # ============================================================
 FROM ubuntu:24.04
 

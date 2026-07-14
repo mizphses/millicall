@@ -1,8 +1,9 @@
 #!/bin/sh
 # ============================================================
 # Phase 1 freeswitch entrypoint
-# safarov/freeswitch イメージは /etc/freeswitch が空で起動するため
-# vanilla 設定を先にコピーしてから FreeSWITCH を起動する。
+# 本イメージは /etc/freeswitch が空で起動するため(ソースビルド runtime は
+# make samples を呼ばず、vanilla マスタは /usr/share/freeswitch/conf/vanilla に
+# 置いている)、vanilla 設定を先にコピーしてから FreeSWITCH を起動する。
 #
 # no-clobber を find + 個別コピーで自前実装する理由:
 #   core が depends_on: service_healthy で先行起動し、
@@ -10,9 +11,9 @@
 #   dialplan/default.xml, autoload_configs/event_socket.conf.xml,
 #   directory/default/）を既に生成している。vanilla の cp が上書きすると
 #   ホスト側の core 生成ファイルが壊れるため、既存ファイルは保護する。
-#   なお safarov イメージの cp は BusyBox 実装で、`cp -rn src/. dest/` は
-#   dest（bind mount で必ず存在）を見て**エラーも出さず全体をスキップ**する
-#   （GNU cp と非互換。実機で freeswitch.xml 不在の再起動ループとして発現）。
+#   (旧 safarov ベースの BusyBox cp は `cp -rn src/. dest/` が dest を見て
+#    エラーも出さず全体スキップする GNU 非互換があり、find + 個別コピーは
+#    その回避も兼ねている。)
 # ============================================================
 set -eu
 
@@ -54,5 +55,5 @@ fi
 
 # -nf: フォアグラウンド（フォークしない）
 # -nonat: 自動NAT検出無効化（host network / 同一LAN前提）
-# safarov イメージには freeswitch ユーザーが存在しないため root で起動
+# 本イメージには freeswitch ユーザーが存在しないため root で起動
 exec freeswitch -nf -nonat

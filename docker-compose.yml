@@ -25,7 +25,7 @@ services:
 
   freeswitch:
     # ローカル開発では mod_audio_stream 入りイメージを自前ビルドする。
-    # runtime base は safarov/freeswitch 固定 digest (amd64)。
+    # runtime は FreeSWITCH をソースからビルド (multi-arch: amd64 / arm64)。
     build:
       context: .
       dockerfile: docker/freeswitch/Dockerfile

@@ -75,6 +75,11 @@ class TrunkConfig:
     inbound_extension: str = ""
     # 送信元 SIP ポート（明示指定）。None = 自動採番。
     source_port: int | None = None
+    # トランク種別: "hgw"（LAN 内 HGW・既定）/ "sip"（インターネット越しの SIP プロバイダ）。
+    # テンプレートが種別で DTMF / NAT / 着信 ACL を分岐する。
+    trunk_type: str = "hgw"
+    # SIP 種別の着信許可 CIDR リスト。空 = ACL を掛けない（ポート開放）。
+    inbound_cidrs: list[str] = field(default_factory=list)
 
 
 def allocate_source_ports(
@@ -180,6 +185,8 @@ class FreeswitchConfigWriter:
         event_socket_port: int = 8021,
         sip_bind_ip: str | None = None,
         external_sip_port: int = 5080,
+        # SIP 種別トランクの ext-sip-ip/ext-rtp-ip。"auto-nat" は NAT 内でも公開 IP でも機能する。
+        sip_external_ip: str = "auto-nat",
         international_allow_prefixes: list[str] | None = None,
         # SIP多層防御 (Phase 6 Task 7): 信頼CIDR と 匿名着信拒否フラグ
         sip_trusted_cidrs: list[str] | None = None,
@@ -224,6 +231,7 @@ class FreeswitchConfigWriter:
             "event_socket_port": event_socket_port,
             "esl_password": esl_password,
             "external_sip_port": external_sip_port,
+            "sip_external_ip": sip_external_ip,
             "international_allow_prefixes": safe_prefixes,
             "sip_trusted_cidrs": sip_trusted_cidrs
             if sip_trusted_cidrs is not None
@@ -403,11 +411,12 @@ class FreeswitchConfigWriter:
                 self._render("event_socket.xml.j2"),
             )
         )
-        # SIP多層防御: ACL設定（millicall_trusted, default=deny, RFC1918+loopback許可）
+        # SIP多層防御: ACL設定（millicall_trusted, default=deny, RFC1918+loopback許可）。
+        # SIP 種別トランクには trunk_<name>_trusted リスト（プロバイダ IP 帯許可）も併せて出す。
         written.append(
             self._write(
                 "autoload_configs/acl.conf.xml",
-                self._render("acl.conf.xml.j2"),
+                self._render("acl.conf.xml.j2", {"trunks": trunks}),
             )
         )
         return written

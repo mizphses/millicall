@@ -8,5 +8,14 @@
     <list name="millicall_trusted" default="deny">
 {% for cidr in sip_trusted_cidrs %}      <node type="allow" cidr="{{ cidr }}"/>
 {% endfor %}    </list>
-  </network-lists>
+{% for t in (trunks or []) if t.trunk_type == 'sip' and t.inbound_cidrs %}
+    <!--
+      trunk_{{ t.name }}_trusted: SIP 種別トランク「{{ t.name }}」の着信許可 CIDR。
+      external_{{ t.name }} プロファイルの apply-inbound-acl から参照される。
+      プロバイダのグローバル IP 帯のみを許可し、それ以外の WAN 着信は拒否する。
+    -->
+    <list name="trunk_{{ t.name }}_trusted" default="deny">
+{% for cidr in t.inbound_cidrs %}      <node type="allow" cidr="{{ cidr }}"/>
+{% endfor %}    </list>
+{% endfor %}  </network-lists>
 </configuration>

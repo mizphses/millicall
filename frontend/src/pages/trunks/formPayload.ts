@@ -26,7 +26,22 @@ export interface TrunkFormValues {
    * 数値文字列で保持し、payload 変換時に number | null へ写す。
    */
   source_port: string;
+  /** トランク種別。hgw=LAN 内 HGW（既定）/ sip=インターネット越しの SIP プロバイダ。 */
+  trunk_type: "hgw" | "sip";
+  /**
+   * SIP 種別の着信許可 CIDR。改行/カンマ区切りテキストで保持し、
+   * payload 変換時に配列へ split する。空 = ACL を掛けない。
+   */
+  inbound_cidrs: string;
   enabled: boolean;
+}
+
+/** CIDR テキスト（改行/カンマ区切り）を配列へ分解する。空要素は除去。 */
+function parseCidrs(raw: string): string[] {
+  return raw
+    .split(/[\n,]/)
+    .map((c) => c.trim())
+    .filter((c) => c !== "");
 }
 
 /** 作成フォームの初期値。 */
@@ -41,6 +56,8 @@ export function emptyForm(): TrunkFormValues {
     caller_id: "",
     inbound_extension: "",
     source_port: "",
+    trunk_type: "hgw",
+    inbound_cidrs: "",
     enabled: true,
   };
 }
@@ -57,6 +74,8 @@ export function formFromTrunk(trunk: TrunkRead): TrunkFormValues {
     caller_id: trunk.caller_id,
     inbound_extension: trunk.inbound_extension,
     source_port: trunk.source_port != null ? String(trunk.source_port) : "",
+    trunk_type: trunk.trunk_type,
+    inbound_cidrs: trunk.inbound_cidrs.join("\n"),
     enabled: trunk.enabled,
   };
 }
@@ -74,6 +93,8 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
     inbound_extension: form.inbound_extension.trim(),
     // 空文字 = 自動採番（null）。数値文字列なら number として送る。
     source_port: parseSourcePort(form.source_port),
+    trunk_type: form.trunk_type,
+    inbound_cidrs: parseCidrs(form.inbound_cidrs),
     enabled: form.enabled,
   };
 }
@@ -144,6 +165,16 @@ export function buildUpdatePayload(
     payload.source_port = sourcePort;
   }
 
+  if (form.trunk_type !== original.trunk_type) {
+    payload.trunk_type = form.trunk_type;
+  }
+
+  // inbound_cidrs: 配列比較。順序含め異なれば含める。
+  const cidrs = parseCidrs(form.inbound_cidrs);
+  if (cidrs.join(",") !== original.inbound_cidrs.join(",")) {
+    payload.inbound_cidrs = cidrs;
+  }
+
   if (form.enabled !== original.enabled) {
     payload.enabled = form.enabled;
   }
@@ -211,5 +242,29 @@ export function validateForm(
     }
   }
 
+  // 着信許可 CIDR: SIP 種別のみ対象。各要素が IPv4/IPv6 の CIDR/アドレス表記か簡易検証。
+  if (form.trunk_type === "sip") {
+    const invalid = parseCidrs(form.inbound_cidrs).filter((c) => !isCidrLike(c));
+    if (invalid.length > 0) {
+      errors.inbound_cidrs = `CIDR 表記が不正です: ${invalid.join(", ")}（例: 203.0.113.0/24）`;
+    }
+  }
+
   return errors;
+}
+
+/** IPv4/IPv6 のアドレス or CIDR 表記かの簡易チェック（厳密な範囲検証はサーバ側）。 */
+function isCidrLike(value: string): boolean {
+  const [addr, prefix, ...rest] = value.split("/");
+  if (rest.length > 0) return false;
+  if (prefix !== undefined) {
+    const p = Number(prefix);
+    if (!Number.isInteger(p) || p < 0 || p > 128) return false;
+  }
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+  if (ipv4.test(addr)) {
+    return addr.split(".").every((o) => Number(o) <= 255);
+  }
+  // IPv6: 簡易（16 進とコロンのみ）。
+  return /^[0-9a-fA-F:]+$/.test(addr) && addr.includes(":");
 }

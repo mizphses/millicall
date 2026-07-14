@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     sip_ip: str = "auto"
     rtp_ip: str = "auto"
     sip_bind_ip: str | None = None  # env MILLICALL_SIP_BIND_IP; overrides sip_ip/rtp_ip when set
+    # SIP 種別トランク（インターネット越しの SIP プロバイダ）の ext-sip-ip/ext-rtp-ip に使う。
+    # env MILLICALL_SIP_EXTERNAL_IP。既定 "auto-nat" は NAT 内でも公開 IP でも機能する。
+    # 固定にしたい場合は "stun:stun.freeswitch.org" や明示グローバル IP を指定する。
+    sip_external_ip: str = "auto-nat"
     outbound_international_allow: str = (
         ""  # env MILLICALL_OUTBOUND_INTERNATIONAL_ALLOW; comma-separated prefixes
     )

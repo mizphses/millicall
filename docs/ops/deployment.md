@@ -1,8 +1,8 @@
 # millicall 運用手順（デプロイ / 更新 / ロールバック / バックアップ）
 
-対象ホスト: **amd64 Linux**（FreeSWITCH イメージが amd64 専用のため）。Docker Engine + Compose v2 が必要。
+対象ホスト: **amd64 / arm64 Linux**。Docker Engine + Compose v2 が必要。
 
-> **arm64 について:** runtime base `safarov/freeswitch`（pinned digest `sha256:b31c743f…`）は単一 amd64 マニフェストであり arm64 タグが存在しません。arm64 ホストへの完全スタックのデプロイは将来課題です（FreeSWITCH を arm64 向けにソースビルドするか arm64 対応 base イメージを選定する別スパイクが必要）。
+> **マルチアーチについて:** 全イメージ（core / freeswitch / netd）を amd64 / arm64 のマルチアーチ manifest list で公開している。FreeSWITCH は amd64 専用の `safarov/freeswitch` ベースを撤廃し、ランタイムをソースからビルドする構成に変更したため arm64 でも動作する。CI は各アーキをネイティブランナー（`ubuntu-24.04` / `ubuntu-24.04-arm`）でビルドし `docker buildx imagetools` で束ねる。
 
 ---
 
@@ -176,4 +176,4 @@ millicallctl up
 - healthcheck: `curl http://127.0.0.1/healthz`（ポート 80）
 - freeswitch が起動しない: `~/millicall/data/freeswitch/*.xml` を core が生成済みか確認
   （core が healthy になるまで freeswitch は起動しない = `depends_on: service_healthy`）。
-- arm64 ホスト: 現時点で全イメージ（core / freeswitch）が amd64 専用のため pull できない。arm64 対応は将来課題。
+- arm64 ホスト: 全イメージがマルチアーチ対応。Docker が manifest list からホストのアーキ（aarch64/arm64）に合ったイメージを自動 pull する。古い単一アーキイメージを掴んでいる場合は `millicallctl update` で取り直す。

@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -73,6 +74,34 @@ async def _validate_source_port(
         )
 
 
+def _validate_inbound_cidrs(cidrs: list[str]) -> str:
+    """着信許可 CIDR リストを検証し、DB 保存用のカンマ区切り文字列を返す。
+
+    各要素は IPv4/IPv6 のネットワーク表記（例: 203.0.113.0/24, 198.51.100.7）で
+    なければならない。不正な要素があれば 422 を送出する。空リストは "" を返す。
+    """
+    normalized: list[str] = []
+    for raw in cidrs:
+        c = raw.strip()
+        if c == "":
+            continue
+        try:
+            ipaddress.ip_network(c, strict=False)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"着信許可 CIDR '{raw}' が不正です（例: 203.0.113.0/24）",
+            ) from None
+        normalized.append(c)
+    joined = ",".join(normalized)
+    if len(joined) > 255:
+        raise HTTPException(
+            status_code=422,
+            detail="着信許可 CIDR の合計長が上限（255 文字）を超えています",
+        )
+    return joined
+
+
 async def _validate_inbound_extension(session: AsyncSession, number: str) -> None:
     """着信転送先が番号プラン（内線/AI/ワークフロー/グループ）に存在することを検証する。"""
     if number == "":
@@ -98,6 +127,7 @@ async def create_trunk(
         )
     await _validate_inbound_extension(session, body.inbound_extension)
     await _validate_source_port(session, body.source_port, settings)
+    inbound_cidrs = _validate_inbound_cidrs(body.inbound_cidrs)
     trunk = Trunk(
         name=body.name,
         display_name=body.display_name,
@@ -108,6 +138,8 @@ async def create_trunk(
         caller_id=body.caller_id,
         inbound_extension=body.inbound_extension,
         source_port=body.source_port,
+        trunk_type=body.trunk_type,
+        inbound_cidrs=inbound_cidrs,
         enabled=body.enabled,
     )
     session.add(trunk)
@@ -184,6 +216,8 @@ async def update_trunk(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     if body.inbound_extension is not None:
         await _validate_inbound_extension(session, body.inbound_extension)
+    if body.inbound_cidrs is not None:
+        trunk.inbound_cidrs = _validate_inbound_cidrs(body.inbound_cidrs)
     for fld in (
         "display_name",
         "host",
@@ -192,6 +226,7 @@ async def update_trunk(
         "did_number",
         "caller_id",
         "inbound_extension",
+        "trunk_type",
         "enabled",
     ):
         val = getattr(body, fld)

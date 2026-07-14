@@ -8,7 +8,7 @@
 
 フレッツ光回線の HGW（ホームゲートウェイ）に対応したローカル PBX システム。
 
-コアは FastAPI（ESL 制御・音声 AI・MCP サーバ）と FreeSWITCH（SIP/RTP 処理）で構成され、React SPAが管理 UI を担う。本番スタックは役割別 4 コンテナ（`core` / `freeswitch` / `netd` / `docker-proxy`）で動作し、GHCR のプリビルドイメージ（amd64）を `install.sh` ワンライナーで導入できる。
+コアは FastAPI（ESL 制御・音声 AI・MCP サーバ）と FreeSWITCH（SIP/RTP 処理）で構成され、React SPAが管理 UI を担う。本番スタックは役割別 4 コンテナ（`core` / `freeswitch` / `netd` / `docker-proxy`）で動作し、GHCR のプリビルドイメージ（amd64 / arm64 マルチアーチ）を `install.sh` ワンライナーで導入できる。
 
 ## 主な機能
 
@@ -18,11 +18,11 @@
 - **ワークフロー（IVR + AI ノード）**: xyflow ベースのビジュアルエディタで IVR フロー・AI 分岐ノードを構築。React SPA から設定・プレビューが可能
 - **ゼロタッチプロビジョニング + netd**: SIP 電話機向け自動設定配布（ZTP）。`netd` コンテナが dnsmasq（DHCP/DNS）・nftables NAT・Tailscale を管理し、フレッツ環境の NW 設定をコアから API 経由で制御
 - **認証強化**: TOTP 2FA、SAML SP（シングルサインオン）、SCIM プロビジョニング、操作監査ログ、レート制限、CSRF 保護、内線ごとの発信権限制御、SIP 多層防御、Docker socket-proxy（`docker.sock` は proxy コンテナのみに read-only マウント）
-- **ワンライナー導入 + GHCR プリビルドイメージ**: `install.sh` が compose・`.env` 生成・イメージ pull・起動を一括実施。イメージは GHCR（amd64）で公開。更新は `millicallctl update` 一発
+- **ワンライナー導入 + GHCR プリビルドイメージ**: `install.sh` が compose・`.env` 生成・イメージ pull・起動を一括実施。イメージは GHCR（amd64 / arm64 マルチアーチ）で公開。更新は `millicallctl update` 一発
 
 ## クイックデプロイ
 
-**前提条件**: Docker Engine + Compose v2、amd64 Linux、フレッツ HGW 環境
+**前提条件**: Docker Engine + Compose v2、amd64 / arm64 Linux、フレッツ HGW 環境
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mizphses/millicall/main/install.sh | bash
@@ -55,7 +55,7 @@ millicallctl update
 
 タグ: `latest`（stable 最新）/ `vX.Y.Z`（固定）/ `dev` / `main-<sha>`（プレビュー）。
 
-> **arm64 について:** FreeSWITCH ベースイメージ（`safarov/freeswitch`）が amd64 専用のため、現時点のスタック全体が amd64 に固定。arm64 対応は将来課題。
+> **マルチアーチ対応:** 全イメージは amd64 / arm64 のマルチアーチで公開している。FreeSWITCH は amd64 専用の `safarov/freeswitch` を撤廃し、ランタイムをソースからビルドする構成にしたため arm64 でも動作する。CI は各アーキをネイティブランナー（`ubuntu-24.04` / `ubuntu-24.04-arm`）でビルドし manifest list に束ねている。
 
 ## ドキュメント
 

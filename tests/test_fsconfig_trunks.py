@@ -29,6 +29,8 @@ def _trunk(name: str, **kw) -> TrunkConfig:
         did_number=kw.get("did_number", "0312345678"),
         caller_id=kw.get("caller_id", "0312345678"),
         source_port=kw.get("source_port"),
+        trunk_type=kw.get("trunk_type", "hgw"),
+        inbound_cidrs=kw.get("inbound_cidrs", []),
     )
 
 
@@ -50,6 +52,63 @@ def test_external_profile_generated_per_trunk(tmp_path):
     assert 'name="apply-inbound-acl"          value="millicall_trusted"' in ext
     # 旧単一 external.xml は書かれない
     assert not (tmp_path / "sip_profiles" / "external.xml").exists()
+
+
+def test_sip_trunk_uses_rfc2833_nat_and_per_trunk_acl(tmp_path):
+    """SIP 種別トランクは RFC2833 DTMF・NAT 越え・専用 ACL を出力する。"""
+    w = _writer(tmp_path)
+    w.write_all(
+        [ExtensionConfig("1001", "Alice", "pw")],
+        trunks=[
+            _trunk(
+                "brastel",
+                host="softphone.spc.brastel.ne.jp",
+                username="44425296",
+                trunk_type="sip",
+                inbound_cidrs=["203.0.113.0/24"],
+            )
+        ],
+    )
+    ext = (tmp_path / "sip_profiles" / "external_brastel.xml").read_text()
+    ET.fromstring(ext)  # well-formed
+    # DTMF: RFC2833 有効、HGW 用の none / rfc2833-pt=0 は出さない
+    assert 'name="dtmf-type"                  value="rfc2833"' in ext
+    assert 'value="none"' not in ext
+    assert 'name="rfc2833-pt"' not in ext
+    # NAT 越え（auto-nat が既定）
+    assert 'name="ext-sip-ip"                 value="auto-nat"' in ext
+    assert 'name="ext-rtp-ip"                 value="auto-nat"' in ext
+    # 着信 ACL はこのトランク専用リストを参照（millicall_trusted ではない）
+    assert 'name="apply-inbound-acl"          value="trunk_brastel_trusted"' in ext
+    assert "millicall_trusted" not in ext
+
+
+def test_sip_trunk_without_cidrs_omits_acl(tmp_path):
+    """SIP 種別で許可 CIDR 未設定なら着信 ACL を掛けない（警告コメントのみ）。"""
+    w = _writer(tmp_path)
+    w.write_all([], trunks=[_trunk("sipnocidr", trunk_type="sip")])
+    ext = (tmp_path / "sip_profiles" / "external_sipnocidr.xml").read_text()
+    ET.fromstring(ext)
+    assert "apply-inbound-acl" not in ext
+    assert "許可 CIDR 未設定" in ext
+
+
+def test_sip_trunk_per_trunk_acl_list_in_acl_conf(tmp_path):
+    """acl.conf.xml に SIP トランク専用の trusted リストが CIDR 付きで生成される。"""
+    w = _writer(tmp_path)
+    w.write_all(
+        [],
+        trunks=[
+            _trunk("brastel", trunk_type="sip", inbound_cidrs=["203.0.113.0/24", "198.51.100.7"]),
+            _trunk("hgw"),  # HGW 種別は専用リストを生成しない
+        ],
+    )
+    acl = (tmp_path / "autoload_configs" / "acl.conf.xml").read_text()
+    ET.fromstring(acl)
+    assert 'name="trunk_brastel_trusted"' in acl
+    assert 'cidr="203.0.113.0/24"' in acl
+    assert 'cidr="198.51.100.7"' in acl
+    assert 'name="trunk_hgw_trusted"' not in acl
 
 
 def test_multiple_trunks_get_distinct_source_ports(tmp_path):
