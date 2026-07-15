@@ -120,6 +120,16 @@ async def test_api_raises_on_disconnect() -> None:
         await client.close()
 
 
+async def test_send_command_when_never_connected_raises_connection_closed() -> None:
+    """connect() が一度も成功していない（起動時 FS 未起動）クライアントへのコマンドは
+    ESLConnectionClosed を送出する。これにより共有コマンド接続の reconnect 経路
+    （except ESLConnectionClosed）が起動時未接続でも作動する。回帰テスト。
+    """
+    client = ESLClient("127.0.0.1", 1, "s3cret")  # connect() 未実行 → _writer is None
+    with pytest.raises(ESLConnectionClosed):
+        await client.bgapi("uuid_audio_stream x start ws://127.0.0.1/x mono 8k")
+
+
 async def test_on_event_exception_does_not_kill_reader() -> None:
     """on_event callback that raises → reader loop survives and delivers the second event."""
 

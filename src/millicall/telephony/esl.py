@@ -119,7 +119,12 @@ class ESLClient:
 
     async def _send_command(self, command: str) -> tuple[dict[str, str], str]:
         if self._writer is None:
-            raise ESLError("not connected")
+            # 未接続（connect() 失敗 / 未実行 / close 済み）も「接続断」の一種として
+            # ESLConnectionClosed を送出する。これにより共有コマンド接続の各利用側
+            # （_bgapi / EslCallControl）の except ESLConnectionClosed 再接続経路が
+            # 起動時 FS 未起動で一度も接続できなかったケースでも作動する。
+            # ESLConnectionClosed は ESLError のサブクラスなので後方互換。
+            raise ESLConnectionClosed("not connected")
         if self._dead:
             raise ESLConnectionClosed("connection is closed")
         self._writer.write(f"{command}\n\n".encode())
