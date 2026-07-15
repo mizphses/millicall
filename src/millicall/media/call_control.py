@@ -12,7 +12,7 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
-from millicall.telephony.esl import ESLConnectionClosed
+from millicall.telephony.esl import ESLConnectionClosed, ESLError
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,14 @@ class EslCallControl:
             except ESLConnectionClosed:
                 if self._reconnect is None:
                     raise
-                self._esl = await self._reconnect()
+                try:
+                    self._esl = await self._reconnect()
+                except ESLError:
+                    raise
+                except Exception as exc:
+                    # FS 停止中は connect() が生の OSError を送出する。呼び出し側は
+                    # except ESLError で「接続不能」を扱う契約のため、型を揃えて翻訳する。
+                    raise ESLConnectionClosed(f"reconnect failed: {exc}") from exc
                 await self._esl.bgapi(command)
 
     async def play_file(self, path: str) -> None:

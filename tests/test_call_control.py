@@ -115,6 +115,24 @@ async def test_reconnects_on_closed_connection():
 
 
 @pytest.mark.asyncio
+async def test_reconnect_failure_raises_esl_connection_closed():
+    """reconnect 自体が失敗（FS 停止中の接続拒否等）しても、生の OSError を漏らさず
+    ESLConnectionClosed に翻訳する — except ESLError 前提の呼び出し側契約
+    （MCP hangup の冪等化等）を守る回帰テスト。"""
+
+    class _DeadEsl:
+        async def bgapi(self, command: str) -> str:
+            raise ESLConnectionClosed("dead")
+
+    async def _reconnect():
+        raise OSError(111, "Connect call failed ('127.0.0.1', 8021)")
+
+    cc = EslCallControl(_DeadEsl(), "u1", reconnect=_reconnect)
+    with pytest.raises(ESLConnectionClosed):
+        await cc.hangup()
+
+
+@pytest.mark.asyncio
 async def test_no_reconnect_reraises_on_closed():
     """reconnect 未注入なら ESLConnectionClosed をそのまま伝播する。"""
 
