@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "millicall v2 - フレッツ特化ローカルPBX (core)"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi[standard]>=0.139.0",
+    "fastapi[standard]>=0.139.2",
     "sqlalchemy[asyncio]>=2.0.51",
     "aiosqlite>=0.20",
     "alembic>=1.14",
