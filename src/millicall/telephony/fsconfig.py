@@ -145,7 +145,7 @@ def _reload_command_for(name: str, *, present: bool) -> str:
     プロファイルを破棄してゴースト登録を防ぐ）。
     どちらの経路でも名前を検証する。
     """
-    if not _SAFE_TRUNK_NAME_RE.match(name):
+    if not _SAFE_TRUNK_NAME_RE.fullmatch(name):
         raise ValueError(f"不正なトランク名です: {name!r}")
     action = "restart" if present else "stop"
     return f"sofia profile external_{name} {action}"
@@ -202,7 +202,7 @@ class FreeswitchConfigWriter:
         # 多層防御: __init__ 時点でプレフィックスを検証し、不正値を即座に拒否する
         # （service.py でも検証済みだが、このクラスは公開 API のため直接呼び出し時も保護する）
         for p in safe_prefixes:
-            if not _SAFE_PREFIX_RE.match(p):
+            if not _SAFE_PREFIX_RE.fullmatch(p):
                 raise ValueError(
                     f"国際発信allowlistに無効なプレフィックスが含まれています: "
                     f"'{p}' （2〜8桁の数字のみ）"
@@ -257,7 +257,7 @@ class FreeswitchConfigWriter:
         同一規則（2〜8桁の数字のみ）で検証し、不正値は ValueError を送出する。
         """
         for p in international_allow_prefixes:
-            if not _SAFE_PREFIX_RE.match(p):
+            if not _SAFE_PREFIX_RE.fullmatch(p):
                 raise ValueError(
                     f"国際発信allowlistに無効なプレフィックスが含まれています: "
                     f"'{p}' （2〜8桁の数字のみ）"
@@ -374,7 +374,7 @@ class FreeswitchConfigWriter:
             internal_sip_port=self._base["sip_port"],
         )
         for trunk in trunks:
-            if not _SAFE_TRUNK_NAME_RE.match(trunk.name):
+            if not _SAFE_TRUNK_NAME_RE.fullmatch(trunk.name):
                 raise ValueError(
                     f"トランク名 '{trunk.name}' に使用できない文字が含まれています "
                     f"（[A-Za-z0-9_-] のみ）"

@@ -262,6 +262,7 @@ def _build_saml_response(
     scd = etree.SubElement(sc_conf, f"{{{_SAML}}}SubjectConfirmationData")
     actual_recipient = recipient if recipient is not None else acs_url
     scd.set("Recipient", actual_recipient)
+    scd.set("InResponseTo", "request" + assertion_id)
     if sc_not_on_or_after_offset is not None:
         scd.set(
             "NotOnOrAfter",
@@ -315,7 +316,20 @@ async def _post_acs(
     relay_state: str = "/dashboard",
     follow_redirects: bool = False,
 ) -> AsyncClient:
-    """ACS エンドポイントに POST する。"""
+    """ACS POST with a browser-bound pending request fixture."""
+    from millicall.auth.saml.router import _REQUEST_COOKIE, _request_signer
+
+    try:
+        root = etree.fromstring(base64.b64decode(saml_b64))
+        scd = root.find(f".//{{{_SAML}}}SubjectConfirmationData")
+        request_id = scd.get("InResponseTo") if scd is not None else "invalid-response"
+    except Exception:
+        request_id = "invalid-response"
+    app = client._transport.app
+    cookie = _request_signer(app.state.secrets.session_secret).dumps(
+        {"id": request_id, "next": relay_state}
+    )
+    client.cookies.set(_REQUEST_COOKIE, cookie, domain="testserver.local", path="/saml")
     return await client.post(
         "/saml/acs",
         data={"SAMLResponse": saml_b64, "RelayState": relay_state},
@@ -955,3 +969,78 @@ async def test_acs_scim_mode_disabled_scim_user_rejected(saml_scim_client, idp_k
     resp = await _post_acs(saml_scim_client, saml_b64)
     assert resp.status_code == 400
     assert "millicall_session" not in resp.cookies
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "issuer",
+        "no-expiry",
+        "bad-expiry",
+        "no-recipient",
+        "no-confirmation",
+        "wrong-method",
+        "second-audience",
+    ],
+)
+async def test_signed_assertion_requires_all_security_conditions(
+    saml_client, idp_keypair, mutation
+):
+    encoded, _ = _build_saml_response(idp_keypair["key_pem"], idp_keypair["cert_pem"], sign=False)
+    root = etree.fromstring(base64.b64decode(encoded))
+    assertion = root.find(f"{{{_SAML}}}Assertion")
+    conditions = assertion.find(f"{{{_SAML}}}Conditions")
+    subject = assertion.find(f"{{{_SAML}}}Subject")
+    confirmation = subject.find(f"{{{_SAML}}}SubjectConfirmation")
+    if mutation == "issuer":
+        assertion.find(f"{{{_SAML}}}Issuer").text = "https://wrong-idp.example"
+    elif mutation == "no-expiry":
+        del conditions.attrib["NotOnOrAfter"]
+    elif mutation == "bad-expiry":
+        conditions.set("NotOnOrAfter", "invalid")
+    elif mutation == "no-recipient":
+        del confirmation.find(f"{{{_SAML}}}SubjectConfirmationData").attrib["Recipient"]
+    elif mutation == "no-confirmation":
+        subject.remove(confirmation)
+    elif mutation == "wrong-method":
+        confirmation.set("Method", "urn:oasis:names:tc:SAML:2.0:cm:holder-of-key")
+    else:
+        restriction = etree.SubElement(conditions, f"{{{_SAML}}}AudienceRestriction")
+        etree.SubElement(restriction, f"{{{_SAML}}}Audience").text = "https://another-sp.example"
+    signed = XMLSigner().sign(assertion, key=idp_keypair["key_pem"], cert=idp_keypair["cert_pem"])
+    root.replace(assertion, signed)
+    response = await _post_acs(saml_client, base64.b64encode(etree.tostring(root)).decode())
+    assert response.status_code == 400
+    assert "millicall_session" not in response.cookies
+
+
+async def test_saml_unsolicited_response_cannot_login(saml_client, idp_keypair):
+    encoded, _ = _build_saml_response(idp_keypair["key_pem"], idp_keypair["cert_pem"])
+    response = await saml_client.post("/saml/acs", data={"SAMLResponse": encoded})
+    assert response.status_code == 400
+    assert "millicall_session" not in response.cookies
+
+
+async def test_saml_actual_login_request_is_browser_bound(saml_client, idp_keypair):
+    import urllib.parse
+    import zlib
+
+    login = await saml_client.get("/saml/login?next=/settings")
+    params = urllib.parse.parse_qs(urllib.parse.urlsplit(login.headers["location"]).query)
+    request = etree.fromstring(zlib.decompress(base64.b64decode(params["SAMLRequest"][0]), -15))
+    encoded, _ = _build_saml_response(idp_keypair["key_pem"], idp_keypair["cert_pem"], sign=False)
+    root = etree.fromstring(base64.b64decode(encoded))
+    assertion = root.find(f"{{{_SAML}}}Assertion")
+    assertion.find(f".//{{{_SAML}}}SubjectConfirmationData").set("InResponseTo", request.get("ID"))
+    signed = XMLSigner().sign(assertion, key=idp_keypair["key_pem"], cert=idp_keypair["cert_pem"])
+    root.replace(assertion, signed)
+    response = await saml_client.post(
+        "/saml/acs",
+        data={
+            "SAMLResponse": base64.b64encode(etree.tostring(root)).decode(),
+            "RelayState": "/attacker-changed-path",
+        },
+    )
+    assert response.status_code == 302
+    assert response.headers["location"] == "/settings"
+    assert "millicall_session" in response.cookies

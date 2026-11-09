@@ -18,12 +18,13 @@ import secrets as secrets_mod
 import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
+from millicall.auth.router import _issue_session_and_cookies
 from millicall.auth.security import bump_session_epoch
 from millicall.auth.throttle import check_and_raise, record_failure
 from millicall.crypto import SecretBox
@@ -159,9 +160,23 @@ def _verify_totp_or_recovery(user: User, box: SecretBox, code: str) -> str | Non
 # ---------------------------------------------------------------------------
 
 
+async def _refresh_authenticated_user(session: AsyncSession, user: User) -> User:
+    """Recheck authorization after the throttle acquires the SQLite write lock."""
+    expected = (user.session_epoch, user.hashed_password)
+    current = await session.get(User, user.id, populate_existing=True)
+    if (
+        current is None
+        or not current.enabled
+        or (current.session_epoch, current.hashed_password) != expected
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
+    return current
+
+
 @router.post("/setup", response_model=TotpSetupResponse)
 async def totp_setup(
     request: Request,
+    response: Response,
     body: TotpSetupRequest = Body(default_factory=TotpSetupRequest),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
@@ -175,9 +190,22 @@ async def totp_setup(
     True の場合は現行 TOTP/リカバリコードによる本人再確認（ステップアップ）を必須とする。
     初回登録（totp_enabled=False）はコード不要。
     """
+    settings = await effective_settings(request.app.state)
+    ip = get_client_ip(request)
+    await check_and_raise(
+        session,
+        ip=ip,
+        username=user.username,
+        ip_max_attempts=settings.login_max_attempts,
+        username_max_attempts=settings.login_username_max_attempts,
+        lockout_seconds=settings.login_lockout_seconds,
+        actor_user_id=user.id,
+    )
+    user = await _refresh_authenticated_user(session, user)
     if user.totp_enabled and (
         not body.code or _verify_totp_or_recovery(user, box, body.code) is None
     ):
+        await record_failure(session, ip=ip, username=user.username, action="totp")
         await record_audit(
             session,
             actor_user_id=user.id,
@@ -196,6 +224,8 @@ async def totp_setup(
     user.totp_secret = encrypted
     # setup だけでは有効化しない（totp_enabled は verify 後に True になる）
     user.totp_enabled = False
+    user.recovery_codes = None
+    bump_session_epoch(user)
     session.add(user)
 
     provisioning_uri = pyotp.TOTP(plain_secret).provisioning_uri(
@@ -212,6 +242,7 @@ async def totp_setup(
     )
     await session.commit()
 
+    _issue_session_and_cookies(response, settings, request.app.state.secrets, user)
     return TotpSetupResponse(secret=plain_secret, provisioning_uri=provisioning_uri)
 
 
@@ -219,6 +250,7 @@ async def totp_setup(
 async def totp_verify(
     body: TotpVerifyRequest,
     request: Request,
+    response: Response,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     box: SecretBox = Depends(get_secret_box),
@@ -243,6 +275,7 @@ async def totp_verify(
         actor_user_id=user.id,
     )
 
+    user = await _refresh_authenticated_user(session, user)
     if user.totp_secret is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -278,6 +311,7 @@ async def totp_verify(
     plain_codes, hashed_codes = _generate_recovery_codes()
     user.totp_enabled = True
     user.recovery_codes = json.dumps(hashed_codes)
+    bump_session_epoch(user)
     session.add(user)
 
     await record_audit(
@@ -290,6 +324,7 @@ async def totp_verify(
     )
     await session.commit()
 
+    _issue_session_and_cookies(response, settings, request.app.state.secrets, user)
     # 平文リカバリコードはここでのみ返す
     return TotpVerifyResponse(recovery_codes=plain_codes)
 
@@ -322,6 +357,7 @@ async def totp_disable(
         actor_user_id=user.id,
     )
 
+    user = await _refresh_authenticated_user(session, user)
     if not user.totp_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

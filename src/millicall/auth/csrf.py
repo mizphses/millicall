@@ -70,7 +70,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
             if (
                 not csrf_cookie
                 or not csrf_header
-                or not hmac.compare_digest(csrf_cookie, csrf_header)
+                or not hmac.compare_digest(csrf_cookie.encode(), csrf_header.encode())
             ):
                 return JSONResponse(
                     status_code=403,

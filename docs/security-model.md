@@ -30,15 +30,15 @@ millicall はフレッツ光電話の HGW 配下に設置する LAN 内 PBX で�
 | 脅威 | 防御策 |
 |---|---|
 | 不正ログイン（総当たり攻撃） | Argon2 パスワードハッシュ + レート制限 + ロックアウト + TOTP 2FA |
-| セッション乗っ取り | Secure/HttpOnly/SameSite Cookie + per-user session epoch（即時失効） |
+| セッション乗っ取り | Secure/HttpOnly/SameSite Cookie + per-user session epoch + アカウント資格情報への結合（即時失効） |
 | CSRF 攻撃 | Double-submit Cookie（`millicall_csrf` + `X-CSRF-Token` ヘッダ） |
 | SIP フラッド / 不正発信 | nftables WAN 遮断 + FreeSWITCH ACL + 発信権限制御 |
 | トールフラウド（無断国際発信） | 内線ごとの発信権限（`calling_permission`）、国際発信デフォルト禁止 |
-| 秘密情報漏洩 | API キー・Tailscale auth key を DB 内で Fernet 暗号化。SCIM トークン・TOTP secret も暗号化 |
+| 秘密情報漏洩 | API キー・Tailscale auth key・TOTP secret を DB 内で Fernet 暗号化。SCIM トークンは Argon2 ハッシュ |
 | IdP なりすまし（SAML） | IdP 証明書の out-of-band 事前共有、XSW/XXE 対策、origin 保護 |
 | Docker socket 経由の特権昇格 | socket-proxy（Tecnativa）で最小 API のみ許可。core は raw socket に非接触 |
 | netd 特権の悪用 | UNIX ソケット（SO_PEERCRED で core UID のみ接続可）。入力再検証。`shell=False` の argv |
-| プロビジョニング情報の漏洩 | LAN CIDR 限定 + 端末ワンタイムトークン + 登録済みデバイス限定の三重ゲート |
+| プロビジョニング情報の漏洩 | LAN CIDR・登録済み端末の現在 IP・active/enabled 状態を検証。設定済みトークンは追加ゲート |
 
 ---
 
@@ -59,7 +59,7 @@ millicall はフレッツ光電話の HGW 配下に設置する LAN 内 PBX で�
 | ユーザー名しきい値 | 30 回/300 秒 | `MILLICALL_LOGIN_USERNAME_MAX_ATTEMPTS` |
 | ロックアウト期間 | 300 秒 | `MILLICALL_LOGIN_LOCKOUT_SECONDS` |
 
-TOTP チャレンジ（`/login/totp`・`/totp/verify`・`/totp/disable`）も同一レート制限の対象です。
+TOTP チャレンジ（`/login/totp`・`/totp/setup`・`/totp/verify`・`/totp/disable`・MCP ログイン）も同一レート制限の対象です。
 
 ### SSO（SAML / SCIM）
 
@@ -125,7 +125,7 @@ MILLICALL_SIP_REJECT_ANONYMOUS=false   # デフォルト・変更しないこと
 | プロバイダ API キー | DB 内 Fernet 暗号化 |
 | Tailscale auth key | DB 内 SecretBox 暗号化 |
 | TOTP シークレット | DB 内 Fernet 暗号化 |
-| SIP パスワード | DB 内 Fernet 暗号化（内線作成時に自動生成） |
+| SIP 内線・トランクのパスワード | **現状は DB と生成 XML に平文保存**。data ディレクトリの権限で保護。暗号化・移行設計は [#87](https://github.com/mizphses/millicall/issues/87) |
 | SCIM トークン | Argon2 ハッシュ（平文は一度だけ表示） |
 | TOTP リカバリコード | Argon2 ハッシュ（一度だけ表示） |
 | 管理者初期パスワード | 起動ログに一度だけ表示。DB には Argon2 ハッシュ |
@@ -139,7 +139,7 @@ MILLICALL_SIP_REJECT_ANONYMOUS=false   # デフォルト・変更しないこと
 | 許可 API | 用途 |
 |---|---|
 | `CONTAINERS=1` | コンテナ一覧・検査（`/system` ページ） |
-| `POST=1` | POST メソッド（`restart` に必要） |
+| `ALLOW_RESTARTS=1` | コンテナ再起動のみ（汎用 `POST` は許可しない） |
 | `INFO=1` | `/info` エンドポイント |
 | `VERSION=1` | `/version` エンドポイント |
 
@@ -164,3 +164,47 @@ IMAGES・EXEC・VOLUMES・NETWORKS・SWARM・SECRETS 等はすべて `0`（デ�
 - [ ] 監査ログ（`/audit`）で不審なログインがないことを定期確認
 
 詳細: RUNBOOK-phase6-auth.md（リポジトリ runbooks/ 参照）
+
+
+## 2026-11-10 コード監査での強化
+
+- 音声 WebSocket は、ESL の通話開始イベントから発行した60秒有効・一回限りのトークンを要求する。通話 ID とエージェントの一致を確認し、検証前には AI セッションを生成しない。
+- REST/MCP のローカルログインは有効な local アカウントに限定する。MCP でも TOTP を確認し、パスワードだけでは2FAの試行カウンタをリセットしない。
+- `totp_required=true` の未登録ユーザーは、自己情報・TOTP 登録・ログアウトだけを利用できる。管理画面はセキュリティ設定へ誘導する。
+- TOTP の登録・再設定で既存セッションを失効させ、操作中のブラウザに新しい Cookie を発行する。SCIM グループによるロール変更でも epoch を更新する。
+- Cookie と OAuth 認可は、ユーザー ID/epoch だけでなくアカウントの資格情報にも結合する。削除後に同じ ID/ユーザー名が再利用されても以前の認可は復活しない。**この更新以前の Cookie は再ログインが必要**。
+- OAuth の認可コードと refresh token は一回限りの交換とし、交換前のユーザー無効化・削除・資格情報変更も検証する。resource を refresh 後も維持し、MCP の audience 検証を有効化する。
+- SAML は署名済み Assertion の issuer、全 AudienceRestriction、有効期限、bearer の Recipient / InResponseTo を確認する。ログイン開始ブラウザの署名付き Cookie と照合し、遷移先も Cookie 内の値を使う。未開始の IdP-initiated POST は受け付けない。
+- SAML の本番利用は HTTPS と `cookie_secure=true` が前提。認証往復 Cookie は Secure/HttpOnly/SameSite=None を使う。HTTP 開発設定では Lax となるため、実ブラウザの cross-site POST は対象外。
+- 電話機設定は登録中の端末 IP と一致する送信元のみ取得できる。DHCP による IP 変更後は端末同期が必要。LAN の IP/MAC なりすましまで認証するものではなく、LAN 隔離の前提は残る。
+- 再生パスから FreeSWITCH の `app::args` を呼べないようにし、ESL・ネットワーク設定の許可文字列では末尾改行も拒否する。[FreeSWITCH のコマンド仕様](https://developer.signalwire.com/freeswitch/reference/cli-and-api/) を参照。
+- 公開 HTTP 向け SSRF ガードは CGNAT などの非グローバル IP も拒否し、検証済みホストと異なる送信先を transport で拒否する。
+- workflow の API 応答は展開後1 MiB・HTTP処理全体の期限を上限とする。連続音声は30秒ごとに区切り、VAD バッファの無制限成長を防ぐ。
+- `secrets.json` の同時初期化で既存の鍵を上書きせず、既存ファイルにも600、data ディレクトリにも700の権限を適用する。
+
+SAML の bearer 条件は [OASIS SAML Profiles](https://docs.oasis-open.org/security/saml/v2.0backup/saml-profiles-2.0-os.pdf) に基づく。依存関係も lockfile を更新し、MCP の修正版1.30系と修正版フロントエンドツールを使用する。
+
+### 検証結果
+
+- `uv run --extra dev pytest -q`: **1,461 passed**。監査前の1,422件に対して39件の回帰ケースを追加。Python 3.12 の `audioop` 非推奨警告が1件あり、失敗なし。
+- `cd frontend && npm test`: **20 files / 330 tests passed**。
+- `cd frontend && npm run build`: 成功。初期 JavaScript が676.71 kBとなる警告は [#82](https://github.com/mizphses/millicall/issues/82) で追跡。
+- `uv run ruff check .`、`git diff --check`: 成功。
+- `npm audit`: 既知の脆弱性 **0件**。
+- `uv export --all-extras --no-emit-project --no-hashes` の固定バージョン一覧を `pip-audit --no-deps --disable-pip` で検査: 対象環境の87パッケージで既知の脆弱性 **0件**。Google STT などのオプション依存も含む。
+
+### 残る実装・運用課題
+
+| 課題 | Issue |
+|---|---|
+| TTS キャッシュの重複合成・設定変更・複数プロセスの一時ファイル競合 | [#80](https://github.com/mizphses/millicall/issues/80) |
+| 同期ハッシュ検証・プロバイダ DNS がイベントループを停止する | [#81](https://github.com/mizphses/millicall/issues/81) |
+| 管理画面の初期 JavaScript の分割 | [#82](https://github.com/mizphses/millicall/issues/82) |
+| 端末同期・一覧の N+1 SQL | [#83](https://github.com/mizphses/millicall/issues/83) |
+| 日付を跨ぐワークフロー時間条件 | [#84](https://github.com/mizphses/millicall/issues/84) |
+| 電話機への provision_token 配送 | [#85](https://github.com/mizphses/millicall/issues/85) |
+| OAuth・SAML・音声接続状態の単一ワーカー前提、登録数・TTL管理 | [#86](https://github.com/mizphses/millicall/issues/86) |
+| SIP 認証情報の保存暗号化と復旧設計 | [#87](https://github.com/mizphses/millicall/issues/87) |
+| MCP ログインのブラウザフローと CSRF/CSP の整合 | [#88](https://github.com/mizphses/millicall/issues/88) |
+
+監査はソース、API/プロトコルの自動テスト、依存監査を対象にした。実機の FreeSWITCH、電話機、外部 IdP、Linux netd/firewall、コンテナイメージの実行環境を使った侵入試験は含まない。OAuth と SAML replay 管理は現在も単一プロセス前提であり、SIP 保存暗号化を含む上記の課題は未解決。

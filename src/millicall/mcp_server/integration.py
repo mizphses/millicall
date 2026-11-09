@@ -35,7 +35,7 @@ def mount_mcp(app: FastAPI) -> None:
     if not settings.mcp_enabled:
         return
 
-    provider = MillicallOAuthProvider(settings.mcp_issuer_url)
+    provider = MillicallOAuthProvider(settings.mcp_issuer_url, app.state)
     app.state.mcp_oauth_provider = provider
 
     mcp = build_mcp(app, provider, settings)

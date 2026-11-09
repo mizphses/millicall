@@ -15,8 +15,12 @@ class Secrets(BaseModel):
 
 
 def load_or_create_secrets(data_dir: Path) -> Secrets:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    # mkdir(exist_ok=True) does not tighten existing directory permissions.
+    os.chmod(data_dir, 0o700)
     path = data_dir / "secrets.json"
     if path.exists():
+        os.chmod(path, 0o600)
         try:
             return Secrets.model_validate_json(path.read_text(encoding="utf-8"))
         except (ValidationError, json.JSONDecodeError, KeyError) as exc:
@@ -26,10 +30,6 @@ def load_or_create_secrets(data_dir: Path) -> Secrets:
                 "このファイルを削除して再起動してください"
             ) from exc
 
-    data_dir.mkdir(parents=True, exist_ok=True)
-    # data/ ディレクトリのパーミッションを 700 に制限する（M7: 他ユーザーからの読み取り防止）。
-    # mkdir(exist_ok=True) はパーミッションを変更しないため、明示的に chmod する。
-    os.chmod(data_dir, 0o700)
     secrets = Secrets(
         session_secret=generate_password(48),
         master_key=generate_password(48),
@@ -41,9 +41,12 @@ def load_or_create_secrets(data_dir: Path) -> Secrets:
         os.chmod(tmp, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(secrets.model_dump_json(indent=2))
-        os.replace(tmp, path)
-    except BaseException:
+        try:
+            # Publish without replacing a key another worker has already created.
+            os.link(tmp, path)
+        except FileExistsError:
+            return load_or_create_secrets(data_dir)
+    finally:
         os.unlink(tmp)
-        raise
 
     return secrets

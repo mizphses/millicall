@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.app_settings.service import effective_settings
-from millicall.auth.security import SessionData, read_session
+from millicall.auth.security import SessionData, matches_credentials, read_session
 from millicall.models import User
 
 if TYPE_CHECKING:
@@ -78,9 +78,25 @@ async def get_current_user(
     # セッション失効チェック: epochが不一致なら無効
     if user.session_epoch != session_data.epoch:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
+    if not matches_credentials(secrets.session_secret, session_data, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
     # 無効化ユーザーチェック
     if not user.enabled:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account disabled")
+    if (
+        settings.totp_required
+        and not user.totp_enabled
+        and request.url.path
+        not in {
+            "/api/auth/me",
+            "/api/auth/totp/setup",
+            "/api/auth/totp/verify",
+            "/api/auth/logout-all",
+        }
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="TOTP enrollment required"
+        )
     return user
 
 

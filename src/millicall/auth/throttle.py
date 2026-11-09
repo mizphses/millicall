@@ -26,6 +26,7 @@ async def _count_recent(
     session: AsyncSession,
     *,
     key: str,
+    key_type: str,
     window_seconds: int,
 ) -> int:
     """ウィンドウ内の失敗数を返す。"""
@@ -35,6 +36,7 @@ async def _count_recent(
         .select_from(LoginAttempt)
         .where(
             LoginAttempt.key == key,
+            LoginAttempt.key_type == key_type,
             LoginAttempt.created_at >= since,
         )
     )
@@ -71,7 +73,9 @@ async def check_and_raise(
     await _prune_expired(session, window_seconds=lockout_seconds)
 
     if ip:
-        ip_count = await _count_recent(session, key=ip, window_seconds=lockout_seconds)
+        ip_count = await _count_recent(
+            session, key=ip, key_type="ip", window_seconds=lockout_seconds
+        )
         if ip_count >= ip_max_attempts:
             await record_audit(
                 session,
@@ -88,7 +92,9 @@ async def check_and_raise(
                 headers={"Retry-After": retry_after},
             )
 
-    username_count = await _count_recent(session, key=username, window_seconds=lockout_seconds)
+    username_count = await _count_recent(
+        session, key=username, key_type="username", window_seconds=lockout_seconds
+    )
     if username_count >= username_max_attempts:
         await record_audit(
             session,

@@ -25,7 +25,7 @@ def is_valid_interface(name: str) -> bool:
 
     IFNAMSIZ = 16 なので最大 15 文字。シェルメタ文字・スペース等は拒否する。
     """
-    return bool(_IF_RE.match(name))
+    return bool(_IF_RE.fullmatch(name))
 
 
 def validate_ipv4(addr: str) -> None:
@@ -79,7 +79,7 @@ def is_valid_tailscale_authkey(key: str) -> bool:
 
     期待フォーマット: ``tskey-`` で始まり英数字とハイフンのみ。
     """
-    return bool(_TSKEY_RE.match(key))
+    return bool(_TSKEY_RE.fullmatch(key))
 
 
 def is_valid_hostname(name: str) -> bool:
@@ -90,7 +90,7 @@ def is_valid_hostname(name: str) -> bool:
     """
     if not name or len(name) > 253:
         return False
-    return all(_HOSTNAME_LABEL_RE.match(label) for label in name.split("."))
+    return all(_HOSTNAME_LABEL_RE.fullmatch(label) for label in name.split("."))
 
 
 def normalize_mac(mac: str) -> str:

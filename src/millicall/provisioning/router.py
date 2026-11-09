@@ -5,6 +5,7 @@ LAN 内 IP からのアクセスのみ許可し、エンドポイントの存在
 デバイス固有エンドポイントはワンタイムトークンゲートも備える。
 """
 
+import hmac
 import ipaddress
 import logging
 import re
@@ -79,6 +80,7 @@ async def _get_provisioned_device(
     mac_normalized: str,
     token: str | None,
     session: AsyncSession,
+    client_ip: str,
 ) -> Device:
     """プロビジョニング済みデバイスを検索し、トークンゲートを適用する。
 
@@ -103,12 +105,17 @@ async def _get_provisioned_device(
     device = await session.scalar(select(Device).where(Device.mac_address == mac_normalized))
     if device is None:
         raise HTTPException(status_code=404)
-    if not device.provisioned or device.extension_id is None:
+    if not device.provisioned or not device.active or device.extension_id is None:
+        raise HTTPException(status_code=404)
+
+    if not device.ip_address or device.ip_address != client_ip:
         raise HTTPException(status_code=404)
 
     if device.provision_token is not None:
         # トークンゲート: 提供されたトークンが一致するか検証
-        if token is None or token != device.provision_token:
+        if token is None or not hmac.compare_digest(
+            token.encode(), device.provision_token.encode()
+        ):
             raise HTTPException(status_code=404)
         # トークン消費（単一使用）: コミット前に None に設定
         device.provision_token = None
@@ -133,12 +140,15 @@ async def panasonic_common_config(
     端末固有のクレデンシャルを含まない共通設定。
     """
     content = render_panasonic_common(network_config=nc, settings=settings)
-    return PlainTextResponse(content, media_type="text/plain")
+    return PlainTextResponse(
+        content, media_type="text/plain", headers={"Cache-Control": "no-store"}
+    )
 
 
 @router.get("/Panasonic/Config{mac}.cfg", response_class=PlainTextResponse)
 async def panasonic_device_config(
     mac: str,
+    request: Request,
     token: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
     nc: NetworkConfig = Depends(_require_lan),
@@ -154,14 +164,16 @@ async def panasonic_device_config(
     except ValueError:
         raise HTTPException(status_code=404) from None
 
-    device = await _get_provisioned_device(mac_normalized, token, session)
+    device = await _get_provisioned_device(mac_normalized, token, session, request.client.host)
 
     ext = await session.get(Extension, device.extension_id)
-    if ext is None:
+    if ext is None or not ext.enabled:
         raise HTTPException(status_code=404)
 
     content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
-    return PlainTextResponse(content, media_type="text/plain")
+    return PlainTextResponse(
+        content, media_type="text/plain", headers={"Cache-Control": "no-store"}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +188,9 @@ async def yealink_boot(
 ) -> PlainTextResponse:
     """Yealink 自動プロビジョニング起動ファイルを返す（LAN 制限のみ）。"""
     content = render_yealink_boot(network_config=nc, settings=settings)
-    return PlainTextResponse(content, media_type="text/plain")
+    return PlainTextResponse(
+        content, media_type="text/plain", headers={"Cache-Control": "no-store"}
+    )
 
 
 @router.get("/Yealink/common.cfg", response_class=PlainTextResponse)
@@ -186,12 +200,15 @@ async def yealink_common_config(
 ) -> PlainTextResponse:
     """Yealink 共通設定ファイルを返す（LAN 制限のみ）。"""
     content = render_yealink_common(network_config=nc, settings=settings)
-    return PlainTextResponse(content, media_type="text/plain")
+    return PlainTextResponse(
+        content, media_type="text/plain", headers={"Cache-Control": "no-store"}
+    )
 
 
 @router.get("/Yealink/{mac}.cfg", response_class=PlainTextResponse)
 async def yealink_device_config(
     mac: str,
+    request: Request,
     token: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
     nc: NetworkConfig = Depends(_require_lan),
@@ -207,14 +224,16 @@ async def yealink_device_config(
     except ValueError:
         raise HTTPException(status_code=404) from None
 
-    device = await _get_provisioned_device(mac_normalized, token, session)
+    device = await _get_provisioned_device(mac_normalized, token, session, request.client.host)
 
     ext = await session.get(Extension, device.extension_id)
-    if ext is None:
+    if ext is None or not ext.enabled:
         raise HTTPException(status_code=404)
 
     content = render_yealink_config(extension=ext, network_config=nc, settings=settings)
-    return PlainTextResponse(content, media_type="text/plain")
+    return PlainTextResponse(
+        content, media_type="text/plain", headers={"Cache-Control": "no-store"}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +279,7 @@ async def root_yealink_common_boot(
 @router.get("/Config{mac}.cfg", response_class=PlainTextResponse)
 async def root_panasonic_device_config(
     mac: str,
+    request: Request,
     token: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
     nc: NetworkConfig = Depends(_require_lan),
@@ -270,7 +290,7 @@ async def root_panasonic_device_config(
     SIP 認証情報を含むため、LAN 制限 + known-device + トークンゲートを維持する。
     """
     return await panasonic_device_config(
-        mac=mac, token=token, session=session, nc=nc, settings=settings
+        mac=mac, request=request, token=token, session=session, nc=nc, settings=settings
     )
 
 
@@ -298,6 +318,7 @@ async def root_yealink_mac_boot(
 @router.get("/{name}.cfg", response_class=PlainTextResponse)
 async def root_cfg_dispatcher(
     name: str,
+    request: Request,
     token: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
     nc: NetworkConfig = Depends(_require_lan),
@@ -321,14 +342,16 @@ async def root_cfg_dispatcher(
     # Panasonic プレプロビジョニング入口ファイル（{MODEL}.cfg）
     if _PANASONIC_MODEL_RE.match(name):
         content = render_panasonic_model_file(network_config=nc, settings=settings)
-        return PlainTextResponse(content, media_type="text/plain")
+        return PlainTextResponse(
+            content, media_type="text/plain", headers={"Cache-Control": "no-store"}
+        )
 
     # それ以外は従来どおり Yealink 端末固有設定として MAC 検証を経て提供する。
     # Yealink は boot 経由（絶対 URL include）で /Yealink/{mac}.cfg を取得するため
     # 直下 {mac}.cfg が無くても無害だが、堅牢性のため直下でも同一設定を提供する。
     # SIP 認証情報を含むため、LAN 制限 + known-device + トークンゲートを維持する。
     return await yealink_device_config(
-        mac=name, token=token, session=session, nc=nc, settings=settings
+        mac=name, request=request, token=token, session=session, nc=nc, settings=settings
     )
 
 

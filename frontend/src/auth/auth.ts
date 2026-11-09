@@ -28,6 +28,7 @@ export function postLoginPath(role: string | undefined): string {
 /** ログイン画面向けの公開設定（未認証で取得可能）。 */
 export interface LoginConfig {
   saml_enabled: boolean;
+  totp_required?: boolean;
 }
 
 /**
@@ -40,7 +41,12 @@ export function parseLoginConfig(data: unknown): LoginConfig {
     typeof data === "object" &&
     typeof (data as { saml_enabled?: unknown }).saml_enabled === "boolean"
   ) {
-    return { saml_enabled: (data as { saml_enabled: boolean }).saml_enabled };
+    return {
+      saml_enabled: (data as { saml_enabled: boolean }).saml_enabled,
+      ...("totp_required" in data && typeof data.totp_required === "boolean"
+        ? { totp_required: data.totp_required }
+        : {}),
+    };
   }
   return { saml_enabled: false };
 }

@@ -6,7 +6,7 @@ import {
   redirect,
 } from "@tanstack/react-router";
 
-import { fetchCurrentUser, USER_HOME_PATH } from "../auth/auth";
+import { fetchCurrentUser, fetchLoginConfig, USER_HOME_PATH } from "../auth/auth";
 import type { CurrentUser } from "../auth/auth";
 import { AppShell } from "../shell/AppShell";
 import { LoginPage } from "../pages/LoginPage";
@@ -71,8 +71,11 @@ function AuthenticatedLayout() {
 const adminLayoutRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   id: "admin",
-  beforeLoad: ({ context }) => {
+  beforeLoad: async ({ context }) => {
     if (context.user.role !== "admin") {
+      throw redirect({ to: USER_HOME_PATH });
+    }
+    if (!context.user.totp_enabled && (await fetchLoginConfig()).totp_required) {
       throw redirect({ to: USER_HOME_PATH });
     }
   },

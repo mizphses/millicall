@@ -140,7 +140,7 @@ class CallPrimitives:
         Raises:
             ValueError: path が allowlist を満たさない、または max_seconds が非正の整数。
         """
-        if not path or not _VALID_RECORD_PATH_RE.match(path):
+        if not path or not _VALID_RECORD_PATH_RE.fullmatch(path):
             raise ValueError(f"invalid record path: {path!r}")
         if not isinstance(max_seconds, int) or isinstance(max_seconds, bool) or max_seconds <= 0:
             raise ValueError(f"invalid record duration: {max_seconds!r}")

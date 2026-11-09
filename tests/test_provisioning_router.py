@@ -692,3 +692,32 @@ async def test_phonebook_lan_blocked(app) -> None:
         resp = await c.get("/provisioning/phonebook/panasonic.xml")
 
     assert resp.status_code == 404
+
+
+async def test_other_lan_device_cannot_fetch_sip_credentials(app):
+    await _insert_network_config(app)
+    ext_id = await _insert_extension(app)
+    device_id = await _insert_device(app, extension_id=ext_id, provision_token="one-use-token")
+    async with _make_client(app, client_ip="10.0.0.51") as client:
+        for route in (
+            "/Yealink/AABBCCDDEEFF.cfg",
+            "/Panasonic/ConfigAABBCCDDEEFF.cfg",
+            "/AABBCCDDEEFF.cfg",
+            "/ConfigAABBCCDDEEFF.cfg",
+        ):
+            response = await client.get("/provisioning" + route + "?token=one-use-token")
+            assert response.status_code == 404
+            assert "test_sip_pass" not in response.text
+    async with app.state.sessionmaker() as session:
+        assert (await session.get(Device, device_id)).provision_token == "one-use-token"
+
+
+async def test_disabled_extension_credentials_not_provisioned(app):
+    await _insert_network_config(app)
+    ext_id = await _insert_extension(app)
+    await _insert_device(app, extension_id=ext_id)
+    async with app.state.sessionmaker() as session:
+        (await session.get(Extension, ext_id)).enabled = False
+        await session.commit()
+    async with _make_client(app) as client:
+        assert (await client.get("/provisioning/Yealink/AABBCCDDEEFF.cfg")).status_code == 404

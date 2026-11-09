@@ -1,7 +1,7 @@
 """MCP OAuth 2.1 プロバイダ（インメモリ）。
 
 旧実装 (`../millicall-pbx/src/millicall/mcp_server.py:63-240`) の `MillicallOAuthProvider`
-の仕様を v2 / mcp SDK 1.28 の型 (`AuthorizationCode` / `AccessToken` / `RefreshToken`) に
+の仕様を v2 / mcp SDK 1.30 の型 (`AuthorizationCode` / `AccessToken` / `RefreshToken`) に
 載せ替えたもの。DCR(RFC7591) + PKCE(S256) をサポートし、クライアント登録・認可コード・
 トークンをすべてプロセス内 dict に保持する（再起動で全失効 — コントローラ裁定#4）。
 
@@ -24,6 +24,7 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     OAuthAuthorizationServerProvider,
     RefreshToken,
+    TokenError,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyHttpUrl, AnyUrl
@@ -48,18 +49,21 @@ class MillicallOAuthProvider(
 ):
     """Millicall ユーザー DB を裏に持つ OAuth 2.1 プロバイダ（インメモリ）。"""
 
-    def __init__(self, issuer_url: str) -> None:
+    def __init__(self, issuer_url: str, app_state=None) -> None:
         # issuer は authorize リダイレクト先 `<issuer>/mcp-login` の base に使う。
         self._issuer = issuer_url.rstrip("/")
+        self._app_state = app_state
         self._clients: dict[str, OAuthClientInformationFull] = {}
         self._auth_codes: dict[str, AuthorizationCode] = {}
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, RefreshToken] = {}
-        # トークン発行時点の User.session_epoch（アクセス/リフレッシュ token 文字列 → epoch）。
+        # token 文字列 → 発行時の (User.id, session_epoch, hashed_password)。
         # load_access_token / exchange_refresh_token で現在値と照合し、無効化（enabled=False）
         # や失効（epoch bump: パスワード変更・logout-all・SCIM deactivate 等）を Bearer 面でも
         # 即時反映する（Cookie 面の deps.get_current_user と同等の失効契約を MCP に持たせる）。
-        self._token_epoch: dict[str, int] = {}
+        self._token_epoch: dict[str, tuple[int, int, str]] = {}
+        self._code_state: dict[str, tuple[int, int, str]] = {}
+        self._refresh_resource: dict[str, str | None] = {}
         # ログイン往復（authorize→/mcp-login→callback）の間、認可パラメータを
         # 改ざん不能に保持するための署名器。secrets ロード後に lifespan で注入する。
         self._signer: SecretBox | None = None
@@ -75,8 +79,8 @@ class MillicallOAuthProvider(
         """User.enabled/session_epoch 照合用の sessionmaker を注入する（lifespan）。"""
         self._sessionmaker = sessionmaker
 
-    async def _current_user_state(self, subject: str) -> tuple[bool, int] | None:
-        """subject(username) の (enabled, session_epoch) を返す。不在/未配線時は None。"""
+    async def _current_user_state(self, subject: str) -> tuple[bool, tuple[int, int, str]] | None:
+        """subject の有効状態とアカウント資格情報を返す。不在/未配線時は None。"""
         if self._sessionmaker is None:
             return None
         from sqlalchemy import select
@@ -87,7 +91,13 @@ class MillicallOAuthProvider(
             user = await session.scalar(select(User).where(User.username == subject))
         if user is None:
             return None
-        return bool(user.enabled), int(user.session_epoch)
+        if self._app_state is not None:
+            from millicall.app_settings.service import effective_settings
+
+            settings = await effective_settings(self._app_state)
+            if settings.totp_required and not user.totp_enabled:
+                return None
+        return bool(user.enabled), (int(user.id), int(user.session_epoch), user.hashed_password)
 
     def sign_login_ticket(self, payload: dict) -> str:
         """authorize パラメータを署名付き opaque トークンにする。"""
@@ -149,6 +159,7 @@ class MillicallOAuthProvider(
         scopes: list[str],
         resource: str | None = None,
         redirect_uri_provided_explicitly: bool = True,
+        user_state: tuple[int, int, str] | None = None,
     ) -> str:
         """ログイン成功後に呼び出し、認可コードを発行する（login.py から使用）。
 
@@ -169,7 +180,15 @@ class MillicallOAuthProvider(
             raise
         except Exception as exc:  # noqa: BLE001 — SDK の検証例外を ValueError に正規化
             raise ValueError(str(exc)) from exc
+        if self._sessionmaker is not None and user_state is None:
+            raise ValueError("Authenticated user state required")
+        if resource and str(AnyHttpUrl(resource)).rstrip("/") != str(
+            AnyHttpUrl(self._issuer)
+        ).rstrip("/"):
+            raise ValueError("Invalid token resource")
         code = secrets.token_urlsafe(32)
+        if user_state is not None:
+            self._code_state[code] = user_state
         self._auth_codes[code] = AuthorizationCode(
             code=code,
             scopes=scopes,
@@ -178,7 +197,7 @@ class MillicallOAuthProvider(
             code_challenge=code_challenge,
             redirect_uri=AnyHttpUrl(redirect_uri),
             redirect_uri_provided_explicitly=redirect_uri_provided_explicitly,
-            resource=resource or None,
+            resource=resource or self._issuer,
             subject=username,
         )
         return code
@@ -191,13 +210,23 @@ class MillicallOAuthProvider(
             return None
         if time.time() > code.expires_at:
             self._auth_codes.pop(authorization_code, None)
+            self._code_state.pop(authorization_code, None)
             return None
         return code
 
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
-        self._auth_codes.pop(authorization_code.code, None)
+        stored = self._auth_codes.pop(authorization_code.code, None)
+        issued_state = self._code_state.pop(authorization_code.code, None)
+        if (
+            stored is None
+            or stored != authorization_code
+            or stored.client_id != client.client_id
+            or time.time() >= stored.expires_at
+        ):
+            raise TokenError("invalid_grant", "Authorization code no longer valid")
+        await self._validate_grant_state(authorization_code.subject, issued_state)
         assert client.client_id is not None
 
         access = secrets.token_urlsafe(48)
@@ -218,7 +247,9 @@ class MillicallOAuthProvider(
             expires_at=int(now + _REFRESH_TTL),
             subject=authorization_code.subject,
         )
-        await self._record_token_epoch(authorization_code.subject, access, refresh)
+        if issued_state is not None:
+            self._token_epoch[access] = self._token_epoch[refresh] = issued_state
+        self._refresh_resource[refresh] = authorization_code.resource
         logger.info(
             "MCP OAuth: issued tokens for subject=%s access=%s",
             authorization_code.subject,
@@ -241,6 +272,8 @@ class MillicallOAuthProvider(
             return None
         if token.expires_at is not None and time.time() > token.expires_at:
             self._refresh_tokens.pop(refresh_token, None)
+            self._token_epoch.pop(refresh_token, None)
+            self._refresh_resource.pop(refresh_token, None)
             return None
         return token
 
@@ -250,21 +283,25 @@ class MillicallOAuthProvider(
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        self._refresh_tokens.pop(refresh_token.token, None)
+        stored = self._refresh_tokens.pop(refresh_token.token, None)
+        issued_state = self._token_epoch.pop(refresh_token.token, None)
+        resource = self._refresh_resource.pop(refresh_token.token, None)
+        if (
+            stored is None
+            or stored != refresh_token
+            or stored.client_id != client.client_id
+            or (stored.expires_at is not None and time.time() >= stored.expires_at)
+        ):
+            raise TokenError("invalid_grant", "Refresh token no longer valid")
         assert client.client_id is not None
 
         # リフレッシュ時にも enabled/epoch を再検証する。無効化/失効済みなら新トークンを
         # 発行しない（漏洩リフレッシュトークンや無効化ユーザーの延命を防ぐ）。
-        state = await self._current_user_state(refresh_token.subject)
-        if state is not None:
-            enabled, current_epoch = state
-            issued_epoch = self._token_epoch.get(refresh_token.token)
-            if not enabled or (issued_epoch is not None and issued_epoch != current_epoch):
-                self._refresh_tokens.pop(refresh_token.token, None)
-                self._token_epoch.pop(refresh_token.token, None)
-                raise ValueError("refresh token no longer valid")
+        await self._validate_grant_state(refresh_token.subject, issued_state)
 
         use_scopes = scopes or refresh_token.scopes
+        if not set(use_scopes).issubset(refresh_token.scopes):
+            raise TokenError("invalid_scope", "Cannot expand refresh token scopes")
         access = secrets.token_urlsafe(48)
         refresh = secrets.token_urlsafe(48)
         now = time.time()
@@ -274,6 +311,7 @@ class MillicallOAuthProvider(
             scopes=use_scopes,
             expires_at=int(now + _ACCESS_TTL),
             subject=refresh_token.subject,
+            resource=resource,
         )
         self._refresh_tokens[refresh] = RefreshToken(
             token=refresh,
@@ -282,8 +320,9 @@ class MillicallOAuthProvider(
             expires_at=int(now + _REFRESH_TTL),
             subject=refresh_token.subject,
         )
-        self._token_epoch.pop(refresh_token.token, None)
-        await self._record_token_epoch(refresh_token.subject, access, refresh)
+        if issued_state is not None:
+            self._token_epoch[access] = self._token_epoch[refresh] = issued_state
+        self._refresh_resource[refresh] = resource
         return OAuthToken(
             access_token=access,
             refresh_token=refresh,
@@ -303,24 +342,31 @@ class MillicallOAuthProvider(
             return None
         # 失効契約（監査 C1）: subject の User が存在し enabled、かつ発行時 epoch が現在値と
         # 一致する場合のみ有効。無効化/失効済みならトークンを破棄して拒否する。
-        state = await self._current_user_state(stored.subject)
-        if state is not None:
-            enabled, current_epoch = state
-            issued_epoch = self._token_epoch.get(token)
-            if not enabled or (issued_epoch is not None and issued_epoch != current_epoch):
-                self._access_tokens.pop(token, None)
-                self._token_epoch.pop(token, None)
-                return None
+        try:
+            await self._validate_grant_state(stored.subject, self._token_epoch.get(token))
+        except TokenError:
+            self._access_tokens.pop(token, None)
+            self._token_epoch.pop(token, None)
+            return None
         return stored
 
+    async def _validate_grant_state(
+        self, subject: str, issued_state: tuple[int, int, str] | None
+    ) -> None:
+        if self._sessionmaker is None:
+            return  # Standalone provider unit tests only; lifespan always supplies the DB.
+        current = await self._current_user_state(subject)
+        if current is None or not current[0] or issued_state is None or current[1] != issued_state:
+            raise TokenError("invalid_grant", "User authorization no longer valid")
+
     async def _record_token_epoch(self, subject: str, access: str, refresh: str) -> None:
-        """発行したトークンに subject の現在 session_epoch を紐づける（失効照合用）。"""
+        """発行したトークンに subject の現在のアカウント状態を紐づける。"""
         state = await self._current_user_state(subject)
         if state is None:
             return
-        _enabled, epoch = state
-        self._token_epoch[access] = epoch
-        self._token_epoch[refresh] = epoch
+        _enabled, snapshot = state
+        self._token_epoch[access] = snapshot
+        self._token_epoch[refresh] = snapshot
 
     # -- 失効 --
 
@@ -328,3 +374,4 @@ class MillicallOAuthProvider(
         self._access_tokens.pop(token.token, None)
         self._refresh_tokens.pop(token.token, None)
         self._token_epoch.pop(token.token, None)
+        self._refresh_resource.pop(token.token, None)
