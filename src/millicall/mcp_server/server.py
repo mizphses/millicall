@@ -72,6 +72,7 @@ def build_mcp(
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(settings.mcp_issuer_url),
             resource_server_url=AnyHttpUrl(settings.mcp_issuer_url),
+            validate_token_resource=True,
             client_registration_options=ClientRegistrationOptions(enabled=True),
         ),
     )

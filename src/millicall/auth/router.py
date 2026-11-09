@@ -33,6 +33,7 @@ from millicall.auth.security import (
     hash_password,
     issue_session,
     issue_totp_ticket,
+    matches_credentials,
     read_session,
     read_totp_ticket,
     verify_password,
@@ -71,6 +72,7 @@ class PublicConfig(BaseModel):
     """
 
     saml_enabled: bool
+    totp_required: bool
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +108,7 @@ def _set_session_cookie(response: Response, settings, token: str) -> None:
 
 def _issue_session_and_cookies(response: Response, settings, secrets, user: User) -> None:
     """セッション Cookie と CSRF Cookie を同時に発行するヘルパー。"""
-    token = issue_session(secrets.session_secret, user.id, user.session_epoch)
+    token = issue_session(secrets.session_secret, user.id, user.session_epoch, user.hashed_password)
     _set_session_cookie(response, settings, token)
     csrf_token = generate_csrf_token()
     set_csrf_cookie(response, settings, csrf_token)
@@ -147,7 +149,7 @@ async def login(
     user = await session.scalar(select(User).where(User.username == body.username))
     check_hash = user.hashed_password if user is not None else _DUMMY_HASH
     password_ok = verify_password(check_hash, body.password)
-    if user is None or not password_ok:
+    if user is None or not password_ok or not user.enabled or user.origin != "local":
         # 失敗を記録（タイミングガードのダミーハッシュが完了した後）
         await record_failure(session, ip=ip, username=body.username, action="login")
         # ログイン失敗を監査記録（パスワードは絶対に記録しない）
@@ -161,12 +163,11 @@ async def login(
         await session.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    # ログイン成功: ユーザー名キーの失敗カウンタをリセット
-    await clear_failures(session, username=body.username)
-
     # TOTP が有効な場合は 2 段階目へ誘導
     if user.totp_enabled:
-        ticket = issue_totp_ticket(secrets.session_secret, user.id, user.session_epoch)
+        ticket = issue_totp_ticket(
+            secrets.session_secret, user.id, user.session_epoch, user.hashed_password
+        )
         await record_audit(
             session,
             actor_user_id=user.id,
@@ -179,6 +180,7 @@ async def login(
         return {"totp_required": True, "ticket": ticket}
 
     # TOTP なしのユーザー: セッションと CSRF Cookie を同時に発行
+    await clear_failures(session, username=body.username)
     _issue_session_and_cookies(response, settings, secrets, user)
     await record_audit(
         session,
@@ -235,9 +237,16 @@ async def login_totp(
     )
 
     # ユーザー状態チェック（disabled / epoch 変更）
+    # check_and_raise obtains the SQLite write lock; refresh stale pre-lock state
+    # so concurrent recovery-code attempts cannot consume the same code twice.
+    await session.refresh(user)
     if not user.enabled:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if user.session_epoch != ticket_data.epoch:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if not user.totp_enabled or not matches_credentials(
+        secrets.session_secret, ticket_data, user.hashed_password
+    ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # TOTP コードまたはリカバリコードを検証
@@ -391,7 +400,7 @@ async def public_config(request: Request) -> PublicConfig:
     認証不要のエンドポイントなので、秘匿情報や不要な設定値は決して含めないこと。
     """
     settings = await effective_settings(request.app.state)
-    return PublicConfig(saml_enabled=settings.saml_enabled)
+    return PublicConfig(saml_enabled=settings.saml_enabled, totp_required=settings.totp_required)
 
 
 @router.get("/csrf")

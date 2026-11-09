@@ -58,7 +58,7 @@ def _is_blocked_ip(ip_str: str) -> bool:
     except ValueError:
         return True  # パース不能 → 安全側でブロック
     return (
-        ip.is_private
+        not ip.is_global
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_multicast
@@ -208,6 +208,8 @@ class _PinnedTransport(httpx.AsyncHTTPTransport):
         self._pinned_ip = pinned_ip
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host != self._pinned_host:
+            raise ValueError("Request host does not match validated SSRF destination")
         if request.url.host == self._pinned_host:
             request.extensions = {
                 **request.extensions,

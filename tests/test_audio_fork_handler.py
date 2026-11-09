@@ -8,6 +8,7 @@ from starlette.websockets import WebSocketDisconnect
 import millicall.media.audio_fork as audio_fork
 from millicall.media.audio_fork import AudioForkHandler, register_media_ws
 from millicall.media.service import SessionRegistry
+from millicall.media.tickets import MediaStreamTickets
 from millicall.media.vad import VadEvent
 
 
@@ -187,9 +188,9 @@ class _RouteSession:
 
 
 class _RouteWS:
-    def __init__(self, app, frames=None):
+    def __init__(self, app, frames=None, call_uuid="call-1"):
         self.app = app
-        self.query_params = {"agent": "1"}
+        self.query_params = {"agent": "1", "token": app.state.media_tickets.issue(call_uuid, "1")}
         self._frames = list(frames or [])
         self.accepted = False
         self.closed = False
@@ -197,7 +198,7 @@ class _RouteWS:
     async def accept(self):
         self.accepted = True
 
-    async def close(self):
+    async def close(self, code=1000):
         self.closed = True
 
     async def receive_bytes(self):
@@ -212,6 +213,7 @@ def _make_app(registry):
     class _Settings:
         tts_cache_dir = None
 
+    app.state.media_tickets = MediaStreamTickets()
     app.state.session_registry = registry
     app.state.sessionmaker = None
     app.state.secrets = None
@@ -262,7 +264,7 @@ async def test_ws_route_greet_failure_does_not_leak_registry(monkeypatch):
     endpoint = _ws_endpoint(app)
 
     with pytest.raises(RuntimeError, match="greet boom"):
-        await endpoint(_RouteWS(app), "call-2")
+        await endpoint(_RouteWS(app, call_uuid="call-2"), "call-2")
 
     assert sess.cleaned == 1
     assert registry.get("call-2") is None

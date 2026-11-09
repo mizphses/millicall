@@ -110,7 +110,7 @@ async def test_public_config_unauthenticated_saml_disabled(client) -> None:
     """未認証で /api/auth/config を取得でき、SAML 無効時は false を返す。"""
     resp = await client.get("/api/auth/config")
     assert resp.status_code == 200
-    assert resp.json() == {"saml_enabled": False}
+    assert resp.json() == {"saml_enabled": False, "totp_required": False}
 
 
 async def test_public_config_saml_enabled(tmp_path) -> None:
@@ -129,14 +129,14 @@ async def test_public_config_saml_enabled(tmp_path) -> None:
         async with AsyncClient(transport=transport, base_url="http://test") as c:
             resp = await c.get("/api/auth/config")
             assert resp.status_code == 200
-            assert resp.json() == {"saml_enabled": True}
+            assert resp.json() == {"saml_enabled": True, "totp_required": False}
 
 
 async def test_public_config_minimal_shape(client) -> None:
     """公開設定は最小限（saml_enabled のみ）で、秘匿情報を含まない。"""
     resp = await client.get("/api/auth/config")
     assert resp.status_code == 200
-    assert set(resp.json().keys()) == {"saml_enabled"}
+    assert set(resp.json().keys()) == {"saml_enabled", "totp_required"}
 
 
 # M6: セキュリティヘッダーテスト

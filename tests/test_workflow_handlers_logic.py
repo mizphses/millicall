@@ -117,6 +117,14 @@ def _mock_http_response(status_code: int = 200, text: str = '{"ok": true}') -> M
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text
+    resp.encoding = "utf-8"
+
+    async def chunks():
+        yield text.encode()
+
+    resp.aiter_bytes = chunks
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=None)
     resp.is_success = 200 <= status_code < 300
     return resp
 
@@ -436,7 +444,7 @@ async def test_api_call_get_success_stores_result() -> None:
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.request = AsyncMock(return_value=_mock_http_response(200, '{"ok":true}'))
+    mock_client.stream = MagicMock(return_value=_mock_http_response(200, '{"ok":true}'))
 
     with (
         patch("millicall.workflows.handlers.logic.httpx.AsyncClient", return_value=mock_client),
@@ -462,7 +470,7 @@ async def test_api_call_post_with_body() -> None:
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.request = AsyncMock(return_value=_mock_http_response(201, "created"))
+    mock_client.stream = MagicMock(return_value=_mock_http_response(201, "created"))
 
     with (
         patch("millicall.workflows.handlers.logic.httpx.AsyncClient", return_value=mock_client),
@@ -472,7 +480,7 @@ async def test_api_call_post_with_body() -> None:
 
     assert result == "success"
     # request が呼ばれていること（SSRF をパスして実行された）
-    mock_client.request.assert_awaited_once()
+    mock_client.stream.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -484,7 +492,7 @@ async def test_api_call_url_template_expanded() -> None:
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.request = AsyncMock(return_value=_mock_http_response(200, "ok"))
+    mock_client.stream = MagicMock(return_value=_mock_http_response(200, "ok"))
 
     with (
         patch("millicall.workflows.handlers.logic.httpx.AsyncClient", return_value=mock_client),
@@ -493,7 +501,7 @@ async def test_api_call_url_template_expanded() -> None:
         await handle_api_call(node, ctx)
 
     # 展開後の URL でリクエストが呼ばれること
-    call_args = mock_client.request.call_args
+    call_args = mock_client.stream.call_args
     assert "http://example.com/items/42" in call_args[0] or "http://example.com/items/42" in str(
         call_args
     )
@@ -513,7 +521,7 @@ async def test_api_call_non_2xx_returns_error() -> None:
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.request = AsyncMock(return_value=_mock_http_response(500, "Internal Server Error"))
+    mock_client.stream = MagicMock(return_value=_mock_http_response(500, "Internal Server Error"))
 
     with (
         patch("millicall.workflows.handlers.logic.httpx.AsyncClient", return_value=mock_client),
@@ -536,7 +544,7 @@ async def test_api_call_network_error_returns_error() -> None:
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.request = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+    mock_client.stream = MagicMock(side_effect=httpx.ConnectError("connection refused"))
 
     with (
         patch("millicall.workflows.handlers.logic.httpx.AsyncClient", return_value=mock_client),
@@ -556,7 +564,7 @@ async def test_api_call_custom_result_variable() -> None:
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.request = AsyncMock(return_value=_mock_http_response(200, "data"))
+    mock_client.stream = MagicMock(return_value=_mock_http_response(200, "data"))
 
     with (
         patch("millicall.workflows.handlers.logic.httpx.AsyncClient", return_value=mock_client),
@@ -672,7 +680,7 @@ async def test_api_call_public_ip_is_allowed() -> None:
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.request = AsyncMock(return_value=_mock_http_response(200, "ok"))
+    mock_client.stream = MagicMock(return_value=_mock_http_response(200, "ok"))
 
     with (
         patch("millicall.workflows.handlers.logic.httpx.AsyncClient", return_value=mock_client),
@@ -681,7 +689,7 @@ async def test_api_call_public_ip_is_allowed() -> None:
         result = await handle_api_call(node, ctx)
 
     assert result == "success"
-    mock_client.request.assert_awaited_once()
+    mock_client.stream.assert_called_once()
 
 
 # --------------------------------------------------------------------------- #
@@ -753,7 +761,7 @@ async def test_api_call_pins_resolved_ip_no_follow_redirects() -> None:
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.request = AsyncMock(return_value=_mock_http_response(200, "ok"))
+    mock_client.stream = MagicMock(return_value=_mock_http_response(200, "ok"))
 
     captured: dict = {}
 

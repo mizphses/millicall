@@ -33,6 +33,7 @@ from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
 from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
+from millicall.media.tickets import MediaStreamTickets
 from millicall.network.client import NetdClient
 from millicall.network.router import router as network_router
 from millicall.providers.router import router as providers_router
@@ -96,6 +97,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
+        if request.url.path.startswith(("/api/", "/mcp-login", "/provisioning/", "/scim/")):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
 
@@ -267,6 +270,7 @@ async def lifespan(app: FastAPI):
 
     # 着信 AI 応対では CHANNEL_ANSWER を受けた core が uuid_audio_stream を発行するため、
     # 共有 ESL コマンド接続・lock・reconnect と core への WS ベース URL を注入する。
+    app.state.media_tickets = MediaStreamTickets()
     media_router = MediaEventRouter(
         app.state.session_registry,
         esl=esl_command,
@@ -277,6 +281,7 @@ async def lifespan(app: FastAPI):
         hangup_registry=app.state.hangup_registry,
         dtmf_collector=app.state.dtmf_collector,
         workflow_runner=app.state.workflow_runner,
+        media_tickets=app.state.media_tickets,
     )
 
     async def _compose_handler(event: dict) -> None:

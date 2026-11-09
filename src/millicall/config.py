@@ -74,8 +74,7 @@ class Settings(BaseSettings):
     cookie_samesite: str = "lax"
 
     # --- 認証 (Phase 6) ---
-    # True のとき UI は TOTP 登録を強制する（バックエンドはフラグを公開するのみ；
-    # 強制の実施は T9 フロントエンド担当）。
+    # True のとき未登録ユーザーの API アクセスを登録・ログアウトに制限する。
     totp_required: bool = False
     # TOTP チャレンジチケットの有効期間（秒）。ブルートフォース窓を狭めるため短めにする
     # （レビュー M-1）。ステートレス署名チケットのため、この窓 = 総当たり可能時間。

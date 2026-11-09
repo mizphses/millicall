@@ -44,6 +44,7 @@ from threading import Lock
 import defusedxml.ElementTree as dET
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
+from itsdangerous import BadSignature, URLSafeTimedSerializer
 from lxml import etree
 from signxml import SignatureConfiguration, XMLVerifier
 from signxml.exceptions import InvalidSignature
@@ -59,6 +60,13 @@ router = APIRouter(prefix="/saml", tags=["saml"])
 
 # SAMLResponse（base64）の最大サイズ（レビュー N-4: 署名検証 DoS 防止）。1 MiB。
 _MAX_SAML_RESPONSE_B64 = 1024 * 1024
+_REQUEST_COOKIE = "millicall_saml_request"
+_REQUEST_TTL = 600
+
+
+def _request_signer(secret: str) -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(secret, salt="millicall.saml.request.v1")
+
 
 # SAML 名前空間定数
 _SAMLP = "urn:oasis:names:tc:SAML:2.0:protocol"
@@ -157,7 +165,8 @@ def _parse_saml_datetime(dt_str: str | None) -> datetime | None:
         # Python 3.11 以前は fromisoformat が "Z" サフィックスを受け付けない
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
-        return datetime.fromisoformat(s).astimezone(UTC)
+        parsed = datetime.fromisoformat(s)
+        return parsed.astimezone(UTC) if parsed.tzinfo is not None else None
     except (ValueError, TypeError):
         return None
 
@@ -305,7 +314,20 @@ async def saml_login(request: Request, next: str = "/") -> RedirectResponse:
         + "&RelayState="
         + urllib.parse.quote_plus(relay_state)
     )
-    return RedirectResponse(url=redirect_url, status_code=302)
+    response = RedirectResponse(url=redirect_url, status_code=302)
+    response.set_cookie(
+        _REQUEST_COOKIE,
+        _request_signer(request.app.state.secrets.session_secret).dumps(
+            {"id": request_id, "next": relay_state}
+        ),
+        max_age=_REQUEST_TTL,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="none" if settings.cookie_secure else "lax",
+        path="/saml",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.post("/acs")
@@ -403,6 +425,33 @@ async def saml_acs(
         await _fail("no_signed_xml")
         raise HTTPException(status_code=400, detail="No signed XML in assertion")
 
+    # Accept only an Assertion or a single direct Assertion inside a signed Response.
+    if verified_assertion.tag == _q(_NS_SAMLP, "Response"):
+        assertions = verified_assertion.findall(_q(_NS_SAML, "Assertion"))
+        if len(assertions) != 1:
+            await _fail("assertion_count_invalid")
+            raise HTTPException(status_code=400, detail="Expected one signed assertion")
+        verified_assertion = assertions[0]
+    if verified_assertion.tag != _q(_NS_SAML, "Assertion"):
+        await _fail("unexpected_signed_element")
+        raise HTTPException(status_code=400, detail="Expected a signed assertion")
+    issuer = verified_assertion.findtext(_q(_NS_SAML, "Issuer"))
+    if not settings.saml_idp_entity_id or issuer != settings.saml_idp_entity_id:
+        await _fail("issuer_mismatch")
+        raise HTTPException(status_code=400, detail="Issuer mismatch")
+
+    try:
+        pending = _request_signer(secrets_state.session_secret).loads(
+            request.cookies.get(_REQUEST_COOKIE, ""),
+            max_age=_REQUEST_TTL,
+        )
+        if not isinstance(pending, dict) or not pending.get("id"):
+            raise ValueError("Invalid request state")
+    except (BadSignature, ValueError):
+        await _fail("request_state_invalid")
+        raise HTTPException(status_code=400, detail="SSO must start in this browser") from None
+    relay_state = _validate_relay_state(pending.get("next"))
+
     # ---- Step 3: Status コード検証 ----
     # Status は Response レベル属性のため root から読む（署名対象外だが情報提供のみ）
     status_code_elem = root.find(f".//{_q(_NS_SAMLP, 'StatusCode')}")
@@ -422,42 +471,58 @@ async def saml_acs(
     not_before = _parse_saml_datetime(conditions_elem.get("NotBefore"))
     not_on_or_after = _parse_saml_datetime(conditions_elem.get("NotOnOrAfter"))
 
+    if not_on_or_after is None or (
+        conditions_elem.get("NotBefore") is not None and not_before is None
+    ):
+        await _fail("conditions_time_invalid")
+        raise HTTPException(status_code=400, detail="Invalid assertion validity window")
+
     if not_before is not None and now_utc < not_before - skew:
         await _fail("conditions_not_yet_valid")
         raise HTTPException(status_code=400, detail="Assertion not yet valid")
 
-    if not_on_or_after is not None and now_utc > not_on_or_after + skew:
+    if now_utc >= not_on_or_after + skew:
         await _fail("conditions_expired")
         raise HTTPException(status_code=400, detail="Assertion has expired")
 
     # AudienceRestriction 検証
-    audience_restriction = conditions_elem.find(_q(_NS_SAML, "AudienceRestriction"))
-    if audience_restriction is None:
+    audience_restrictions = conditions_elem.findall(_q(_NS_SAML, "AudienceRestriction"))
+    if not audience_restrictions:
         await _fail("audience_restriction_missing")
         raise HTTPException(status_code=400, detail="AudienceRestriction missing")
 
-    audience_values = [
-        a.text.strip() for a in audience_restriction.findall(_q(_NS_SAML, "Audience")) if a.text
-    ]
-    if settings.saml_sp_entity_id not in audience_values:
+    if any(
+        settings.saml_sp_entity_id not in [a.text for a in ar.findall(_q(_NS_SAML, "Audience"))]
+        for ar in audience_restrictions
+    ):
         await _fail("audience_mismatch")
         raise HTTPException(status_code=400, detail="Audience mismatch")
 
     # ---- Step 5: SubjectConfirmationData 検証 ----
     subject_elem = verified_assertion.find(_q(_NS_SAML, "Subject"))
+    confirmed = False
     if subject_elem is not None:
         for sc in subject_elem.findall(_q(_NS_SAML, "SubjectConfirmation")):
+            if sc.get("Method") != "urn:oasis:names:tc:SAML:2.0:cm:bearer":
+                continue
             sc_data = sc.find(_q(_NS_SAML, "SubjectConfirmationData"))
             if sc_data is None:
                 continue
             recipient = sc_data.get("Recipient")
-            if recipient is not None and recipient != settings.saml_sp_acs_url:
+            if recipient != settings.saml_sp_acs_url:
                 await _fail("recipient_mismatch")
                 raise HTTPException(status_code=400, detail="Recipient mismatch")
             sc_noa = _parse_saml_datetime(sc_data.get("NotOnOrAfter"))
-            if sc_noa is not None and now_utc > sc_noa + skew:
+            if sc_noa is None or now_utc >= sc_noa + skew:
                 await _fail("subject_confirmation_expired")
                 raise HTTPException(status_code=400, detail="SubjectConfirmationData expired")
+            if sc_data.get("InResponseTo") == pending["id"] and sc_data.get("NotBefore") is None:
+                confirmed = True
+    if not confirmed:
+        await _fail("subject_confirmation_invalid")
+        raise HTTPException(
+            status_code=400, detail="Subject confirmation does not match login request"
+        )
 
     # ---- Step 6: NameID / 属性抽出 ----
     name_id: str | None = None
@@ -514,6 +579,9 @@ async def saml_acs(
     if not _replay_cache.check_and_add(assertion_id, ttl):
         await _fail("replay_detected")
         raise HTTPException(status_code=400, detail="Replay detected")
+    if not _replay_cache.check_and_add("request:" + pending["id"], _REQUEST_TTL):
+        await _fail("request_replayed")
+        raise HTTPException(status_code=400, detail="Login request already consumed")
 
     # ---- Step 8: ユーザー照合 / upsert（scim_enabled で分岐）----
     async with request.app.state.sessionmaker() as db_session:
@@ -589,7 +657,9 @@ async def saml_acs(
         await db_session.flush()  # user.id を確定させる
 
         # ---- Step 9: セッション + CSRF Cookie 発行 ----
-        session_token = issue_session(secrets_state.session_secret, user.id, user.session_epoch)
+        session_token = issue_session(
+            secrets_state.session_secret, user.id, user.session_epoch, user.hashed_password
+        )
 
         # 監査ログ（アサーション内容は記録しない；ユーザー ID のみ）
         await record_audit(
@@ -603,6 +673,13 @@ async def saml_acs(
 
     # Cookie を付与したリダイレクトレスポンスを構築する
     redirect_resp = RedirectResponse(url=relay_state, status_code=302)
+    redirect_resp.delete_cookie(
+        _REQUEST_COOKIE,
+        path="/saml",
+        secure=settings.cookie_secure,
+        samesite="none" if settings.cookie_secure else "lax",
+    )
+    redirect_resp.headers["Cache-Control"] = "no-store"
     redirect_resp.set_cookie(
         key=settings.session_cookie_name,
         value=session_token,

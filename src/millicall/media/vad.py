@@ -50,6 +50,7 @@ class VadSegmenter:
         silence_end_ms: int = 600,
         min_speech_ms: int = 200,
         min_rms: float = 0.0,
+        max_speech_ms: int = 30_000,
         classifier=None,
     ) -> None:
         self._rate = sample_rate
@@ -58,6 +59,7 @@ class VadSegmenter:
         self._start_frames = speech_start_frames
         self._end_frames = max(1, silence_end_ms // frame_ms)
         self._min_speech_frames = max(1, min_speech_ms // frame_ms)
+        self._max_speech_frames = max(speech_start_frames, max_speech_ms // frame_ms)
         # エネルギーゲート: webrtcvad が speech と判定しても、フレーム RMS がこの値未満なら
         # 無音/回線ノイズとして非音声扱いにする。近無音（実測 RMS≈8）を発話と誤検出して
         # 再生中に誤バージイン（TTS 途切れ）や空 STT が暴発するのを抑える。0 で無効。
@@ -114,6 +116,9 @@ class VadSegmenter:
                         # イベントの対称性を保証する。audio=b"" = 下流は STT をスキップ可。
                         events.append(VadEvent("speech_end", b""))
                     self._reset_after_utterance()
+        if self._in_speech and len(self._speech_frames) >= self._max_speech_frames:
+            events.append(VadEvent("speech_end", b"".join(self._speech_frames)))
+            self._reset_after_utterance()
         return events
 
     def _reset_after_utterance(self) -> None:

@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.audit import record_audit
+from millicall.auth.security import bump_session_epoch
 from millicall.models import ScimGroup, ScimGroupMember, User
 
 # 存在するロール。scim_group_role_map の値はこの集合のみ許可（app_settings 側で検証）。
@@ -84,6 +85,7 @@ async def recalc_scim_roles(
             continue
         old = user.role
         user.role = desired
+        bump_session_epoch(user)
         await record_audit(
             session,
             actor_user_id=actor_user_id,

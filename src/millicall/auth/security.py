@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from dataclasses import dataclass
 
 from argon2 import PasswordHasher
@@ -31,11 +33,25 @@ class SessionData:
 
     uid: int
     epoch: int
+    credential_tag: str | None = None
 
 
-def issue_session(secret: str, user_id: int, epoch: int) -> str:
+def credential_tag(secret: str, password_hash: str) -> str:
+    """Bind credentials to this account incarnation without exposing its password hash."""
+    return hmac.new(secret.encode(), password_hash.encode(), hashlib.sha256).hexdigest()
+
+
+def matches_credentials(secret: str, data: SessionData, password_hash: str) -> bool:
+    return isinstance(data.credential_tag, str) and hmac.compare_digest(
+        data.credential_tag.encode(), credential_tag(secret, password_hash).encode()
+    )
+
+
+def issue_session(secret: str, user_id: int, epoch: int, password_hash: str = "") -> str:
     """セッショントークンを発行する。uidとepochを埋め込む。"""
-    return _serializer(secret).dumps({"uid": user_id, "ep": epoch})
+    return _serializer(secret).dumps(
+        {"uid": user_id, "ep": epoch, "ct": credential_tag(secret, password_hash)}
+    )
 
 
 def read_session(secret: str, token: str, max_age: int) -> SessionData | None:
@@ -53,7 +69,7 @@ def read_session(secret: str, token: str, max_age: int) -> SessionData | None:
     epoch = data.get("ep", 0)  # レガシートークン: ep無し → epoch 0
     if not isinstance(epoch, int):
         return None
-    return SessionData(uid=uid, epoch=epoch)
+    return SessionData(uid=uid, epoch=epoch, credential_tag=data.get("ct"))
 
 
 def bump_session_epoch(user) -> None:
@@ -69,13 +85,15 @@ def _totp_serializer(secret: str) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(secret, salt=_TOTP_TICKET_SALT)
 
 
-def issue_totp_ticket(secret: str, uid: int, epoch: int) -> str:
+def issue_totp_ticket(secret: str, uid: int, epoch: int, password_hash: str = "") -> str:
     """パスワード検証後に発行する短命 TOTP チャレンジチケットを生成する。
 
     チケットには uid と epoch を埋め込む。max_age は呼び出し元が制御する。
     セッションクッキーとは別のソルトを使用し、混用を防ぐ。
     """
-    return _totp_serializer(secret).dumps({"uid": uid, "ep": epoch})
+    return _totp_serializer(secret).dumps(
+        {"uid": uid, "ep": epoch, "ct": credential_tag(secret, password_hash)}
+    )
 
 
 def read_totp_ticket(secret: str, token: str, max_age: int) -> SessionData | None:
@@ -94,4 +112,4 @@ def read_totp_ticket(secret: str, token: str, max_age: int) -> SessionData | Non
     epoch = data.get("ep", 0)
     if not isinstance(epoch, int):
         return None
-    return SessionData(uid=uid, epoch=epoch)
+    return SessionData(uid=uid, epoch=epoch, credential_tag=data.get("ct"))

@@ -24,6 +24,12 @@ _VALID_DEST_RE = re.compile(r"^[0-9A-Za-z_.+*#-]{1,64}$")
 # インジェクションの起点を塞ぐ。空白・改行・ESL 区切りを含まない英数/ハイフン/
 # アンダースコアのみ許可（実 FS UUID は hex+ハイフンでこれに収まる）。
 _VALID_UUID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
+_VALID_AUDIO_PATH_RE = re.compile(r"[A-Za-z0-9._:/-]{1,512}")
+
+
+def is_safe_audio_path(path: str) -> bool:
+    # uuid_broadcast interprets app::args as application execution, not playback.
+    return bool(_VALID_AUDIO_PATH_RE.fullmatch(path)) and "::" not in path
 
 
 class CallControl(Protocol):
@@ -59,7 +65,7 @@ class EslCallControl:
         reconnect: Callable[[], Awaitable[_EslLike]] | None = None,
         playback_timeout: float = 30.0,
     ) -> None:
-        if not uuid or not _VALID_UUID_RE.match(uuid):
+        if not uuid or not _VALID_UUID_RE.fullmatch(uuid):
             raise ValueError(f"invalid channel uuid: {uuid!r}")
         self._esl = esl
         self._uuid = uuid
@@ -92,6 +98,8 @@ class EslCallControl:
                 await self._esl.bgapi(command)
 
     async def play_file(self, path: str) -> None:
+        if not is_safe_audio_path(path):
+            raise ValueError("Invalid playback path")
         # _playback_done は冒頭で必ず clear するため、タイムアウト後の後処理は不要。
         # 次回呼び出し時の clear() がフラグをリセットする。
         self._playback_done.clear()
@@ -121,7 +129,7 @@ class EslCallControl:
         w はポーズ（FreeSWITCH 拡張）。無効文字を含む場合は ValueError を送出する。
         ESL コマンド: ``uuid_send_dtmf <uuid> <digits>``
         """
-        if not digits or not _VALID_DTMF_RE.match(digits):
+        if not digits or not _VALID_DTMF_RE.fullmatch(digits):
             raise ValueError(
                 f"Invalid DTMF digits: {digits!r}. Only 0-9, *, #, A, B, C, D, w are allowed."
             )
@@ -134,6 +142,6 @@ class EslCallControl:
 
         dest はコマンドインジェクション防止のため厳格な allowlist で検証する。
         """
-        if not dest or not _VALID_DEST_RE.match(dest):
+        if not dest or not _VALID_DEST_RE.fullmatch(dest):
             raise ValueError(f"invalid transfer destination: {dest!r}")
         await self._bgapi(f"uuid_transfer {self._uuid} {dest} XML default")

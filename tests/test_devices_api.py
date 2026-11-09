@@ -383,8 +383,8 @@ async def test_quick_provision_no_phone_admin_cfg_fetch_succeeds(
     assert resp.status_code == 200
     assert await _get_provision_token(app, device_id) is None
 
-    # DHCP-ZTP の電話を模して、トークン無しで LAN 内 IP から端末 cfg を取得
-    transport = ASGITransport(app=app, client=("10.0.0.50", 54321))
+    # DHCP-ZTP の電話を模して、トークン無しで登録済み端末の IP から cfg を取得
+    transport = ASGITransport(app=app, client=("10.0.0.100", 54321))
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         cfg_resp = await c.get("/provisioning/Yealink/AABBCCDDEE11.cfg")
 
@@ -425,7 +425,7 @@ async def test_quick_provision_with_phone_admin_token_gates_cfg(
     token = await _get_provision_token(app, device_id)
     assert token is not None
 
-    transport = ASGITransport(app=app, client=("10.0.0.50", 54321))
+    transport = ASGITransport(app=app, client=("10.0.0.100", 54321))
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         # トークン無しは 404
         no_token = await c.get("/provisioning/Yealink/AABBCCDDEE13.cfg")

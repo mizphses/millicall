@@ -306,9 +306,9 @@ class OutboundCallService:
         C3 修正 — 国際発信デフォルト拒否:
             _check_intl_policy を呼び、allowlist 外の国際番号は ValueError で拒否する。
         """
-        if not phone_number or not _VALID_NUMBER_RE.match(phone_number):
+        if not phone_number or not _VALID_NUMBER_RE.fullmatch(phone_number):
             raise ValueError(f"invalid phone_number: {phone_number!r}")
-        if caller_id and not _VALID_NUMBER_RE.match(caller_id):
+        if caller_id and not _VALID_NUMBER_RE.fullmatch(caller_id):
             raise ValueError(f"invalid caller_id: {caller_id!r}")
 
         if trunk:

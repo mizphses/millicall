@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, time
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -37,6 +38,8 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------------- #
 # 曜日マッピング (weekday() 0=月曜 … 6=日曜)
 # --------------------------------------------------------------------------- #
+
+MAX_API_RESPONSE_BYTES = 1024 * 1024
 
 _WEEKDAY_MAP = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
@@ -182,6 +185,8 @@ async def handle_api_call(node: object, ctx: ChannelContext) -> str:
     """
     config = node.config  # type: ignore[attr-defined]
     result_var = config.result_variable
+    ctx.set_var(result_var, "")
+    ctx.set_var(f"{result_var}_status", "")
 
     try:
         # --- テンプレート展開 ---
@@ -202,27 +207,36 @@ async def handle_api_call(node: object, ctx: ChannelContext) -> str:
 
         # --- SSRF ガード（解決 + 検証 + 接続 IP の固定） ---
         host = urlparse(url).hostname or ""
-        pinned_ip = _resolve_and_check_ssrf(url)  # ブロック対象なら ValueError
+        pinned_ip = await asyncio.to_thread(_resolve_and_check_ssrf, url)
 
         # --- HTTP リクエスト ---
         # 検証済み IP に接続を固定し、リダイレクトは辿らない（別ホストへの
         # SSRF 迂回・再解決による TOCTOU を防ぐ）。
         content: bytes | None = body_str.encode() if body_str else None
         transport = _PinnedTransport(host, pinned_ip)
-        async with httpx.AsyncClient(
-            timeout=config.timeout,
-            transport=transport,
-            follow_redirects=False,
-        ) as client:
-            response = await client.request(
+        async with (
+            asyncio.timeout(config.timeout),
+            httpx.AsyncClient(
+                timeout=config.timeout,
+                transport=transport,
+                follow_redirects=False,
+            ) as client,
+            client.stream(
                 config.method,
                 url,
                 headers=headers,
                 content=content,
-            )
+            ) as response,
+        ):
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(data) + len(chunk) > MAX_API_RESPONSE_BYTES:
+                    raise ValueError("API response too large")
+                data.extend(chunk)
+            text = data.decode(response.encoding or "utf-8", errors="replace")
 
         # --- 結果の格納 ---
-        ctx.set_var(result_var, response.text)
+        ctx.set_var(result_var, text)
         ctx.set_var(f"{result_var}_status", str(response.status_code))
 
         return "success" if response.is_success else "error"

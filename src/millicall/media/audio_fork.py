@@ -23,6 +23,7 @@ from millicall.media.service import (
     build_conversation_session,
     build_conversation_session_from_spec,
 )
+from millicall.media.tickets import MediaStreamTickets
 from millicall.media.vad import VadSegmenter
 from millicall.telephony.esl import ESLConnectionClosed
 
@@ -153,12 +154,14 @@ class MediaEventRouter:
         hangup_registry: HangupRegistry | None = None,
         dtmf_collector: DtmfCollector | None = None,
         workflow_runner=None,
+        media_tickets: MediaStreamTickets | None = None,
     ) -> None:
         self._registry = registry
         self._answer_registry = answer_registry
         self._hangup_registry = hangup_registry
         self._dtmf_collector = dtmf_collector
         self._workflow_runner = workflow_runner
+        self._media_tickets = media_tickets if media_tickets is not None else MediaStreamTickets()
         self._esl = esl
         # 末尾スラッシュを除去して URL 組み立てを决定論的にする
         self._ws_base_url = ws_base_url.rstrip("/") if ws_base_url else None
@@ -197,6 +200,7 @@ class MediaEventRouter:
                 self._dtmf_collector.unregister(uuid)
             self._registry.pop(uuid)
             self._started.discard(uuid)
+            self._media_tickets.revoke(uuid)
 
     async def _maybe_start_audio_stream(self, event: dict) -> None:
         if self._esl is None or self._ws_base_url is None:
@@ -207,14 +211,16 @@ class MediaEventRouter:
         uuid = event.get("Unique-ID") or event.get("Channel-Call-UUID") or ""
         if not uuid or uuid in self._started:
             return
-        self._started.add(uuid)
-        ws_url = f"{self._ws_base_url}/media/audio-fork/{uuid}?agent={agent}"
-        command = f"uuid_audio_stream {uuid} start {ws_url} mono 8k"
         try:
+            token = self._media_tickets.issue(uuid, agent)
+            self._started.add(uuid)
+            ws_url = f"{self._ws_base_url}/media/audio-fork/{uuid}?agent={agent}&token={token}"
+            command = f"uuid_audio_stream {uuid} start {ws_url} mono 8k"
             await self._bgapi(command)
         except Exception:
             # 起動に失敗したら再試行できるよう起動済みマークを取り消す
             self._started.discard(uuid)
+            self._media_tickets.revoke(uuid)
             logger.exception("failed to start audio stream for uuid=%s", uuid)
 
     async def _bgapi(self, command: str) -> None:
@@ -288,9 +294,16 @@ def resolve_ws_agent(agent_param: str) -> tuple[int, bool]:
 def register_media_ws(app: FastAPI) -> None:
     @app.websocket("/media/audio-fork/{call_uuid}")
     async def audio_fork_ws(ws: WebSocket, call_uuid: str) -> None:
-        await ws.accept()
-        agent_id, is_ephemeral = resolve_ws_agent(ws.query_params.get("agent", "0"))
         state = ws.app.state
+        agent = ws.query_params.get("agent", "0")
+        tickets = getattr(state, "media_tickets", None)
+        if tickets is None or not tickets.consume(
+            ws.query_params.get("token", ""), call_uuid, agent
+        ):
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+        agent_id, is_ephemeral = resolve_ws_agent(agent)
         try:
             if is_ephemeral:
                 session, _ = await _build_ephemeral_session(state, call_uuid)

@@ -26,7 +26,7 @@ _TEMPLATE_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
 def is_valid_variable_name(name: str) -> bool:
     """True if ``name`` matches the variable-name allowlist."""
-    return bool(_VAR_NAME_RE.match(name))
+    return bool(_VAR_NAME_RE.fullmatch(name))
 
 
 def render_template(text: str, variables: dict[str, str]) -> str:

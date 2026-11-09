@@ -2197,6 +2197,8 @@ export interface components {
         PublicConfig: {
             /** Saml Enabled */
             saml_enabled: boolean;
+            /** Totp Required */
+            totp_required: boolean;
         };
         /**
          * QuickProvisionBody

@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
+from millicall.auth.router import _verify_code
 from millicall.auth.security import hash_password, verify_password
 from millicall.auth.throttle import check_and_raise, clear_failures, record_failure
 from millicall.models import User
@@ -74,6 +75,10 @@ def _login_page(*, ticket: str) -> str:
         <label for="password">パスワード</label>
         <input type="password" id="password" name="password" required>
       </div>
+      <div class="form-group">
+        <label for="code">認証コード（2FA 有効時）</label>
+        <input type="text" id="code" name="code" autocomplete="one-time-code">
+      </div>
       <button type="submit">認証</button>
     </form>
   </div>
@@ -98,6 +103,7 @@ async def mcp_login_callback(
     ticket: str = Form(...),
     username: str = Form(...),
     password: str = Form(...),
+    code: str = Form(default=""),
 ):
     """ユーザーを認証し、認可コード付きで MCP クライアントへリダイレクトする。
 
@@ -150,7 +156,7 @@ async def mcp_login_callback(
         check_hash = user.hashed_password if user is not None else _DUMMY_HASH
         password_ok = verify_password(check_hash, password)
 
-        if user is None or not password_ok:
+        if user is None or not password_ok or user.origin != "local":
             await record_failure(session, ip=ip, username=username, action="mcp_login")
             await record_audit(
                 session,
@@ -203,7 +209,25 @@ async def mcp_login_callback(
                 status_code=status.HTTP_403_FORBIDDEN,
             )
 
-        # ログイン成功: ユーザー名キーの失敗カウンタをリセット。
+        if (settings.totp_required and not user.totp_enabled) or (
+            user.totp_enabled and _verify_code(user, request.app.state.secrets, code) is None
+        ):
+            await record_failure(session, ip=ip, username=username, action="mcp_totp")
+            await record_audit(
+                session,
+                actor_user_id=user.id,
+                actor_label=username,
+                action="mcp_login.failure",
+                ip_address=ip,
+            )
+            await session.commit()
+            return HTMLResponse(
+                "<html><body>2FA の登録と有効な認証コードが必要です。管理画面で確認してください。</body></html>",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        user_state = (user.id, user.session_epoch, user.hashed_password)
+        # ログイン成功: 全認証要素を検証した後にのみカウンタをリセット。
         await clear_failures(session, username=username)
         await record_audit(
             session,
@@ -223,6 +247,7 @@ async def mcp_login_callback(
             scopes=scope_list,
             resource=resource or None,
             redirect_uri_provided_explicitly=explicit,
+            user_state=user_state,
         )
     except ValueError:
         # client 未登録 / redirect_uri 未登録 / scope 不許可 は fail-closed。

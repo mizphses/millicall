@@ -62,9 +62,11 @@ async def test_channel_answer_starts_audio_stream_for_ai_agent():
             "variable_millicall_ai_agent": "7",
         }
     )
-    assert esl.commands == [
-        "uuid_audio_stream abc start ws://127.0.0.1:8000/media/audio-fork/abc?agent=7 mono 8k"
-    ]
+    assert len(esl.commands) == 1
+    assert esl.commands[0].startswith(
+        "uuid_audio_stream abc start ws://127.0.0.1:8000/media/audio-fork/abc?agent=7&token="
+    )
+    assert esl.commands[0].endswith(" mono 8k")
 
 
 @pytest.mark.asyncio
