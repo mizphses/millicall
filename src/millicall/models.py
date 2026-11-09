@@ -464,6 +464,9 @@ class Device(Base):
     """物理電話機（IP電話端末）。provision_token は repr/ログに出力しない。"""
 
     __tablename__ = "devices"
+    # created_at（server_default）を INSERT ... RETURNING で一括取得する。
+    # これが無いと INSERT が行ごとになり、commit 後の属性アクセスに refresh が要る。
+    __mapper_args__ = {"eager_defaults": True}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # 正規化形式: 大文字コロン区切り（AA:BB:CC:DD:EE:FF）

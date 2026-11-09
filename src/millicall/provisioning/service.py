@@ -8,10 +8,11 @@ import base64
 import logging
 import secrets
 import urllib.parse
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from datetime import UTC, datetime
 
 import httpx
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,16 @@ from millicall.network.client import NetdClient
 from millicall.network.validation import is_valid_hostname, normalize_mac, validate_ipv4
 
 logger = logging.getLogger("millicall.provisioning")
+
+
+# IN 句に渡す値の上限。SQLite のバインド変数上限（古い版で 999）に収まる値にする。
+_IN_CHUNK_SIZE = 500
+
+
+def chunked[T](items: Sequence[T], size: int = _IN_CHUNK_SIZE) -> Iterator[Sequence[T]]:
+    """items を size 件ずつに分割する（IN 句のバインド変数上限対策）。"""
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
 
 
 def _utcnow() -> datetime:
@@ -52,9 +63,10 @@ async def sync_devices_from_leases(
     """
     leases = await netd_client.get_dhcp_leases()
 
-    devices: list[Device] = []
     now = _utcnow()
 
+    # 検証済みリース (mac, ip, hostname) をリース順に集める（不正な MAC / IP は除外）
+    valid: list[tuple[str, str, str | None]] = []
     for lease in leases:
         raw_mac = lease.get("mac", "")
         raw_ip = lease.get("ip", "")
@@ -76,32 +88,50 @@ async def sync_devices_from_leases(
 
         # hostname は RFC1123 で検証; 不正なら NULL として保存
         hostname: str | None = raw_hostname if is_valid_hostname(raw_hostname) else None
+        valid.append((mac, raw_ip, hostname))
 
-        # 既存行を MAC で検索
-        existing = await session.scalar(select(Device).where(Device.mac_address == mac))
-        if existing is not None:
-            existing.ip_address = raw_ip
-            existing.hostname = hostname
-            existing.last_seen = now
-            existing.active = True
-            devices.append(existing)
+    # 既存行を MAC 一覧でまとめて取得する（件数比例の SELECT を避ける）
+    by_mac: dict[str, Device] = {}
+    unique_macs = list(dict.fromkeys(mac for mac, _, _ in valid))
+    for chunk in chunked(unique_macs, _IN_CHUNK_SIZE):
+        for existing in await session.scalars(select(Device).where(Device.mac_address.in_(chunk))):
+            by_mac[existing.mac_address] = existing
+
+    # リース順に適用する。同一 MAC が複数あれば後勝ち（同じ Device を更新し続ける）で、
+    # 返り値にはリースごとに（重複を含めて）その Device が入る。
+    devices: list[Device] = []
+    for mac, ip, hostname in valid:
+        device = by_mac.get(mac)
+        if device is not None:
+            device.ip_address = ip
+            device.hostname = hostname
+            device.last_seen = now
+            device.active = True
         else:
             device = Device(
                 mac_address=mac,
-                ip_address=raw_ip,
+                ip_address=ip,
                 hostname=hostname,
                 provisioned=False,
                 active=True,
                 last_seen=now,
+                # 未指定の列は flush 後に未ロード扱いになり commit 後の属性アクセスで
+                # 遅延ロード（async では MissingGreenlet）になるため、明示しておく。
+                model=None,
+                extension_id=None,
+                provision_token=None,
             )
             session.add(device)
-            devices.append(device)
+            by_mac[mac] = device
+        devices.append(device)
 
     await session.commit()
 
-    # commit 後に id 等を確実に持たせるため refresh する
-    for d in devices:
-        await session.refresh(d)
+    # 通常は expire_on_commit=False かつ INSERT ... RETURNING で id / created_at まで
+    # 読み込み済み。未ロード属性が残る場合（expire_on_commit=True 等）だけ refresh する。
+    for d in by_mac.values():
+        if sa_inspect(d).unloaded:
+            await session.refresh(d)
 
     return devices
 

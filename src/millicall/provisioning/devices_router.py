@@ -16,7 +16,12 @@ from millicall.app_settings.service import effective_settings
 from millicall.deps import get_change_listener, get_netd_client, get_session, require_admin
 from millicall.models import Device, Extension
 from millicall.network.client import NetdClient, NetdError
-from millicall.provisioning.service import quick_provision, resync_phone, sync_devices_from_leases
+from millicall.provisioning.service import (
+    chunked,
+    quick_provision,
+    resync_phone,
+    sync_devices_from_leases,
+)
 from millicall.telephony.hooks import ExtensionChangeListener
 
 logger = logging.getLogger("millicall.provisioning.devices_router")
@@ -64,26 +69,8 @@ class QuickProvisionBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-async def _build_device_read(device: Device, session: AsyncSession) -> DeviceRead:
-    """Device ORM オブジェクトから DeviceRead を構築する。
-
-    extension_id がある場合は Extension を取得して number / display_name を埋める。
-
-    Args:
-        device: Device ORM オブジェクト。
-        session: SQLAlchemy 非同期セッション（Extension 取得に使用）。
-
-    Returns:
-        DeviceRead インスタンス。
-    """
-    extension_number: str | None = None
-    extension_display_name: str | None = None
-    if device.extension_id is not None:
-        ext = await session.get(Extension, device.extension_id)
-        if ext is not None:
-            extension_number = ext.number
-            extension_display_name = ext.display_name
-
+def _to_device_read(device: Device, ext: Extension | None) -> DeviceRead:
+    """Device と（あれば）紐付く Extension から DeviceRead を組み立てる。"""
     return DeviceRead(
         id=device.id,
         mac_address=device.mac_address,
@@ -91,13 +78,42 @@ async def _build_device_read(device: Device, session: AsyncSession) -> DeviceRea
         hostname=device.hostname,
         model=device.model,
         extension_id=device.extension_id,
-        extension_number=extension_number,
-        extension_display_name=extension_display_name,
+        extension_number=ext.number if ext is not None else None,
+        extension_display_name=ext.display_name if ext is not None else None,
         provisioned=device.provisioned,
         last_seen=device.last_seen,
         active=device.active,
         created_at=device.created_at,
     )
+
+
+async def _build_device_reads(devices: list[Device], session: AsyncSession) -> list[DeviceRead]:
+    """Device のリストから DeviceRead のリストを構築する（入力順・重複を保つ）。
+
+    紐付く Extension は端末ごとではなく ID 一覧でまとめて取得する（N+1 回避）。
+    IN 句はバインド変数上限対策でチャンク分割する。
+
+    Args:
+        devices: Device ORM オブジェクトのリスト。
+        session: SQLAlchemy 非同期セッション（Extension 取得に使用）。
+
+    Returns:
+        devices と同じ順序の DeviceRead リスト。
+    """
+    ext_ids = list(dict.fromkeys(d.extension_id for d in devices if d.extension_id is not None))
+    ext_by_id: dict[int, Extension] = {}
+    for chunk in chunked(ext_ids):
+        for ext in await session.scalars(select(Extension).where(Extension.id.in_(chunk))):
+            ext_by_id[ext.id] = ext
+    return [
+        _to_device_read(d, ext_by_id.get(d.extension_id) if d.extension_id is not None else None)
+        for d in devices
+    ]
+
+
+async def _build_device_read(device: Device, session: AsyncSession) -> DeviceRead:
+    """単一 Device ORM オブジェクトから DeviceRead を構築する。"""
+    return (await _build_device_reads([device], session))[0]
 
 
 # ---------------------------------------------------------------------------
@@ -109,12 +125,9 @@ async def _build_device_read(device: Device, session: AsyncSession) -> DeviceRea
 async def list_devices(
     session: AsyncSession = Depends(get_session),
 ) -> list[DeviceRead]:
-    """デバイス一覧を返す（Extension 情報付き）。
-
-    デバイス数は少ないため N+1 で Extension を取得しても問題ない。
-    """
+    """デバイス一覧を返す（Extension 情報付き。Extension は一括取得）。"""
     devices = list(await session.scalars(select(Device).order_by(Device.id)))
-    return [await _build_device_read(d, session) for d in devices]
+    return await _build_device_reads(devices, session)
 
 
 @router.post("/sync", response_model=list[DeviceRead])
@@ -134,7 +147,7 @@ async def sync_devices(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"netd 通信エラー: {exc}",
         ) from exc
-    return [await _build_device_read(d, session) for d in devices]
+    return await _build_device_reads(devices, session)
 
 
 @router.post("/{device_id}/quick-provision", response_model=DeviceRead)
