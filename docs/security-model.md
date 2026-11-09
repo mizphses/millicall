@@ -203,8 +203,36 @@ SAML の bearer 条件は [OASIS SAML Profiles](https://docs.oasis-open.org/secu
 | 端末同期・一覧の N+1 SQL | [#83](https://github.com/mizphses/millicall/issues/83) |
 | 日付を跨ぐワークフロー時間条件 | [#84](https://github.com/mizphses/millicall/issues/84) |
 | 電話機への provision_token 配送 | [#85](https://github.com/mizphses/millicall/issues/85) |
-| OAuth・SAML・音声接続状態の単一ワーカー前提、登録数・TTL管理 | [#86](https://github.com/mizphses/millicall/issues/86) |
 | SIP 認証情報の保存暗号化と復旧設計 | [#87](https://github.com/mizphses/millicall/issues/87) |
 | MCP ログインのブラウザフローと CSRF/CSP の整合 | [#88](https://github.com/mizphses/millicall/issues/88) |
 
-監査はソース、API/プロトコルの自動テスト、依存監査を対象にした。実機の FreeSWITCH、電話機、外部 IdP、Linux netd/firewall、コンテナイメージの実行環境を使った侵入試験は含まない。OAuth と SAML replay 管理は現在も単一プロセス前提であり、SIP 保存暗号化を含む上記の課題は未解決。
+監査はソース、API/プロトコルの自動テスト、依存監査を対象にした。実機の FreeSWITCH、電話機、外部 IdP、Linux netd/firewall、コンテナイメージの実行環境を使った侵入試験は含まない。SIP 保存暗号化を含む上記の課題は未解決。OAuth・SAML replay 状態の DB 移行（#86）は次節を参照。
+
+## 認証状態の保存と対応プロセス構成（#86）
+
+MCP OAuth と SAML のリプレイ防御の状態は、core の SQLite DB に保存する。
+
+- **MCP OAuth**: クライアント登録（DCR）・認可コード・アクセス/リフレッシュトークンを `mcp_oauth_*` テーブルに保存する。認可コード・トークン・client_secret は SHA-256 ハッシュのみを保存し、DB ファイル・WAL・バックアップから有効な値を取り出せない。`/token` のクライアント認証もハッシュ同士で照合する。
+- **一回限りの消費**: 認可コードの交換とリフレッシュトークンのローテーションは条件付き `DELETE ... RETURNING` の 1 文で行う。SQLite は書き込みを直列化するため、同じ値を複数のプロセスが同時に使っても成功は 1 回だけで、残りは `invalid_grant`（HTTP 400）になる。待機は SQLite の busy timeout（既定 5 秒）の範囲で行う。
+- **SAML**: 消費済みのアサーション ID と AuthnRequest ID（InResponseTo）を `saml_consumed_ids` に SHA-256 で記録する。PRIMARY KEY への `INSERT ... ON CONFLICT DO NOTHING` の影響行数で判定し、2 つの ID は同じトランザクションで消費する。保持期間はアサーションの残り有効期間（最低で許容時刻ずれの 2 倍）と AuthnRequest の 10 分。ログイン開始時の AuthnRequest ID と遷移先は、従来どおり署名付き Cookie に保持する。
+- **失効**: ユーザーの無効化・削除・資格情報変更・session_epoch の更新・TOTP 必須化は、全プロセスで次のトークン検証から反映される。リフレッシュトークンの再利用は拒否するが、再利用を検知して同じ認可の全トークンを失効させる処理は行わない。
+- **清掃と上限**: 期限切れの行は参照時に削除し、登録時と発行時に一括で削除する。DCR は未認証で呼べるため、登録数（1,000 件）とメタデータの大きさ（16 KiB）に上限を設ける。満杯時は一度も認可されていない登録を古い順に追い出す。値の一覧は [MCP 利用](mcp.md) を参照。
+
+### 対応構成と非対応構成
+
+| 構成 | 対応 | 理由 |
+|---|---|---|
+| core 1 プロセス（既定の `uvicorn millicall.main:app`、`--workers` なし） | **対応** | — |
+| core の再起動・更新（`millicallctl update`、`docker compose restart core`） | **対応** | MCP の再認証は不要。SAML の消費済み ID も保持される |
+| 同じ data_dir / DB に対する core の複数プロセス（`uvicorn --workers N`、同じボリュームを共有する複数コンテナ） | **非対応（起動を拒否）** | 下記の音声・MCP セッション状態がプロセスローカル |
+| 複数ホストで DB を共有（NFS 上の SQLite 等） | **非対応** | SQLite のロックがネットワーク FS で保証されない |
+
+認証状態はプロセス間で共有できるが、core には次の状態がプロセス内に残る。
+
+- **ESL イベント購読**: 各プロセスが FreeSWITCH のイベントを個別に購読する。CDR の記録、着信 AI の `uuid_audio_stream` 発行、ワークフローの実行が、通話ごとにプロセスの数だけ重複する。
+- **音声 WebSocket**: 着信 AI の一回限りのチケット、AI セッション、MCP `converse` の一時エージェント、DTMF の収集、応答・終話の待機がメモリ上にある。FreeSWITCH からの WebSocket が別プロセスに届くと照合できない。
+- **MCP セッション**: Streamable HTTP の `mcp-session-id` はプロセス内に保持される。
+- **設定キャッシュ**: 管理画面で変更した設定（`totp_required` など）は、書き込んだプロセスのキャッシュだけが破棄される。
+
+core は起動時に `data_dir/core.lock` の排他ロック（flock）を取得する。同じ data_dir で 2 つ目の core が起動すると、エラーを出して起動しない。ロックはプロセスの終了時にカーネルが解放するため、異常終了後の再起動を誤って拒否しない。flock を使えないファイルシステムでは警告を出し、ガードを無効にして起動を続ける。
+
