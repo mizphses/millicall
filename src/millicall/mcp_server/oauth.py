@@ -36,7 +36,7 @@ logger = logging.getLogger("millicall")
 _AUTH_CODE_TTL = 600  # 10 分
 _ACCESS_TTL = 86400  # 24 時間
 _REFRESH_TTL = 86400 * 30  # 30 日
-_LOGIN_TICKET_TTL = 600  # ログイン往復チケットの有効期限（10 分）
+LOGIN_TICKET_TTL = 600  # ログイン往復チケットの有効期限（10 分）
 
 
 def _mask(token: str) -> str:
@@ -112,7 +112,7 @@ class MillicallOAuthProvider(
         """
         if self._signer is None:
             raise RuntimeError("OAuth signer not configured")
-        return json.loads(self._signer.decrypt(token, ttl=_LOGIN_TICKET_TTL))
+        return json.loads(self._signer.decrypt(token, ttl=LOGIN_TICKET_TTL))
 
     # -- DCR (Dynamic Client Registration) --
 

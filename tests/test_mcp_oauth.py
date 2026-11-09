@@ -9,6 +9,8 @@
 
 import base64
 import hashlib
+import html
+import re
 import secrets
 import urllib.parse
 
@@ -110,6 +112,36 @@ def _ticket(
     )
 
 
+_CSRF_FIELD_RE = re.compile(r'name="csrf_token" value="([^"]*)"')
+
+
+async def _form(client, ticket, **fields):
+    """ブラウザと同じく GET /mcp-login でフォームを取得し、callback 用の送信値を作る。
+
+    CSRF 用 Cookie は client の cookie jar に入り、hidden の csrf_token を送信値に含める。
+    """
+    page = await client.get("/mcp-login", params={"ticket": ticket})
+    assert page.status_code == 200, page.text
+    match = _CSRF_FIELD_RE.search(page.text)
+    assert match is not None
+    return {"ticket": ticket, "csrf_token": match.group(1), **fields}
+
+
+_REFRESH_RE = re.compile(r'<meta http-equiv="refresh" content="0;url=([^"]*)">')
+
+
+def _redirect_location(response):
+    """認可成功画面（200 + meta refresh）から redirect_uri への遷移先 URL を取り出す。
+
+    フォーム POST への 302 は CSP form-action 'self' によりブラウザが遮断するため、
+    callback は JS 不要の meta refresh で遷移させる（issue #88）。
+    """
+    assert response.status_code == 200, response.text
+    match = _REFRESH_RE.search(response.text)
+    assert match is not None
+    return html.unescape(match.group(1))
+
+
 async def _register_client(mcp_client, redirect_uris=None):
     reg = await mcp_client.post(
         "/register",
@@ -167,7 +199,7 @@ async def test_login_callback_rejects_bad_password(mcp_app, mcp_client):
     await _make_user(mcp_app, username="u1", password="RightPass1", role="admin")
     r = await mcp_client.post(
         "/mcp-login/callback",
-        data={"ticket": _ticket(mcp_app), "username": "u1", "password": "WrongPass"},
+        data=await _form(mcp_client, ticket=_ticket(mcp_app), username="u1", password="WrongPass"),
     )
     assert r.status_code == 401
 
@@ -176,7 +208,9 @@ async def test_login_callback_rejects_disallowed_role(mcp_app, mcp_client):
     await _make_user(mcp_app, username="guest1", password="GuestPass1", role="guest")
     r = await mcp_client.post(
         "/mcp-login/callback",
-        data={"ticket": _ticket(mcp_app), "username": "guest1", "password": "GuestPass1"},
+        data=await _form(
+            mcp_client, ticket=_ticket(mcp_app), username="guest1", password="GuestPass1"
+        ),
     )
     assert r.status_code == 403
 
@@ -188,7 +222,9 @@ async def test_login_callback_rejects_disabled_user(mcp_app, mcp_client):
     )
     r = await mcp_client.post(
         "/mcp-login/callback",
-        data={"ticket": _ticket(mcp_app), "username": "disabled1", "password": "DisPass1"},
+        data=await _form(
+            mcp_client, ticket=_ticket(mcp_app), username="disabled1", password="DisPass1"
+        ),
     )
     assert r.status_code == 403
 
@@ -212,14 +248,13 @@ async def test_full_oauth_flow(mcp_app, mcp_client):
     client_id = await _register_client(mcp_client)
     verifier, challenge = _pkce()
 
-    # ログイン → 認可コード（302 redirect）。認可パラメータは署名チケット経由。
+    # ログイン → 認可コード（meta refresh で redirect_uri へ）。認可パラメータは署名チケット経由。
     ticket = _ticket(mcp_app, client_id=client_id, code_challenge=challenge, state="s1")
     cb = await mcp_client.post(
         "/mcp-login/callback",
-        data={"ticket": ticket, "username": "flow", "password": "FlowPass1"},
+        data=await _form(mcp_client, ticket=ticket, username="flow", password="FlowPass1"),
     )
-    assert cb.status_code == 302
-    location = cb.headers["location"]
+    location = _redirect_location(cb)
     qs = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)
     assert qs["state"] == ["s1"]
     code = qs["code"][0]
@@ -262,13 +297,14 @@ async def test_wrong_pkce_verifier_rejected(mcp_app, mcp_client):
     _, challenge = _pkce()
     cb = await mcp_client.post(
         "/mcp-login/callback",
-        data={
-            "ticket": _ticket(mcp_app, client_id=client_id, code_challenge=challenge),
-            "username": "pk",
-            "password": "PkPass1",
-        },
+        data=await _form(
+            mcp_client,
+            ticket=_ticket(mcp_app, client_id=client_id, code_challenge=challenge),
+            username="pk",
+            password="PkPass1",
+        ),
     )
-    code = urllib.parse.parse_qs(urllib.parse.urlparse(cb.headers["location"]).query)["code"][0]
+    code = urllib.parse.parse_qs(urllib.parse.urlparse(_redirect_location(cb)).query)["code"][0]
     tok = await mcp_client.post(
         "/token",
         data={
@@ -315,13 +351,14 @@ async def test_disallowed_host_rejected_on_mcp(mcp_app, mcp_client):
     verifier, challenge = _pkce()
     cb = await mcp_client.post(
         "/mcp-login/callback",
-        data={
-            "ticket": _ticket(mcp_app, client_id=client_id, code_challenge=challenge),
-            "username": "host",
-            "password": "HostPass1",
-        },
+        data=await _form(
+            mcp_client,
+            ticket=_ticket(mcp_app, client_id=client_id, code_challenge=challenge),
+            username="host",
+            password="HostPass1",
+        ),
     )
-    code = urllib.parse.parse_qs(urllib.parse.urlparse(cb.headers["location"]).query)["code"][0]
+    code = urllib.parse.parse_qs(urllib.parse.urlparse(_redirect_location(cb)).query)["code"][0]
     tok = await mcp_client.post(
         "/token",
         data={
@@ -350,10 +387,9 @@ async def test_disallowed_host_rejected_on_mcp(mcp_app, mcp_client):
 async def test_login_callback_rejects_tampered_ticket(mcp_app, mcp_client):
     await _make_user(mcp_app, username="t1", password="TamperPass1", role="admin")
     ticket = _ticket(mcp_app, client_id="cli")
-    r = await mcp_client.post(
-        "/mcp-login/callback",
-        data={"ticket": ticket + "x", "username": "t1", "password": "TamperPass1"},
-    )
+    # 正規チケットで取得したフォーム（CSRF は正当）から、ticket だけを改ざんして送る。
+    data = await _form(mcp_client, ticket=ticket, username="t1", password="TamperPass1")
+    r = await mcp_client.post("/mcp-login/callback", data={**data, "ticket": ticket + "x"})
     assert r.status_code == 400
 
 
@@ -371,7 +407,7 @@ async def test_login_callback_rejects_unregistered_redirect_uri(mcp_app, mcp_cli
     )
     r = await mcp_client.post(
         "/mcp-login/callback",
-        data={"ticket": ticket, "username": "rr", "password": "RedirPass1"},
+        data=await _form(mcp_client, ticket=ticket, username="rr", password="RedirPass1"),
     )
     assert r.status_code == 400
 
@@ -383,7 +419,7 @@ async def test_login_callback_rejects_unknown_client(mcp_app, mcp_client):
     ticket = _ticket(mcp_app, client_id="never-registered", code_challenge=challenge)
     r = await mcp_client.post(
         "/mcp-login/callback",
-        data={"ticket": ticket, "username": "uc", "password": "UnknownPass1"},
+        data=await _form(mcp_client, ticket=ticket, username="uc", password="UnknownPass1"),
     )
     assert r.status_code == 400
 
@@ -486,13 +522,13 @@ async def test_mcp_callback_throttle_username_lockout(tmp_path):
             for _ in range(3):
                 r = await c.post(
                     "/mcp-login/callback",
-                    data={"ticket": ticket, "username": "th1", "password": "WrongPass"},
+                    data=await _form(c, ticket=ticket, username="th1", password="WrongPass"),
                 )
                 assert r.status_code == 401
             # 4 回目は 429
             r = await c.post(
                 "/mcp-login/callback",
-                data={"ticket": ticket, "username": "th1", "password": "WrongPass"},
+                data=await _form(c, ticket=ticket, username="th1", password="WrongPass"),
             )
             assert r.status_code == 429
 
@@ -508,11 +544,11 @@ async def test_mcp_callback_throttle_retry_after_header(tmp_path):
             for _ in range(2):
                 await c.post(
                     "/mcp-login/callback",
-                    data={"ticket": ticket, "username": "th2", "password": "WrongPass"},
+                    data=await _form(c, ticket=ticket, username="th2", password="WrongPass"),
                 )
             r = await c.post(
                 "/mcp-login/callback",
-                data={"ticket": ticket, "username": "th2", "password": "WrongPass"},
+                data=await _form(c, ticket=ticket, username="th2", password="WrongPass"),
             )
             assert r.status_code == 429
             assert r.headers.get("Retry-After") == "120"
@@ -534,7 +570,7 @@ async def test_mcp_callback_success_clears_counter(tmp_path):
             for _ in range(2):
                 r = await c.post(
                     "/mcp-login/callback",
-                    data={"ticket": ticket, "username": "th3", "password": "WrongPass"},
+                    data=await _form(c, ticket=ticket, username="th3", password="WrongPass"),
                 )
                 assert r.status_code == 401
 
@@ -542,16 +578,16 @@ async def test_mcp_callback_success_clears_counter(tmp_path):
             ticket2 = _ticket(app, client_id=client_id, code_challenge=challenge, state="ok")
             r = await c.post(
                 "/mcp-login/callback",
-                data={"ticket": ticket2, "username": "th3", "password": "Passw0rd1"},
+                data=await _form(c, ticket=ticket2, username="th3", password="Passw0rd1"),
             )
-            assert r.status_code == 302
+            assert _redirect_location(r).startswith("https://claude.ai/cb?")
 
             # 再び 2 回失敗しても 429 にならない（カウンタがリセット済み）
             ticket3 = _ticket(app, client_id="cli")
             for _ in range(2):
                 r = await c.post(
                     "/mcp-login/callback",
-                    data={"ticket": ticket3, "username": "th3", "password": "WrongPass"},
+                    data=await _form(c, ticket=ticket3, username="th3", password="WrongPass"),
                 )
                 assert r.status_code == 401
 
@@ -572,12 +608,12 @@ async def test_mcp_callback_disabled_user_records_failure(tmp_path):
             for _ in range(3):
                 await c.post(
                     "/mcp-login/callback",
-                    data={"ticket": ticket, "username": "th4", "password": "Passw0rd1"},
+                    data=await _form(c, ticket=ticket, username="th4", password="Passw0rd1"),
                 )
             # 4 回目は 429（失敗記録が蓄積されロックアウト）
             r = await c.post(
                 "/mcp-login/callback",
-                data={"ticket": ticket, "username": "th4", "password": "Passw0rd1"},
+                data=await _form(c, ticket=ticket, username="th4", password="Passw0rd1"),
             )
             assert r.status_code == 429
 

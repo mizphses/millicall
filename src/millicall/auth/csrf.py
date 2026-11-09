@@ -15,6 +15,15 @@
   /mcp                — OAuth Bearer 認証
 
 GET / HEAD / OPTIONS は常に免除する。
+
+フォームトークン検証パス（除外ではない）:
+  /mcp-login/callback — JS を使わない通常の HTML form から POST されるため
+    X-CSRF-Token ヘッダーを付けられない（issue #88）。代わりに GET /mcp-login が
+    発行する専用 Cookie（HttpOnly / SameSite=Strict / path=/mcp-login）と同値の
+    hidden フィールド `csrf_token` を double-submit で照合する。照合本体は
+    セッション Cookie の有無に関係なくハンドラが `verify_form_csrf()` で必ず行い
+    （ログイン CSRF 対策を兼ねる）、ミドルウェアはセッション Cookie 付き要求に対し
+    専用 Cookie の存在を前段で要求する。
 """
 
 import hmac
@@ -40,10 +49,33 @@ _EXEMPT_PREFIXES = (
 # CSRF チェック対象のメソッド（状態変更リクエスト）
 _CHECKED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+# MCP ログインフォーム用 double-submit Cookie 名と、そのフォームトークンで検証するパス。
+# パスは完全一致のみ（prefix 一致にすると配下の将来のルートまで巻き込むため）。
+MCP_LOGIN_CSRF_COOKIE = "millicall_mcp_login_csrf"
+MCP_LOGIN_CSRF_COOKIE_PATH = "/mcp-login"
+_FORM_TOKEN_PATHS = frozenset({"/mcp-login/callback"})
+
 
 def _is_exempt(path: str) -> bool:
     """パスが CSRF チェック除外対象かどうかを返す（境界一致）。"""
     return any(path == prefix or path.startswith(prefix + "/") for prefix in _EXEMPT_PREFIXES)
+
+
+def _is_form_token_path(path: str) -> bool:
+    """ヘッダーの代わりにフォームトークンで CSRF を検証するパスかどうか（完全一致）。"""
+    return path in _FORM_TOKEN_PATHS
+
+
+def verify_form_csrf(request: Request, form_token: str) -> bool:
+    """MCP ログインフォームの `csrf_token` を専用 Cookie と定数時間比較する。
+
+    どちらかが欠けていれば False。クロスサイト POST では SameSite=Strict の
+    Cookie が送られず、攻撃者は HttpOnly Cookie の値を読めないため一致させられない。
+    """
+    cookie = request.cookies.get(MCP_LOGIN_CSRF_COOKIE)
+    if not cookie or not form_token:
+        return False
+    return hmac.compare_digest(cookie.encode(), form_token.encode())
 
 
 class CsrfMiddleware(BaseHTTPMiddleware):
@@ -63,6 +95,17 @@ class CsrfMiddleware(BaseHTTPMiddleware):
             and not _is_exempt(request.url.path)
             and request.cookies.get(session_cookie_name)  # セッション Cookie あり = Cookie 認証
         ):
+            if _is_form_token_path(request.url.path):
+                # 通常の HTML form はヘッダーを送れない。専用 Cookie が無い（= クロスサイト
+                # または /mcp-login を経ていない）要求はここで落とし、Cookie とフォーム値の
+                # 照合はハンドラの verify_form_csrf() が必ず行う。
+                if not request.cookies.get(MCP_LOGIN_CSRF_COOKIE):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "CSRF token missing or invalid"},
+                    )
+                return await call_next(request)
+
             csrf_cookie = request.cookies.get(cookie_name)
             csrf_header = request.headers.get("X-CSRF-Token")
 

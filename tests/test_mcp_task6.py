@@ -24,6 +24,7 @@ from httpx import ASGITransport, AsyncClient
 from millicall.config import Settings
 from millicall.main import create_app
 from millicall.models import Contact, Extension, Trunk
+from tests.test_mcp_oauth import _form, _redirect_location
 
 
 @pytest.fixture(autouse=True)
@@ -367,9 +368,9 @@ async def test_oauth_bearer_tools_call(mcp_app, mcp_client):
     )
     cb = await mcp_client.post(
         "/mcp-login/callback",
-        data={"ticket": ticket, "username": "flow", "password": "FlowPass1"},
+        data=await _form(mcp_client, ticket=ticket, username="flow", password="FlowPass1"),
     )
-    code = urllib.parse.parse_qs(urllib.parse.urlparse(cb.headers["location"]).query)["code"][0]
+    code = urllib.parse.parse_qs(urllib.parse.urlparse(_redirect_location(cb)).query)["code"][0]
     tok = await mcp_client.post(
         "/token",
         data={
