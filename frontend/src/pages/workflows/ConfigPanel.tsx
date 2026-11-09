@@ -28,6 +28,36 @@ interface ConfigPanelProps {
   currentWorkflowId: number;
 }
 
+/** 時間条件ノード（start_time / end_time / days_of_week を持つ）かどうか。 */
+function isTimeConditionSchema(schema: ConfigSchemaField[]): boolean {
+  const keys = new Set(schema.map((f) => f.key));
+  return keys.has("start_time") && keys.has("end_time") && keys.has("days_of_week");
+}
+
+/** 時間条件ノードの設定説明と、開始=終了の入力エラー表示。 */
+function TimeConditionHint({ config }: { config: Record<string, unknown> }) {
+  const sameTime =
+    typeof config.start_time === "string" &&
+    config.start_time !== "" &&
+    config.start_time === config.end_time;
+  return (
+    <div className={css({ fontSize: "xs", color: "text.muted", lineHeight: "1.6" })}>
+      <ul className={css({ listStyle: "disc", pl: "4" })}>
+        <li>開始が終了より後の場合は、翌日までの区間として扱います（例: 22:00〜06:00）。</li>
+        <li>
+          曜日は営業開始日の曜日で判定します（金曜 22:00〜06:00 は土曜 06:00 の直前まで金曜の営業）。
+        </li>
+        <li>開始と終了を同じ時刻にすることはできません。</li>
+      </ul>
+      {sameTime && (
+        <p role="alert" className={css({ color: "danger.text", mt: "1" })}>
+          開始時刻と終了時刻が同じです。保存できません。
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function ConfigPanel({
   nodeId,
   nodeLabel,
@@ -91,6 +121,7 @@ export function ConfigPanel({
 
       {/* 動的フィールド */}
       <div className={css({ display: "flex", flexDirection: "column", gap: "4", flex: 1, overflowY: "auto" })}>
+        {isTimeConditionSchema(schema) && <TimeConditionHint config={config} />}
         {schema.map((field) => (
           <SchemaField
             key={field.key}

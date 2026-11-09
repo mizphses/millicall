@@ -13,7 +13,7 @@ logic.py を実装する。
 from __future__ import annotations
 
 import socket
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -428,6 +428,138 @@ async def test_time_condition_uses_real_clock_when_no_now() -> None:
     # 結果は実時間依存なので match/no_match どちらでもよい（エラーにならないことを確認）
     result = await handle_time_condition(node, ctx)
     assert result in ("match", "no_match")
+
+
+# --------------------------------------------------------------------------- #
+# time_condition — 日付を跨ぐ区間（開始 > 終了）
+# 2024-01-05 は金曜、01-06 は土曜、01-07 は日曜、01-08 は月曜
+# --------------------------------------------------------------------------- #
+
+
+async def _run_time_condition(now: datetime, **kwargs) -> str:
+    ctx = make_ctx()
+    ctx.now = lambda: now
+    return await handle_time_condition(make_time_condition_node(**kwargs), ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (datetime(2024, 1, 5, 21, 59), "no_match"),  # 開始の1分前
+        (datetime(2024, 1, 5, 22, 0), "match"),  # 開始ちょうど（含む）
+        (datetime(2024, 1, 5, 23, 59), "match"),
+        (datetime(2024, 1, 6, 0, 0), "match"),  # 日付をまたいだ直後
+        (datetime(2024, 1, 6, 5, 59), "match"),  # 翌 05:59
+        (datetime(2024, 1, 6, 5, 59, 59), "match"),  # 秒を含んでも 06:00 前
+        (datetime(2024, 1, 6, 6, 0), "no_match"),  # 06:00 境界（含まない）
+        (datetime(2024, 1, 6, 12, 0), "no_match"),
+    ],
+)
+async def test_time_condition_overnight_boundaries(now: datetime, expected: str) -> None:
+    """22:00〜06:00 の境界。曜日は全日指定。"""
+    all_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    assert (
+        await _run_time_condition(now, start_time="22:00", end_time="06:00", days_of_week=all_days)
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_time_condition_overnight_friday_spills_into_saturday() -> None:
+    """金 22:00〜06:00: 土曜 01:00 は「金曜の営業」。土曜が対象外でも match."""
+    result = await _run_time_condition(
+        datetime(2024, 1, 6, 1, 0), start_time="22:00", end_time="06:00", days_of_week=["fri"]
+    )
+    assert result == "match"
+
+
+@pytest.mark.asyncio
+async def test_time_condition_overnight_early_morning_uses_previous_day() -> None:
+    """金曜 01:00 は木曜の営業。木曜が対象外（金のみ）なら no_match."""
+    now = datetime(2024, 1, 5, 1, 0)
+    kw = {"start_time": "22:00", "end_time": "06:00"}
+    assert await _run_time_condition(now, days_of_week=["fri"], **kw) == "no_match"
+    assert await _run_time_condition(now, days_of_week=["thu"], **kw) == "match"
+
+
+@pytest.mark.asyncio
+async def test_time_condition_overnight_saturday_night_not_matched_when_only_friday() -> None:
+    """金のみ指定: 土曜 23:00 は土曜開始の営業なので no_match."""
+    result = await _run_time_condition(
+        datetime(2024, 1, 6, 23, 0), start_time="22:00", end_time="06:00", days_of_week=["fri"]
+    )
+    assert result == "no_match"
+
+
+@pytest.mark.asyncio
+async def test_time_condition_overnight_sunday_to_monday_week_wrap() -> None:
+    """日 22:00〜06:00 の営業は月曜朝まで。月曜 01:00 は日曜扱い（週をまたぐ）."""
+    kw = {"start_time": "22:00", "end_time": "06:00", "days_of_week": ["sun"]}
+    assert await _run_time_condition(datetime(2024, 1, 8, 1, 0), **kw) == "match"
+    # 月曜 22:00 は月曜開始なので対象外
+    assert await _run_time_condition(datetime(2024, 1, 8, 23, 0), **kw) == "no_match"
+
+
+@pytest.mark.asyncio
+async def test_time_condition_overnight_empty_days_never_matches() -> None:
+    """曜日が空なら日跨ぎでも常に no_match（現行の曜日指定の意味を維持）."""
+    result = await _run_time_condition(
+        datetime(2024, 1, 5, 23, 0), start_time="22:00", end_time="06:00", days_of_week=[]
+    )
+    assert result == "no_match"
+
+
+@pytest.mark.asyncio
+async def test_time_condition_overnight_timezone_differs_from_utc() -> None:
+    """UTC では木曜でも JST では金曜になる時刻で、JST のローカル日付・曜日で判定する."""
+    kw = {"start_time": "22:00", "end_time": "06:00", "timezone": "Asia/Tokyo"}
+    # 2024-01-04 16:00Z = JST 2024-01-05(金) 01:00 → 木曜開始の営業
+    utc_now = datetime(2024, 1, 4, 16, 0, tzinfo=UTC)
+    assert await _run_time_condition(utc_now, days_of_week=["thu"], **kw) == "match"
+    assert await _run_time_condition(utc_now, days_of_week=["fri"], **kw) == "no_match"
+    # 2024-01-05 14:00Z = JST 金曜 23:00 → 金曜開始の営業（UTC では 14:00 で区間外）
+    assert (
+        await _run_time_condition(
+            datetime(2024, 1, 5, 14, 0, tzinfo=UTC), days_of_week=["fri"], **kw
+        )
+        == "match"
+    )
+    # 2024-01-05 21:00Z = JST 土曜 06:00 → 終了ちょうどで no_match
+    assert (
+        await _run_time_condition(
+            datetime(2024, 1, 5, 21, 0, tzinfo=UTC), days_of_week=["fri"], **kw
+        )
+        == "no_match"
+    )
+
+
+@pytest.mark.asyncio
+async def test_time_condition_same_day_regression_with_weekday_filter() -> None:
+    """通常の日中区間は従来どおり。評価時点の曜日で判定し、前日扱いにならない."""
+    kw = {"start_time": "09:00", "end_time": "18:00", "days_of_week": ["fri"]}
+    assert await _run_time_condition(datetime(2024, 1, 5, 9, 0), **kw) == "match"
+    assert await _run_time_condition(datetime(2024, 1, 5, 17, 59), **kw) == "match"
+    assert await _run_time_condition(datetime(2024, 1, 5, 18, 0), **kw) == "no_match"
+    # 土曜 10:00 は土曜が対象外
+    assert await _run_time_condition(datetime(2024, 1, 6, 10, 0), **kw) == "no_match"
+    # 木曜 10:00 に対して金曜指定: 前日にずらさないこと
+    assert await _run_time_condition(datetime(2024, 1, 4, 10, 0), **kw) == "no_match"
+
+
+@pytest.mark.asyncio
+async def test_time_condition_start_equals_end_is_no_match_without_error() -> None:
+    """保存済みの開始=終了ノードは実行時に例外を出さず no_match（24時間扱いにもしない）."""
+    all_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    for now in (
+        datetime(2024, 1, 5, 9, 0),
+        datetime(2024, 1, 5, 12, 0),
+        datetime(2024, 1, 5, 0, 0),
+    ):
+        result = await _run_time_condition(
+            now, start_time="09:00", end_time="09:00", days_of_week=all_days
+        )
+        assert result == "no_match"
 
 
 # --------------------------------------------------------------------------- #
