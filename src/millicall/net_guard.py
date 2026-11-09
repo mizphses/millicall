@@ -12,6 +12,13 @@ provisioning/service.py・ai/registry.py 等の外部 HTTP 発信箇所で再利
     ``_check_device_ip`` で loopback/link-local 等を弾き、_PinnedTransport + no-redirect。
   * ai/registry (M5): LLM base_url はプライベート IP を拒否; VOICEVOX engine_url は
     LAN (RFC1918) を許可しつつ loopback/link-local/metadata を拒否 + pin + no-redirect。
+
+イベントループ (issue #81):
+  ``_resolve_and_check_ssrf*`` / ``make_pinned_transport`` は ``socket.getaddrinfo`` で
+  同期的に DNS 解決するため、async 文脈から直接呼ぶと解決が終わるまでループ（音声 WS・
+  ESL イベント処理）が止まる。async 文脈からは ``asyncio.to_thread`` 経由で呼ぶこと
+  （workflows/handlers/logic.py・app_settings/saml_metadata.py・ai/registry.py の
+  ``build_llm_async`` / ``build_tts_async`` がこの流儀）。
 """
 
 from __future__ import annotations

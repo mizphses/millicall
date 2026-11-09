@@ -93,7 +93,7 @@ async def _select_llm(session: AsyncSession, box: SecretBox):
         raise NoLlmProviderError("no enabled LLM provider configured")
     config = json.loads(provider.config_json or "{}")
     api_key = box.decrypt(provider.api_key_encrypted) if provider.api_key_encrypted else None
-    return registry.build_llm(provider.kind, config, api_key)
+    return await registry.build_llm_async(provider.kind, config, api_key)
 
 
 async def generate_definition(

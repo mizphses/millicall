@@ -168,8 +168,9 @@ async def build_conversation_session(
         tts_kind, tts_cfg, tts_key = await _load_provider(db, box, agent.tts_provider_id)
         stt_kind, stt_cfg, stt_key = await _load_provider(db, box, agent.stt_provider_id)
 
-    llm = ai_registry.build_llm(llm_kind, llm_cfg, llm_key)
-    tts = ai_registry.build_tts(tts_kind, tts_cfg, tts_key)
+    # DNS 解決（SSRF ガード）を伴う kind はスレッドで構築し、ループを止めない（issue #81）
+    llm = await ai_registry.build_llm_async(llm_kind, llm_cfg, llm_key)
+    tts = await ai_registry.build_tts_async(tts_kind, tts_cfg, tts_key)
     stt = ai_registry.build_stt(stt_kind, stt_cfg, stt_key)
     # lock/reconnect を注入することで、共有 ESL 接続の書き込み直列化（I6）と
     # 接続断時の自動張り直しを実現する。省略時は per-call 専用接続・再接続なし。

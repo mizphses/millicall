@@ -193,8 +193,8 @@ async def resolve_default_providers(
 
     return ResolvedProviders(
         agent=agent,
-        llm=ai_registry.build_llm(llm_kind, llm_cfg, llm_key),
-        tts=ai_registry.build_tts(tts_kind, tts_cfg, tts_key),
+        llm=await ai_registry.build_llm_async(llm_kind, llm_cfg, llm_key),
+        tts=await ai_registry.build_tts_async(tts_kind, tts_cfg, tts_key),
         stt=ai_registry.build_stt(stt_kind, stt_cfg, stt_key),
     )
 

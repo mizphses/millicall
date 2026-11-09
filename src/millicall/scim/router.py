@@ -39,8 +39,6 @@ import re
 import secrets
 from typing import Any
 
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -49,7 +47,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
-from millicall.auth.security import bump_session_epoch, hash_password
+from millicall.auth.hashing import hash_password_async, verify_password_async
+from millicall.auth.security import bump_session_epoch
 from millicall.deps import get_session, require_admin
 from millicall.gen import generate_password
 from millicall.models import AppSetting, ScimGroup, ScimGroupMember, User
@@ -68,8 +67,6 @@ _SCHEMA_GROUP = "urn:ietf:params:scim:schemas:core:2.0:Group"
 _SCHEMA_LIST = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 _SCHEMA_ERROR = "urn:ietf:params:scim:api:messages:2.0:Error"
 _SCHEMA_PATCHOP = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
-
-_hasher = PasswordHasher()
 
 # PATCH remove の Entra 形式パス members[value eq "123"] を解析する正規表現。
 _MEMBER_PATH_RE = re.compile(r'^members\[value\s+eq\s+"?(?P<value>[^"\]]+)"?\]$')
@@ -136,14 +133,13 @@ async def _verify_bearer(request: Request, session: AsyncSession) -> None:
             detail="SCIM not configured",
         )
 
-    try:
-        _hasher.verify(token_hash, provided_token)
-    except VerifyMismatchError as exc:
+    # Argon2 はイベントループ外（上限付き専用 executor）で計算する（issue #81）
+    if not await verify_password_async(token_hash, provided_token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             headers={"WWW-Authenticate": "Bearer"},
             detail="Invalid Bearer token",
-        ) from exc
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +255,7 @@ async def rotate_scim_token(
     監査: scim.token.rotate
     """
     plaintext = f"scim_{generate_password(48)}"
-    token_hash = _hasher.hash(plaintext)
+    token_hash = await hash_password_async(plaintext)
 
     # AppSetting にハッシュを保存（upsert）
     row = await session.get(AppSetting, _SCIM_TOKEN_HASH_KEY)
@@ -497,7 +493,7 @@ async def create_user(
             return _scim_error(409, f"email '{email}' already exists", "uniqueness")
 
     # 使用不可パスワード（SCIM ユーザーはローカルログイン不可）
-    unusable_pw = hash_password(f"__scim_unusable_{secrets.token_hex(16)}__")
+    unusable_pw = await hash_password_async(f"__scim_unusable_{secrets.token_hex(16)}__")
 
     user = User(
         username=username,
