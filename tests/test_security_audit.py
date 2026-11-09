@@ -12,18 +12,23 @@ from fastapi import FastAPI
 from mcp.server.auth.provider import TokenError
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from millicall.auth.security import hash_password
 from millicall.media.audio_fork import register_media_ws
 from millicall.media.call_control import EslCallControl
 from millicall.media.tickets import MediaStreamTickets
 from millicall.media.vad import VadSegmenter
-from millicall.models import User
+from millicall.models import McpOAuthCode, McpOAuthToken, User
 from millicall.net_guard import _is_blocked_ip, _PinnedTransport
 from millicall.network.validation import is_valid_hostname, is_valid_interface
 from tests.test_mcp_oauth import _register_client, _ticket
 from tests.test_totp import _setup_and_enable_totp
+
+
+async def _count(app, model, *where):
+    async with app.state.sessionmaker() as db:
+        return await db.scalar(select(func.count()).select_from(model).where(*where))
 
 
 async def _grant(app, username):
@@ -36,7 +41,7 @@ async def _grant(app, username):
     )
     await provider.register_client(client)
     state = await provider._current_user_state(username)
-    code = provider.create_auth_code(
+    code = await provider.create_auth_code(
         client_id=client.client_id,
         username=username,
         code_challenge="challenge",
@@ -145,7 +150,7 @@ async def test_mcp_login_requires_totp(client, app, user_factory):
     for code in ("", "invalid"):
         response = await client.post("/mcp-login/callback", data={**data, "code": code})
         assert response.status_code == 401
-        assert not app.state.mcp_oauth_provider._auth_codes
+        assert await _count(app, McpOAuthCode) == 0
     response = await client.post(
         "/mcp-login/callback", data={**data, "code": pyotp.TOTP(secret).now()}
     )
@@ -160,7 +165,7 @@ async def test_oauth_code_is_single_use_under_concurrency(app, user_factory):
         return_exceptions=True,
     )
     assert sum(isinstance(r, TokenError) for r in results) == 1
-    assert len(provider._access_tokens) == 1
+    assert await _count(app, McpOAuthToken, McpOAuthToken.kind == "access") == 1
 
 
 async def test_oauth_code_cannot_survive_password_reset(app, user_factory):
@@ -172,7 +177,7 @@ async def test_oauth_code_cannot_survive_password_reset(app, user_factory):
         await db.commit()
     with pytest.raises(TokenError):
         await provider.exchange_authorization_code(client, code)
-    assert not provider._access_tokens
+    assert await _count(app, McpOAuthToken) == 0
 
 
 @pytest.mark.parametrize("recreate", [False, True])
@@ -218,7 +223,7 @@ async def test_oauth_wrong_resource_rejected(app, user_factory):
     provider, client, code = await _grant(app, username)
     state = await provider._current_user_state(username)
     with pytest.raises(ValueError, match="resource"):
-        provider.create_auth_code(
+        await provider.create_auth_code(
             client_id=client.client_id,
             username=username,
             code_challenge="x",

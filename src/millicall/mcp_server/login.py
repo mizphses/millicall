@@ -239,7 +239,7 @@ async def mcp_login_callback(
         await session.commit()
 
     try:
-        code = provider.create_auth_code(
+        code = await provider.create_auth_code(
             client_id=client_id,
             username=username,
             code_challenge=code_challenge,
