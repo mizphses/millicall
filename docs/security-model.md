@@ -34,7 +34,7 @@ millicall はフレッツ光電話の HGW 配下に設置する LAN 内 PBX で�
 | CSRF 攻撃 | Double-submit Cookie（`millicall_csrf` + `X-CSRF-Token` ヘッダ） |
 | SIP フラッド / 不正発信 | nftables WAN 遮断 + FreeSWITCH ACL + 発信権限制御 |
 | トールフラウド（無断国際発信） | 内線ごとの発信権限（`calling_permission`）、国際発信デフォルト禁止 |
-| 秘密情報漏洩 | API キー・Tailscale auth key・TOTP secret を DB 内で Fernet 暗号化。SCIM トークンは Argon2 ハッシュ |
+| 秘密情報漏洩 | API キー・Tailscale auth key・TOTP secret・SIP 内線/トランクのパスワードを DB 内で Fernet 暗号化。SCIM トークンは Argon2 ハッシュ。バックアップはパスフレーズで暗号化 |
 | IdP なりすまし（SAML） | IdP 証明書の out-of-band 事前共有、XSW/XXE 対策、origin 保護 |
 | Docker socket 経由の特権昇格 | socket-proxy（Tecnativa）で最小 API のみ許可。core は raw socket に非接触 |
 | netd 特権の悪用 | UNIX ソケット（SO_PEERCRED で core UID のみ接続可）。入力再検証。`shell=False` の argv |
@@ -125,10 +125,46 @@ MILLICALL_SIP_REJECT_ANONYMOUS=false   # デフォルト・変更しないこと
 | プロバイダ API キー | DB 内 Fernet 暗号化 |
 | Tailscale auth key | DB 内 SecretBox 暗号化 |
 | TOTP シークレット | DB 内 Fernet 暗号化 |
-| SIP 内線・トランクのパスワード | **現状は DB と生成 XML に平文保存**。data ディレクトリの権限で保護。暗号化・移行設計は [#87](https://github.com/mizphses/millicall/issues/87) |
+| SIP 内線・トランクのパスワード | DB 内 SecretBox（Fernet）暗号化。FreeSWITCH XML と電話機 cfg には仕様上平文で出力し、権限で保護（下記「SIP 認証情報の保存と鍵管理」） |
 | SCIM トークン | Argon2 ハッシュ（平文は一度だけ表示） |
 | TOTP リカバリコード | Argon2 ハッシュ（一度だけ表示） |
 | 管理者初期パスワード | 起動ログに一度だけ表示。DB には Argon2 ハッシュ |
+
+---
+
+## SIP 認証情報の保存と鍵管理
+
+### どこに平文が残るか
+
+| 場所 | 形式 | 保護 |
+|---|---|---|
+| DB（`data/millicall.db` と WAL） | `extensions.sip_password_encrypted` / `trunks.password_encrypted` に Fernet 暗号文のみ | master_key（`data/secrets.json`） |
+| 通常ログ | 平文・暗号文とも出さない（`Extension`/`Trunk` の `repr` からも除外） | — |
+| バックアップ（`millicallctl backup`） | tar.gz を AES-256-CBC（PBKDF2-SHA256 60 万回）で暗号化 | パスフレーズ。成果物は 0600 |
+| FreeSWITCH 設定（`data/freeswitch/directory/default/*.xml`, `sip_profiles/external_*.xml`） | **平文**（FreeSWITCH の仕様上必要） | ファイル 0600・ディレクトリ 0700・`data/` 0700。core と FreeSWITCH は root 実行 |
+| 電話機 cfg（`/provisioning/...` の応答） | **平文**（端末が登録に使う） | LAN 制限 + 登録済み端末の IP 一致 + ワンタイムトークン（[#85](https://github.com/mizphses/millicall/issues/85)） |
+| credentials API（`GET /api/extensions/{id}/credentials`） | **平文** | 管理者限定。閲覧は監査ログに記録（パスワードは記録しない） |
+
+平文が必要になるのは、FreeSWITCH 設定の生成、電話機 cfg の描画、credentials API の応答の直前だけです。復号はそこで都度行います。
+
+### 復号に失敗したとき
+
+master_key が DB と一致しない場合（`secrets.json` を失った、別環境のものを置いた等）、空パスワードで動作を続けることはありません（fail-closed）。
+
+- 起動時に全件の復号を試し、失敗した内線とトランクを ERROR ログに出します。`/healthz` は HTTP 200 のまま `{"status": "degraded", "sip_credentials": "undecryptable"}` を返します。200 を維持するのは、compose の healthcheck が core を落とすと復旧操作もできなくなるためです。
+- FreeSWITCH 設定は書き換えず、直前に生成した設定のまま動作します。
+- credentials API・電話機 cfg・設定の再生成を伴う API は 503 を返します。
+
+### 移行（マイグレーション 0027）
+
+既存の平文列は 0027 で暗号化列へ移し、旧列は削除します。平文と暗号文が混在する期間はありません。core 起動時に `secrets.json` を読み、その master_key を alembic へ渡します。暗号化すべき行があるのに鍵を渡せない場合、0027 は失敗します。移行直後には `VACUUM` と `wal_checkpoint(TRUNCATE)` を実行し、旧列の平文を SQLite の空きページと WAL から消します。downgrade では鍵で復号して平文列へ戻します。
+
+移行してもパスワード自体は変わりません。移行前の DB ファイル・バックアップ・ログに平文が残っている可能性がある場合は、移行後に内線パスワードを再生成してください（[運用手順](ops/deployment.md#sip-認証情報の再生成と復旧)）。トランクのパスワードは HGW またはプロバイダ側で変更してから、管理画面で再入力します。
+
+### 将来の検討事項
+
+- **内線の a1-hash 化**: FreeSWITCH は `a1-hash`（`MD5(user:realm:password)`）で平文パスワードを XML に置かずに認証できます。ただし realm に依存するため、子 LAN の適用や tailnet 経由の内線で realm が変わると登録できなくなる問題が報告されており、今回は見送りました。トランクは相手先へ認証するため平文が必要です。
+- **鍵ローテーション**: SecretBox は単一鍵です。MultiFernet による鍵の追加と再暗号化は別 issue の候補です。現状、鍵を変えるには `recover_sip` で内線パスワードを再生成し、トランクを再入力する必要があります。鍵の喪失と同じ扱いです。
 
 ---
 
@@ -204,7 +240,7 @@ SAML の bearer 条件は [OASIS SAML Profiles](https://docs.oasis-open.org/secu
 | 日付を跨ぐワークフロー時間条件 | [#84](https://github.com/mizphses/millicall/issues/84) |
 | 電話機への provision_token 配送 | [#85](https://github.com/mizphses/millicall/issues/85) |
 | OAuth・SAML・音声接続状態の単一ワーカー前提、登録数・TTL管理 | [#86](https://github.com/mizphses/millicall/issues/86) |
-| SIP 認証情報の保存暗号化と復旧設計 | [#87](https://github.com/mizphses/millicall/issues/87) |
+| SIP 認証情報の保存暗号化と復旧設計（対応済み: 「SIP 認証情報の保存と鍵管理」参照） | [#87](https://github.com/mizphses/millicall/issues/87) |
 | MCP ログインのブラウザフローと CSRF/CSP の整合 | [#88](https://github.com/mizphses/millicall/issues/88) |
 
-監査はソース、API/プロトコルの自動テスト、依存監査を対象にした。実機の FreeSWITCH、電話機、外部 IdP、Linux netd/firewall、コンテナイメージの実行環境を使った侵入試験は含まない。OAuth と SAML replay 管理は現在も単一プロセス前提であり、SIP 保存暗号化を含む上記の課題は未解決。
+監査はソース、API/プロトコルの自動テスト、依存監査を対象にした。実機の FreeSWITCH、電話機、外部 IdP、Linux netd/firewall、コンテナイメージの実行環境を使った侵入試験は含まない。OAuth と SAML replay 管理は現在も単一プロセス前提であり、上記の課題は SIP 保存暗号化（#87）を除き未解決。

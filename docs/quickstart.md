@@ -87,7 +87,8 @@ millicallctl self-update # millicallctl 自身を最新へ更新
 millicallctl logs core   # core ログ追尾
 millicallctl logs freeswitch  # freeswitch ログ追尾
 millicallctl ps          # コンテナ状態確認
-millicallctl backup      # data/ と .env をバックアップ
+millicallctl backup      # data/ と .env を暗号化してバックアップ（パスフレーズを設定）
+millicallctl restore <file>  # バックアップから復元（down してから実行）
 millicallctl version     # バージョン確認
 ```
 
