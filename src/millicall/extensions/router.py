@@ -5,16 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
-from millicall.deps import get_change_listener, get_session, require_admin
+from millicall.crypto import SecretBox
+from millicall.deps import get_change_listener, get_secret_box, get_session, require_admin
 from millicall.extensions.schemas import (
     ExtensionCreate,
     ExtensionCredentials,
     ExtensionRead,
     ExtensionUpdate,
 )
-from millicall.gen import generate_sip_password
 from millicall.models import Extension, User
 from millicall.numberplan import NumberConflictError, assert_number_free
+from millicall.sip_credentials import decrypt_extension_password, new_extension_password
 from millicall.sip_endpoint import resolve_internal_sip_endpoint
 from millicall.telephony.hooks import ExtensionChangeListener
 
@@ -28,6 +29,7 @@ async def create_extension(
     body: ExtensionCreate,
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
+    box: SecretBox = Depends(get_secret_box),
 ) -> Extension:
     existing = await session.scalar(select(Extension).where(Extension.number == body.number))
     if existing is not None:
@@ -39,10 +41,11 @@ async def create_extension(
         await assert_number_free(session, body.number)
     except NumberConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    _, sip_password_encrypted = new_extension_password(box)
     ext = Extension(
         number=body.number,
         display_name=body.display_name,
-        sip_password=generate_sip_password(),
+        sip_password_encrypted=sip_password_encrypted,
         enabled=True,
         calling_permission=body.calling_permission,
     )
@@ -79,6 +82,7 @@ async def get_extension_credentials(
     request: Request,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
+    box: SecretBox = Depends(get_secret_box),
 ) -> ExtensionCredentials:
     """内線の SIP 接続情報（平文パスワード含む）を返す（管理者専用）。
 
@@ -91,6 +95,9 @@ async def get_extension_credentials(
     ext = await session.get(Extension, ext_id)
     if ext is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    # 復号できなければ SipCredentialError（503）。監査記録より前に確定させ、
+    # 閲覧できなかった操作を「閲覧した」と記録しない。
+    password = decrypt_extension_password(box, ext)
 
     settings = await effective_settings(request.app.state)
     endpoint = await resolve_internal_sip_endpoint(session, settings)
@@ -110,7 +117,7 @@ async def get_extension_credentials(
 
     return ExtensionCredentials(
         number=ext.number,
-        password=ext.sip_password,
+        password=password,
         sip_server=endpoint.sip_server,
         sip_port=settings.sip_port,
         domain=endpoint.domain,

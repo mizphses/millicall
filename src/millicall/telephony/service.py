@@ -8,9 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.config import Settings
+from millicall.crypto import SecretBox
 from millicall.models import AiAgent, Extension, NetworkConfig, Trunk, Workflow
 from millicall.numberplan import load_ring_groups_with_members
 from millicall.secrets_store import Secrets
+from millicall.sip_credentials import decrypt_extension_password, decrypt_trunk_password
 from millicall.telephony.esl import ESLClient, ESLError
 from millicall.telephony.fsconfig import (
     AiAgentConfig,
@@ -70,10 +72,15 @@ class TelephonyChangeListener:
         writer: FreeswitchConfigWriter,
         esl_factory: Callable[[], ESLClient],
         esl_timeout: float = 5.0,
+        *,
+        secret_box: SecretBox,
     ) -> None:
         self._writer = writer
         self._esl_factory = esl_factory
         self._esl_timeout = esl_timeout
+        # SIP 認証情報（DB では暗号化保存）を設定生成の直前にだけ復号するための鍵。
+        # 復号失敗は SipCredentialError として送出し、設定ファイルは書き換えない。
+        self._box = secret_box
         # 前回 regenerate 時の internal 実効バインド（sip-ip と domain）を保持する。
         # reloadxml では sofia プロファイルの sip-ip / bind は再バインドされないため、
         # この値が前回と変化した場合、または初回（None）の場合にのみ
@@ -89,7 +96,7 @@ class TelephonyChangeListener:
             ExtensionConfig(
                 number=e.number,
                 display_name=e.display_name,
-                sip_password=e.sip_password,
+                sip_password=decrypt_extension_password(self._box, e),
                 calling_permission=e.calling_permission,
             )
             for e in result
@@ -105,7 +112,7 @@ class TelephonyChangeListener:
                 display_name=t.display_name,
                 host=t.host,
                 username=t.username,
-                password=t.password,
+                password=decrypt_trunk_password(self._box, t),
                 did_number=t.did_number,
                 caller_id=t.caller_id,
                 inbound_extension=t.inbound_extension,
@@ -178,6 +185,8 @@ class TelephonyChangeListener:
         self._writer.update_outbound_policy(international_allow_prefixes, sip_reject_anonymous)
 
     async def regenerate(self, session: AsyncSession) -> None:
+        # 復号は書き込みより前に全件済ませる。1 件でも失敗すれば SipCredentialError で
+        # 中断し、部分的な（認証情報の欠けた）設定ファイルを生成しない。
         configs = await self._load_configs(session)
         trunks = await self._load_trunks(session)
         ring_groups = await self._load_ring_groups(session)

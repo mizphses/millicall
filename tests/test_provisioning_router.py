@@ -8,6 +8,7 @@ from __future__ import annotations
 from httpx import ASGITransport, AsyncClient
 
 from millicall.models import Device, Extension, NetworkConfig
+from tests.sip_helpers import encrypt_for_test
 
 # ---------------------------------------------------------------------------
 # ヘルパー: NetworkConfig・Device・Extension をDBに挿入する
@@ -42,7 +43,7 @@ async def _insert_extension(app, number: str = "1001", display_name: str = "Alic
         ext = Extension(
             number=number,
             display_name=display_name,
-            sip_password="test_sip_pass_1234",
+            sip_password_encrypted=encrypt_for_test("test_sip_pass_1234", app=app),
         )
         session.add(ext)
         await session.commit()

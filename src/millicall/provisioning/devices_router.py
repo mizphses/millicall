@@ -13,7 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.app_settings.service import effective_settings
-from millicall.deps import get_change_listener, get_netd_client, get_session, require_admin
+from millicall.deps import (
+    get_change_listener,
+    get_netd_client,
+    get_secret_box,
+    get_session,
+    require_admin,
+)
 from millicall.models import Device, Extension
 from millicall.network.client import NetdClient, NetdError
 from millicall.provisioning.service import (
@@ -177,6 +183,7 @@ async def quick_provision_endpoint(
             extension_number=body.extension_number,
             display_name=body.display_name,
             telephony_notify=listener.notify,
+            secret_box=get_secret_box(request),
             set_token=phone_admin_configured,
         )
     except ValueError as exc:

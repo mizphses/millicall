@@ -10,7 +10,7 @@ async def admin_client(auth_client_with_telephony):
 
 def test_trunk_repr_excludes_password():
     """Assert password value does not appear in repr of a Trunk instance."""
-    t = Trunk(name="x", display_name="X", host="h", username="u", password="topsecret1")
+    t = Trunk(name="x", display_name="X", host="h", username="u", password_encrypted="topsecret1")
     assert "topsecret1" not in repr(t)
 
 

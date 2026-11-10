@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.config import Settings
-from millicall.deps import get_session, get_settings_dep
+from millicall.deps import get_secret_box, get_session, get_settings_dep
 from millicall.models import Contact, Device, Extension, NetworkConfig
 from millicall.network.validation import normalize_mac
 from millicall.provisioning.templates import (
@@ -29,6 +29,7 @@ from millicall.provisioning.templates import (
     render_yealink_config,
     render_yealink_phonebook,
 )
+from millicall.sip_credentials import decrypt_extension_password
 
 logger = logging.getLogger("millicall.provisioning.router")
 
@@ -170,7 +171,12 @@ async def panasonic_device_config(
     if ext is None or not ext.enabled:
         raise HTTPException(status_code=404)
 
-    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
+    content = render_panasonic_config(
+        extension=ext,
+        sip_password=decrypt_extension_password(get_secret_box(request), ext),
+        network_config=nc,
+        settings=settings,
+    )
     return PlainTextResponse(
         content, media_type="text/plain", headers={"Cache-Control": "no-store"}
     )
@@ -230,7 +236,12 @@ async def yealink_device_config(
     if ext is None or not ext.enabled:
         raise HTTPException(status_code=404)
 
-    content = render_yealink_config(extension=ext, network_config=nc, settings=settings)
+    content = render_yealink_config(
+        extension=ext,
+        sip_password=decrypt_extension_password(get_secret_box(request), ext),
+        network_config=nc,
+        settings=settings,
+    )
     return PlainTextResponse(
         content, media_type="text/plain", headers={"Cache-Control": "no-store"}
     )

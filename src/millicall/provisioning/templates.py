@@ -5,6 +5,7 @@ Panasonic KX-HDV および Yealink 向けの設定ファイルテキストと
 
 セキュリティ注意:
   - extension.number / sip_password / display_name はサーバー制御値のため直接補間する。
+    sip_password は DB では暗号化保存のため、呼び出し元が復号した平文を引数で渡す。
   - display_name には改行・クォートが含まれうるため各フォーマットに応じてエスケープする。
   - MAC アドレスやホスト名は設定ファイルに埋め込まない。
 """
@@ -121,6 +122,7 @@ def render_panasonic_common(
 def render_panasonic_config(
     *,
     extension: Extension,
+    sip_password: str,
     network_config: NetworkConfig,
     settings: Settings,
 ) -> str:
@@ -132,7 +134,7 @@ def render_panasonic_config(
     lan_ip = network_config.lan_ip
     number = extension.number
     display = _panasonic_escape(extension.display_name)
-    password = extension.sip_password
+    password = sip_password
     lines = [
         "# Panasonic SIP Phone Standard Format File #",
         "# DO NOT CHANGE THIS LINE!",
@@ -290,6 +292,7 @@ def render_yealink_common(
 def render_yealink_config(
     *,
     extension: Extension,
+    sip_password: str,
     network_config: NetworkConfig,
     settings: Settings,
 ) -> str:
@@ -301,7 +304,7 @@ def render_yealink_config(
     lan_ip = network_config.lan_ip
     number = extension.number
     display = _yealink_escape(extension.display_name)
-    password = extension.sip_password
+    password = sip_password
     lines = [
         "#!version:1.0.0.1",
         "",

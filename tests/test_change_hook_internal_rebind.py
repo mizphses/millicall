@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from millicall.models import NetworkConfig
 from millicall.telephony.service import TelephonyChangeListener
+from tests.sip_helpers import box_for
 
 # ---------------------------------------------------------------------------
 # Fake ESL client: wire コマンドを記録する（実TCP不要）
@@ -43,7 +44,9 @@ async def _listener_with_sink(app):
     """app の既存 writer を使い、fake ESL でコマンドを記録する listener を作る。"""
     sink: list[str] = []
     writer = app.state.change_listener._writer
-    listener = TelephonyChangeListener(writer, lambda: _FakeESL(sink), esl_timeout=2.0)
+    listener = TelephonyChangeListener(
+        writer, lambda: _FakeESL(sink), esl_timeout=2.0, secret_box=box_for(app)
+    )
     yield listener, sink
 
 
@@ -148,7 +151,9 @@ async def test_internal_restart_survives_esl_failure(app, monkeypatch) -> None:
             return None
 
     writer = app.state.change_listener._writer
-    listener = TelephonyChangeListener(writer, lambda: _FailingESL(), esl_timeout=2.0)
+    listener = TelephonyChangeListener(
+        writer, lambda: _FailingESL(), esl_timeout=2.0, secret_box=box_for(app)
+    )
     sm = app.state.sessionmaker
     async with sm() as session:
         await listener.notify(session)  # 例外が伝播しなければ OK
