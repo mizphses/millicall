@@ -1,103 +1,171 @@
-import { useEffect, type ReactNode } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useState,
+  type ReactNode,
+  type ReactElement,
+} from "react";
 import { X } from "lucide-react";
-
 import { css } from "styled-system/css";
 import { button } from "styled-system/recipes";
+import { Modal } from "./Modal";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 
 interface SlidePanelProps {
   open: boolean;
   title: string;
   onClose: () => void;
   children: ReactNode;
-  /** フッタ（保存/キャンセルなどのアクション）。 */
   footer?: ReactNode;
+  busy?: boolean;
+  dirty?: boolean;
 }
 
-/**
- * 右からスライドインするパネル。作成/編集フォームの器。
- * 一覧の文脈を保つためモーダルではなくスライドを採用する（設計方針）。
- * 後続タスクは <SlidePanel open title onClose footer><form/></SlidePanel> で使う。
- */
-export function SlidePanel({ open, title, onClose, children, footer }: SlidePanelProps) {
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+function guardCancel(
+  children: ReactNode,
+  close: () => void,
+  busy: boolean,
+): ReactNode {
+  return Children.map(children, (child) => {
+    if (!isValidElement(child)) return child;
+    const element = child as ReactElement<{
+      children?: ReactNode;
+      onClick?: () => void;
+      disabled?: boolean;
+    }>;
+    if (
+      element.type === "button" &&
+      typeof element.props.children === "string" &&
+      /^(キャンセル|閉じる)$/.test(element.props.children.trim())
+    ) {
+      return cloneElement(element, {
+        onClick: close,
+        disabled: busy || element.props.disabled,
+      });
     }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
+    return element.props.children
+      ? cloneElement(
+          element,
+          {},
+          guardCancel(element.props.children, close, busy),
+        )
+      : element;
+  });
+}
+export function SlidePanel({
+  open,
+  title,
+  onClose,
+  children,
+  footer,
+  busy = false,
+  dirty,
+}: SlidePanelProps) {
+  const [touched, setTouched] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  useEffect(() => {
+    if (!open) {
+      setTouched(false);
+      setConfirm(false);
+    }
+  }, [open]);
+  const changed = dirty ?? touched;
+  const requestClose = () => {
+    if (!busy) {
+      if (changed) setConfirm(true);
+      else onClose();
+    }
+  };
   return (
-    <div
-      className={css({
-        position: "fixed",
-        inset: 0,
-        zIndex: 900,
-        display: "flex",
-        justifyContent: "flex-end",
-      })}
-    >
-      <div
-        aria-hidden
-        onClick={onClose}
-        className={css({ position: "absolute", inset: 0, bg: "gray.900", opacity: 0.2 })}
-      />
-      <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className={css({
-          position: "relative",
-          width: "panel",
-          maxWidth: "100%",
-          height: "100%",
-          bg: "white",
-          borderLeftWidth: "1px",
-          borderLeftStyle: "solid",
-          borderLeftColor: "border",
-          display: "flex",
-          flexDirection: "column",
-        })}
-      >
-        <header
+    <>
+      <Modal open={open} title={title} onClose={requestClose} busy={busy} side>
+        <div
           className={css({
+            height: "100%",
             display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            px: "5",
-            h: "header",
-            flexShrink: 0,
-            borderBottomWidth: "1px",
-            borderBottomStyle: "solid",
-            borderBottomColor: "border",
+            flexDirection: "column",
           })}
+          onChangeCapture={() => setTouched(true)}
         >
-          <h2 className={css({ fontSize: "lg", fontWeight: "600" })}>{title}</h2>
-          <button type="button" aria-label="閉じる" className={button({ variant: "ghost", size: "sm" })} onClick={onClose}>
-            <X size={16} />
-          </button>
-        </header>
-        <div className={css({ flex: 1, overflowY: "auto", p: "5" })}>{children}</div>
-        {footer ? (
-          <footer
+          <header
             className={css({
               display: "flex",
-              justifyContent: "flex-end",
-              gap: "2",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "3",
               px: "5",
               py: "4",
               flexShrink: 0,
-              borderTopWidth: "1px",
-              borderTopStyle: "solid",
-              borderTopColor: "border",
+              borderBottom: "1px solid",
+              borderColor: "border",
             })}
           >
-            {footer}
-          </footer>
-        ) : null}
-      </aside>
-    </div>
+            <h2 className={css({ fontSize: "lg", fontWeight: "600" })}>
+              {title}
+            </h2>
+            <button
+              type="button"
+              aria-label="閉じる"
+              className={button({ variant: "ghost", size: "sm" })}
+              onClick={requestClose}
+              disabled={busy}
+            >
+              <X size={16} />
+            </button>
+          </header>
+          <div
+            className={css({
+              flex: 1,
+              minHeight: 0,
+              overflowY: "auto",
+              p: "5",
+            })}
+          >
+            <fieldset
+              disabled={busy}
+              className={css({ border: 0, p: 0, m: 0, minWidth: 0 })}
+            >
+              {children}
+            </fieldset>
+          </div>
+          {footer && (
+            <footer
+              className={css({
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "flex-end",
+                gap: "2",
+                px: "5",
+                py: "4",
+                flexShrink: 0,
+                borderTop: "1px solid",
+                borderColor: "border",
+              })}
+            >
+              {guardCancel(footer, requestClose, busy)}
+            </footer>
+          )}
+        </div>
+      </Modal>
+      <UnsavedChangesGuard dirty={open && changed} busy={open && busy} />
+      <ConfirmDialog
+        open={open && confirm}
+        title="変更を破棄しますか？"
+        message="入力した未保存の変更は失われます。"
+        confirmLabel="変更を破棄"
+        cancelLabel="編集を続ける"
+        destructive
+        busy={busy}
+        onConfirm={() => {
+          setConfirm(false);
+          setTouched(false);
+          onClose();
+        }}
+        onCancel={() => setConfirm(false)}
+      />
+    </>
   );
 }

@@ -4,6 +4,7 @@ import {
   createRouter,
   Outlet,
   lazyRouteComponent,
+  Link,
   redirect,
   type RouterHistory,
 } from "@tanstack/react-router";
@@ -49,6 +50,7 @@ const SettingsPage = lazyRouteComponent(() => import("../pages/SettingsPage"), "
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
+  notFoundComponent: () => <main style={{ maxWidth: 640, margin: "15vh auto", padding: 24 }}><h1 style={{ fontSize: 24, fontWeight: 600 }}>ページが見つかりません</h1><p style={{ margin: "16px 0" }}>URLをご確認ください。ページが移動または削除された可能性があります。</p><Link to="/" style={{ color: "#0c574f", textDecoration: "underline" }}>ホームへ戻る</Link></main>,
 });
 
 const loginRoute = createRoute({

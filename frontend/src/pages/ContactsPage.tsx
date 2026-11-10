@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { ObjectLink } from "../components/ObjectLink";
+import { Modal } from "../components/Modal";
+import { useObjectSelection } from "../hooks/useObjectSelection";
+import { Field } from "../components/Field";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PhoneCall, Pencil, Trash2 } from "lucide-react";
 
 import { css, cx } from "styled-system/css";
-import { button, input, panel } from "styled-system/recipes";
+import { button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import { CONTACTS_KEY, EXTENSIONS_KEY } from "../queryKeys";
@@ -89,7 +93,10 @@ export function ContactsPage() {
     [extensionsQuery.data],
   );
 
+  const selection = useObjectSelection(contactsQuery.data, openEdit, closePanel);
+
   function openCreate() {
+    selection.clear();
     setEditing(null);
     setForm(emptyForm());
     setFieldErrors({});
@@ -97,6 +104,7 @@ export function ContactsPage() {
   }
 
   function openEdit(contact: ContactRead) {
+    selection.select(contact.id);
     setEditing(contact);
     setForm(formFromContact(contact));
     setFieldErrors({});
@@ -105,6 +113,7 @@ export function ContactsPage() {
 
   function closePanel() {
     setPanelOpen(false);
+    selection.clear();
   }
 
   function openDial(contact: ContactRead) {
@@ -126,6 +135,7 @@ export function ContactsPage() {
       queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
       toast.success(editing ? "連絡先を更新しました" : "連絡先を作成しました");
       setPanelOpen(false);
+    selection.clear();
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "保存に失敗しました");
@@ -171,6 +181,7 @@ export function ContactsPage() {
       if (Object.keys(payload).length === 0) {
         toast.show("変更はありません", "neutral");
         setPanelOpen(false);
+    selection.clear();
         return;
       }
     }
@@ -230,10 +241,14 @@ export function ContactsPage() {
         rows={contactsQuery.data ?? []}
         rowKey={(row) => row.id}
         loading={contactsQuery.isLoading}
+        error={contactsQuery.error}
+        onRetry={() => void contactsQuery.refetch()}
+        searchable
         emptyMessage="連絡先がまだありません。右上の「連絡先を追加」から登録してください。"
       />
 
       <SlidePanel
+        busy={saveMutation.isPending}
         open={panelOpen}
         title={editing ? "連絡先を編集" : "連絡先を追加"}
         onClose={closePanel}
@@ -263,7 +278,7 @@ export function ContactsPage() {
           onSubmit={handleSubmit}
           className={css({ display: "flex", flexDirection: "column", gap: "4" })}
         >
-          <Field label="名前" error={fieldErrors.name}>
+          <Field required label="名前" error={fieldErrors.name}>
             <input
               className={input({ invalid: fieldErrors.name ? true : undefined })}
               value={form.name}
@@ -274,7 +289,7 @@ export function ContactsPage() {
             />
           </Field>
 
-          <Field label="電話番号" error={fieldErrors.phone_number}>
+          <Field required label="電話番号" error={fieldErrors.phone_number}>
             <input
               className={input({ invalid: fieldErrors.phone_number ? true : undefined })}
               value={form.phone_number}
@@ -353,32 +368,6 @@ export function ContactsPage() {
 /** フォーム 1 項目（ラベル + 入力 + インラインエラー）。
  * wrap 方式: label > span（テキスト）+ children（input 等）で関連付ける。
  * Task 3-8 が踏襲する標準形。 */
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className={css({ display: "block" })}>
-        <span
-          className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
-        >
-          {label}
-        </span>
-        {children}
-      </label>
-      {error ? (
-        <p className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>
-      ) : null}
-    </div>
-  );
-}
-
 /** 発信ダイアログ。発信元内線を選択して POST /api/calls を呼ぶ。 */
 function DialDialog({
   open,
@@ -399,48 +388,16 @@ function DialDialog({
   onCancel: () => void;
   busy: boolean;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
-
   if (!open || !contact) return null;
-
   return (
-    <div
-      className={css({
-        position: "fixed",
-        inset: 0,
-        zIndex: 950,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        p: "4",
-      })}
-    >
-      <div
-        aria-hidden
-        onClick={onCancel}
-        className={css({ position: "absolute", inset: 0, bg: "gray.900", opacity: 0.2 })}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="発信"
-        className={cx(
-          panel(),
-          css({ position: "relative", w: "dialog", maxW: "100%", p: "5" }),
-        )}
-      >
+    <Modal open={open} title="発信" onClose={onCancel} busy={busy}>
+      <div className={css({ p: "5" })}>
         <h2 className={css({ fontSize: "lg", fontWeight: "600", mb: "2" })}>発信</h2>
         <p className={css({ fontSize: "md", color: "text.muted", mb: "4" })}>
           {contact.name}（{contact.phone_number}）へ発信します。
         </p>
-        <Field label="発信元内線">
+        {extensions.length === 0 && <p>発信には有効な内線が必要です。<ObjectLink to="/extensions" newTab>内線を登録・確認</ObjectLink></p>}
+        <Field required label="発信元内線">
           <select
             className={input()}
             value={extension}
@@ -473,6 +430,6 @@ function DialDialog({
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

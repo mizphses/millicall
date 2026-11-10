@@ -1,3 +1,6 @@
+import { ObjectLink, NumberPlanLink } from "../components/ObjectLink";
+import { useObjectSelection } from "../hooks/useObjectSelection";
+import { Field } from "../components/Field";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
@@ -7,7 +10,7 @@ import { badge, button, input } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import type { components } from "../api/schema";
-import { NUMBER_PLAN_KEY, RING_GROUPS_KEY, EXTENSIONS_KEY } from "../queryKeys";
+import { NUMBER_PLAN_KEY, RING_GROUPS_KEY, EXTENSIONS_KEY, TRUNKS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
@@ -99,6 +102,7 @@ export function RoutesPage() {
   const toast = useToast();
   const queryClient = useQueryClient();
 
+  const trunksQuery = useQuery({ queryKey: TRUNKS_KEY, queryFn: async () => { const { data, error } = await api.GET("/api/trunks"); if (error) throw new Error("トランクを取得できません"); return data ?? []; } });
   const planQuery = useQuery({ queryKey: NUMBER_PLAN_KEY, queryFn: fetchNumberPlan });
   const groupsQuery = useQuery({ queryKey: RING_GROUPS_KEY, queryFn: fetchRingGroups });
   const extensionsQuery = useQuery({ queryKey: EXTENSIONS_KEY, queryFn: fetchExtensions });
@@ -121,7 +125,10 @@ export function RoutesPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<RingGroupRead | null>(null);
 
+  const selection = useObjectSelection(groupsQuery.data, openEdit, closePanel);
+
   function openCreate() {
+    selection.clear();
     setEditing(null);
     setForm(emptyForm());
     setFieldErrors({});
@@ -129,6 +136,7 @@ export function RoutesPage() {
   }
 
   function openEdit(group: RingGroupRead) {
+    selection.select(group.id);
     setEditing(group);
     setForm(formFromGroup(group));
     setFieldErrors({});
@@ -137,6 +145,7 @@ export function RoutesPage() {
 
   function closePanel() {
     setPanelOpen(false);
+    selection.clear();
   }
 
   /** メンバー内線チェックボックスのトグル。 */
@@ -159,6 +168,7 @@ export function RoutesPage() {
       queryClient.invalidateQueries({ queryKey: NUMBER_PLAN_KEY });
       toast.success(editing ? "グループ着信を更新しました" : "グループ着信を作成しました");
       setPanelOpen(false);
+    selection.clear();
     },
     onError: (err) => {
       if (err instanceof GroupNumberConflictError) {
@@ -191,7 +201,7 @@ export function RoutesPage() {
   }
 
   const planColumns: Column<NumberPlanEntryRead>[] = [
-    { key: "number", header: "番号", width: "110px" },
+    { key: "number", header: "番号", width: "110px", render: row => <NumberPlanLink entry={row} /> },
     {
       key: "kind",
       header: "種別",
@@ -217,7 +227,7 @@ export function RoutesPage() {
     {
       key: "inbound_trunks",
       header: "着信トランク",
-      render: (row) => (row.inbound_trunks.length > 0 ? row.inbound_trunks.join(", ") : "—"),
+      render: (row) => row.inbound_trunks.length ? row.inbound_trunks.map(name => { const trunk = trunksQuery.data?.find(value => value.name === name); return <span key={name} className={css({ mr: "2" })}><ObjectLink to="/trunks" id={trunk?.id}>{name}</ObjectLink></span>; }) : "—",
     },
   ];
 
@@ -230,8 +240,7 @@ export function RoutesPage() {
       render: (row) =>
         row.member_extension_ids.length > 0
           ? row.member_extension_ids
-              .map((id) => extensionMap.get(id)?.number ?? `ID:${id}`)
-              .join(", ")
+              .map((id) => <span key={id} className={css({ mr: "2" })}><ObjectLink to="/extensions" id={id}>{extensionMap.get(id)?.number ?? `ID:${id}`}</ObjectLink></span>)
           : "—",
     },
     {
@@ -287,6 +296,10 @@ export function RoutesPage() {
             rows={planQuery.data ?? []}
             rowKey={(row) => `${row.kind}-${row.id}`}
             loading={planQuery.isLoading}
+        error={planQuery.error}
+        onRetry={() => void planQuery.refetch()}
+        searchable
+        storageKey="plan"
             emptyMessage="番号がまだありません。内線・AI エージェント・グループ着信を登録すると表示されます。"
           />
         </section>
@@ -315,14 +328,19 @@ export function RoutesPage() {
           <DataTable
             columns={groupColumns}
             rows={groupsQuery.data ?? []}
+            searchText={group => [group.number, group.name, ...group.member_extension_ids.map(id => extensionMap.get(id)?.number ?? id)].join(" ")}
             rowKey={(row) => row.id}
             loading={groupsQuery.isLoading}
+        error={groupsQuery.error}
+        onRetry={() => void groupsQuery.refetch()}
+        searchable
             emptyMessage="グループ着信がまだありません。「グループを追加」から登録してください。"
           />
         </section>
       </div>
 
       <SlidePanel
+        busy={saveMutation.isPending}
         open={panelOpen}
         title={editing ? "グループを編集" : "グループを追加"}
         onClose={closePanel}
@@ -352,7 +370,7 @@ export function RoutesPage() {
           onSubmit={handleSubmit}
           className={css({ display: "flex", flexDirection: "column", gap: "4" })}
         >
-          <Field label="番号（2〜6 桁）" error={fieldErrors.number}>
+          <Field required label="番号（2〜6 桁）" error={fieldErrors.number}>
             <input
               className={input({ invalid: fieldErrors.number ? true : undefined })}
               value={form.number}
@@ -362,7 +380,7 @@ export function RoutesPage() {
             />
           </Field>
 
-          <Field label="名前" error={fieldErrors.name}>
+          <Field required label="名前" error={fieldErrors.name}>
             <input
               className={input({ invalid: fieldErrors.name ? true : undefined })}
               value={form.name}
@@ -393,9 +411,9 @@ export function RoutesPage() {
                 p: "2",
               })}
             >
-              {extensions.length === 0 ? (
+              {extensionsQuery.isError ? <p role="alert">内線を取得できません。<button type="button" onClick={() => void extensionsQuery.refetch()}>再試行</button></p> : extensions.length === 0 ? (
                 <p className={css({ fontSize: "sm", color: "text.muted", m: 0 })}>
-                  内線がまだありません。先に内線を登録してください。
+                  内線がまだありません。<ObjectLink to="/extensions" newTab>内線を登録する</ObjectLink>
                 </p>
               ) : (
                 extensions.map((ext) => (
@@ -473,26 +491,3 @@ function SectionHeading({ title, description }: { title: string; description?: s
 /** フォーム 1 項目（ラベル + 入力 + インラインエラー）。
  * wrap 方式: label > span（テキスト）+ children（input 等）で関連付ける。
  * Task 2（ExtensionsPage）で確立した標準形を踏襲。 */
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className={css({ display: "block" })}>
-        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
-          {label}
-        </span>
-        {children}
-      </label>
-      {error ? (
-        <p className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>
-      ) : null}
-    </div>
-  );
-}

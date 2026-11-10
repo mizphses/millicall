@@ -27,8 +27,9 @@ class _FakeESL:
     async def connect(self) -> None:
         return None
 
-    async def reloadxml(self) -> None:
+    async def reloadxml(self) -> str:
         self._sink.append("reloadxml")
+        return "+OK"
 
     async def api(self, cmd: str) -> str:
         self._sink.append(cmd)

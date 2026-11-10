@@ -17,7 +17,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Shield,
   CheckCircle2,
@@ -37,6 +37,9 @@ import {
   NETWORK_CONFIG_KEY,
   NETWORK_TAILSCALE_STATUS_KEY,
 } from "../queryKeys";
+import { acceptSavedForm, mergeServerForm, FormValidationError, apiError } from "./settings/formState";
+import { UnsavedChangesGuard } from "../components/UnsavedChangesGuard";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PageLayout } from "../components/PageLayout";
 import { useToast } from "../toast/ToastProvider";
 import {
@@ -53,30 +56,18 @@ import {
 
 async function fetchTailscaleStatus(): Promise<{ connected: boolean; error?: string | null }> {
   const { data, error } = await api.GET("/api/network/tailscale/status");
-  if (error || !data) return { connected: false, error: "ステータスの取得に失敗しました" };
+  if (error || !data) throw new Error("接続状態の取得に失敗しました");
   return data as { connected: boolean; error?: string | null };
 }
 
 async function tailscaleUp(): Promise<void> {
   const { error, response } = await api.POST("/api/network/tailscale/up");
-  if (response.status === 400) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? "auth key が未設定です");
-  }
-  if (response.status === 502) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? "tailscale up に失敗しました（502）");
-  }
-  if (error) throw new Error("tailscale up に失敗しました");
+  if (!response.ok || error) throw apiError(error, "Tailscale の接続に失敗しました。認証キーとサービスの稼働状況を確認してください。");
 }
 
 async function tailscaleDown(): Promise<void> {
   const { error, response } = await api.POST("/api/network/tailscale/down");
-  if (response.status === 502) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? "tailscale down に失敗しました（502）");
-  }
-  if (error) throw new Error("tailscale down に失敗しました");
+  if (!response.ok || error) throw apiError(error, "Tailscale の切断に失敗しました。接続状態を更新して確認してください。");
 }
 
 // ---------------------------------------------------------------------------
@@ -117,20 +108,22 @@ export function NetworkRemotePage() {
     tailscale_auth_key: "",
   });
 
-  // サーバーデータがロード済みになったらフォームを初期化する
+  const baseline = useRef<TailscaleForm>();
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   useEffect(() => {
-    if (cfg) {
-      setTsForm({
-        tailscale_enabled: cfg.tailscale_enabled,
-        tailscale_auth_key: "",
-      });
-    }
+    if (!cfg) return;
+    const next = { tailscale_enabled: cfg.tailscale_enabled, tailscale_auth_key: "" };
+    const previous = baseline.current;
+    setTsForm((current) => mergeServerForm(current, previous, next));
+    baseline.current = next;
   }, [cfg]);
 
   // Tailscale 設定保存
   const saveTsMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (submitted: TailscaleForm) => {
       if (!cfg) throw new Error("設定データがロードされていません");
+      if (submitted.tailscale_auth_key && !submitted.tailscale_auth_key.startsWith("tskey-")) throw new FormValidationError({ tailscale_auth_key: "tskey- で始まる認証キーを入力してください" });
       const payload: NetworkConfigUpdate = {
         lan_interface: cfg.lan_interface,
         lan_ip: cfg.lan_ip,
@@ -141,20 +134,24 @@ export function NetworkRemotePage() {
         provisioning_base_url: cfg.provisioning_base_url,
         nat_enabled: cfg.nat_enabled,
         wan_interface: cfg.wan_interface,
-        tailscale_enabled: tsForm.tailscale_enabled,
+        tailscale_enabled: submitted.tailscale_enabled,
         // 空文字列はキー削除、非空は更新、未入力（フォームが空）は null（変更しない）
-        tailscale_auth_key: tsForm.tailscale_auth_key === "" ? null : tsForm.tailscale_auth_key,
+        tailscale_auth_key: submitted.tailscale_auth_key === "" ? null : submitted.tailscale_auth_key,
       };
       return updateNetworkConfig(payload);
     },
-    onSuccess: (data) => {
+    onSuccess: (data, submitted) => {
+      const next = { tailscale_enabled: data.tailscale_enabled, tailscale_auth_key: "" }, previous = baseline.current;
+      setTsForm((current) => acceptSavedForm(current, previous, next, submitted, Object.keys(submitted)));
+      baseline.current = next;
       queryClient.setQueryData(NETWORK_CONFIG_KEY, data);
-      // 保存後は入力フィールドをクリア（書き込み専用）
-      setTsForm((f) => ({ ...f, tailscale_auth_key: "" }));
+      setSaveError(null);
       toast.success("Tailscale 設定を保存しました");
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Tailscale 設定の保存に失敗しました");
+      const message = err instanceof FormValidationError ? Object.values(err.fieldErrors).join(" / ") : err instanceof Error ? err.message : "Tailscale 設定の保存に失敗しました";
+      setSaveError(message);
+      toast.error(message);
     },
   });
 
@@ -175,6 +172,7 @@ export function NetworkRemotePage() {
     mutationFn: tailscaleDown,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: NETWORK_TAILSCALE_STATUS_KEY });
+      setConfirmDisconnect(false);
       toast.success("Tailscale を切断しました");
     },
     onError: (err) => {
@@ -201,12 +199,15 @@ export function NetworkRemotePage() {
   }
 
   const tailscaleStatus = statusQuery.data;
-  const isConnected = tailscaleStatus?.connected ?? false;
+  const statusUnknown = statusQuery.isError || Boolean(tailscaleStatus?.error) || !tailscaleStatus;
+  const isConnected = !statusUnknown && Boolean(tailscaleStatus?.connected);
 
   return (
     <PageLayout title={PAGE_TITLE} description={PAGE_DESCRIPTION}>
       <div className={css({ display: "flex", flexDirection: "column", gap: "6" })}>
 
+        <UnsavedChangesGuard dirty={Boolean(cfg && JSON.stringify(tsForm) !== JSON.stringify(baseline.current))} busy={saveTsMutation.isPending} />
+        <ConfirmDialog open={confirmDisconnect} title="Tailscale を切断しますか？" message="Tailscale 経由でこの管理画面に接続している場合、操作後にアクセスできなくなります。LAN など別の接続手段が使えることを確認してください。" confirmLabel="切断する" destructive busy={tsDownMutation.isPending} onConfirm={() => tsDownMutation.mutate()} onCancel={() => setConfirmDisconnect(false)} />
         {/* ─── Tailscale セクション ─── */}
         <SectionCard
           icon={<Shield size={18} />}
@@ -244,13 +245,9 @@ export function NetworkRemotePage() {
                     color: isConnected ? "green.700" : "text.muted",
                   })}
                 >
-                  {isConnected ? "接続中" : "切断中"}
+                  {statusQuery.isPending ? "接続状態を確認中…" : statusUnknown ? "接続状態を確認できません" : isConnected ? "接続中" : "切断中"}
                 </span>
-                {tailscaleStatus?.error ? (
-                  <p className={css({ fontSize: "sm", color: "danger.text", mt: "1" })}>
-                    {tailscaleStatus.error}
-                  </p>
-                ) : null}
+                {statusUnknown && !statusQuery.isPending && <div><p role="alert" className={css({ fontSize: "sm", color: "danger.text", mt: "1" })}>接続状態は不明です。ネットワーク接続と Tailscale / netd サービスの稼働状況を確認して、ステータスを更新してください。</p>{tailscaleStatus?.error && <details className={css({ fontSize: "sm", mt: "2", overflowWrap: "anywhere" })}><summary>エラーの詳細</summary>{tailscaleStatus.error}</details>}</div>}
               </div>
               <button
                 type="button"
@@ -258,6 +255,7 @@ export function NetworkRemotePage() {
                 onClick={() => statusQuery.refetch()}
                 disabled={statusQuery.isFetching}
                 title="ステータスを更新"
+                aria-label="ステータスを更新"
               >
                 <RefreshCw size={14} />
               </button>
@@ -270,7 +268,7 @@ export function NetworkRemotePage() {
                 className={button({ variant: "primary" })}
                 style={{ height: "36px" }}
                 onClick={() => tsUpMutation.mutate()}
-                disabled={tsUpMutation.isPending || tsDownMutation.isPending || isConnected}
+                disabled={tsUpMutation.isPending || tsDownMutation.isPending || statusUnknown || isConnected}
               >
                 <Play size={16} />
                 {tsUpMutation.isPending ? "接続中…" : "接続"}
@@ -279,7 +277,7 @@ export function NetworkRemotePage() {
                 type="button"
                 className={button({ variant: "secondary" })}
                 style={{ height: "36px" }}
-                onClick={() => tsDownMutation.mutate()}
+                onClick={() => setConfirmDisconnect(true)}
                 disabled={tsUpMutation.isPending || tsDownMutation.isPending || !isConnected}
               >
                 <Square size={16} />
@@ -292,7 +290,7 @@ export function NetworkRemotePage() {
               id="tailscale-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                saveTsMutation.mutate();
+                saveTsMutation.mutate({ ...tsForm });
               }}
               className={css({ display: "flex", flexDirection: "column", gap: "4" })}
             >
@@ -315,6 +313,7 @@ export function NetworkRemotePage() {
                 Tailscale を有効にする
               </label>
 
+              {saveError && <p role="alert" className={css({ color: "danger.text", fontSize: "sm" })}>{saveError}</p>}
               {/* 認証キー入力（書き込み専用） */}
               <Field label="認証キー（tskey-... 形式）">
                 <div className={css({ display: "flex", flexDirection: "column", gap: "1" })}>
@@ -350,6 +349,7 @@ export function NetworkRemotePage() {
                   <input
                     className={cx(input(), css({ width: "100%" }))}
                     type="password"
+                    aria-invalid={Boolean(saveError)}
                     value={tsForm.tailscale_auth_key}
                     onChange={(e) =>
                       setTsForm((f) => ({ ...f, tailscale_auth_key: e.target.value }))

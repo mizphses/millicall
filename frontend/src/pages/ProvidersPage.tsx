@@ -1,3 +1,6 @@
+import { useUrlState } from "../hooks/useUrlState";
+import { useObjectSelection } from "../hooks/useObjectSelection";
+import { Field } from "../components/Field";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { PlugZap, Pencil, Trash2 } from "lucide-react";
@@ -107,7 +110,10 @@ export function ProvidersPage() {
   const [testResults, setTestResults] = useState<Record<number, TestOutcome>>({});
   const [testingId, setTestingId] = useState<number | null>(null);
 
+  const selection = useObjectSelection(listQuery.data, openEdit, closePanel);
+
   function openCreate() {
+    selection.clear();
     setEditing(null);
     setForm(emptyForm());
     setErrors({ config: {} });
@@ -117,6 +123,7 @@ export function ProvidersPage() {
   }
 
   function openEdit(provider: ProviderRead) {
+    selection.select(provider.id);
     setEditing(provider);
     setForm(formFromProvider(provider));
     setErrors({ config: {} });
@@ -145,6 +152,7 @@ export function ProvidersPage() {
 
   function closePanel() {
     setPanelOpen(false);
+    selection.clear();
   }
 
   const saveMutation = useMutation({
@@ -156,6 +164,7 @@ export function ProvidersPage() {
       queryClient.invalidateQueries({ queryKey: PROVIDERS_KEY });
       toast.success(editing ? "プロバイダを更新しました" : "プロバイダを作成しました");
       setPanelOpen(false);
+    selection.clear();
     },
     onError: (err) => {
       if (err instanceof ProviderNameConflictError) {
@@ -207,13 +216,17 @@ export function ProvidersPage() {
       if (Object.keys(payload).length === 0) {
         toast.show("変更はありません", "neutral");
         setPanelOpen(false);
+    selection.clear();
         return;
       }
     }
     saveMutation.mutate();
   }
 
-  const providers = listQuery.data ?? [];
+  const [search, setSearch] = useUrlState("q");
+  const [typeFilter, setTypeFilter] = useUrlState("type");
+  const [sort, setSort] = useUrlState("sort", "name");
+  const providers = (listQuery.data ?? []).filter(provider => (!typeFilter || provider.type === typeFilter) && `${provider.name} ${provider.kind} ${provider.type}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())).sort((a, b) => sort === "newest" ? b.id - a.id : a.name.localeCompare(b.name, "ja"));
   const activeKind = KIND_CATALOG[form.kind];
   // 認証方式セレクト(config.auth_method)による資格情報入力欄の切替。
   // usesSaJson の kind でも "api_key" 選択時は通常の API キー入力欄を出す。
@@ -270,7 +283,12 @@ export function ProvidersPage() {
         </button>
       }
     >
-      {listQuery.isLoading ? (
+      <div className={css({ display: "flex", flexWrap: "wrap", gap: "3", mb: "4" })}>
+        <input className={input()} style={{ maxWidth: 320 }} type="search" aria-label="プロバイダを検索" placeholder="名前・エンジンで検索" value={search} onChange={event => setSearch(event.target.value)} />
+        <select className={input()} style={{ width: "auto" }} aria-label="プロバイダの種類" value={typeFilter} onChange={event => setTypeFilter(event.target.value)}><option value="">すべての種類</option><option value="llm">LLM</option><option value="tts">TTS</option><option value="stt">STT</option></select>
+        <select className={input()} style={{ width: "auto" }} aria-label="並び順" value={sort} onChange={event => setSort(event.target.value)}><option value="name">名前順</option><option value="newest">新しい順</option></select>
+      </div>
+      {listQuery.isError ? <div role="alert">一覧を取得できませんでした。<button type="button" className={button({ variant: "secondary" })} onClick={() => void listQuery.refetch()}>再試行</button></div> : listQuery.isLoading ? (
         <p className={css({ color: "text.muted", py: "6" })}>読み込み中…</p>
       ) : providers.length === 0 ? (
         <div
@@ -279,13 +297,13 @@ export function ProvidersPage() {
             css({ p: "8", textAlign: "center", color: "text.muted" }),
           )}
         >
-          プロバイダがまだありません。右上の「プロバイダを追加」から登録してください。
+          {search || typeFilter ? "検索条件に一致するプロバイダがありません。" : "プロバイダがまだありません。「プロバイダを追加」から登録してください。"}
         </div>
       ) : (
         <div
           className={css({
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(token(sizes.providerCard), 1fr))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, token(sizes.providerCard)), 1fr))",
             gap: "4",
           })}
         >
@@ -304,6 +322,7 @@ export function ProvidersPage() {
       )}
 
       <SlidePanel
+        busy={saveMutation.isPending}
         open={panelOpen}
         title={editing ? "プロバイダを編集" : "プロバイダを追加"}
         onClose={closePanel}
@@ -391,7 +410,7 @@ export function ProvidersPage() {
             </div>
           )}
 
-          <Field label="名前（識別子）" error={errors.name}>
+          <Field required label="名前（識別子）" error={errors.name}>
             <input
               className={input({ invalid: errors.name ? true : undefined })}
               value={form.name}
@@ -627,26 +646,3 @@ function ProviderCard({
 /** フォーム 1 項目（ラベル + 入力 + インラインエラー）。
  * wrap 方式: label > span（テキスト）+ children（input 等）で関連付ける。
  * Task 2（ExtensionsPage）で確立した標準形を踏襲。 */
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className={css({ display: "block" })}>
-        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
-          {label}
-        </span>
-        {children}
-      </label>
-      {error ? (
-        <p className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>
-      ) : null}
-    </div>
-  );
-}

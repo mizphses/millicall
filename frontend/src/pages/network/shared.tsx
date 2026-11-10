@@ -9,6 +9,8 @@
 import { css, cx } from "styled-system/css";
 import { panel } from "styled-system/recipes";
 
+import { Children, cloneElement, isValidElement, useId } from "react";
+import { apiError } from "../settings/formState";
 import { api } from "../../api/client";
 
 // ---------------------------------------------------------------------------
@@ -60,7 +62,7 @@ export async function updateNetworkConfig(
   payload: NetworkConfigUpdate,
 ): Promise<NetworkConfigRead> {
   const { data, error } = await api.PUT("/api/network", { body: payload });
-  if (error || !data) throw new Error("ネットワーク設定の保存に失敗しました");
+  if (error || !data) throw apiError(error, "ネットワーク設定の保存に失敗しました");
   return data as NetworkConfigRead;
 }
 
@@ -98,20 +100,33 @@ export function SectionCard({
 export function Field({
   label,
   children,
+  error,
 }: {
   label: string;
   children: React.ReactNode;
+  error?: string;
 }) {
+  const id = useId();
+  function associate(node: React.ReactNode): React.ReactNode {
+    return Children.map(node, (child) => {
+      if (!isValidElement(child)) return child;
+      const element = child as React.ReactElement<{ children?: React.ReactNode; id?: string; "aria-invalid"?: boolean; "aria-describedby"?: string }>;
+      if (["input", "select", "textarea"].includes(String(element.type))) return cloneElement(element, { id, "aria-invalid": Boolean(error), "aria-describedby": error ? `${id}-error` : undefined });
+      return element.props.children ? cloneElement(element, { children: associate(element.props.children) }) : element;
+    });
+  }
+  const control = associate(children);
   return (
     <div>
-      <label className={css({ display: "block" })}>
+      <label htmlFor={id} className={css({ display: "block" })}>
         <span
           className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
         >
           {label}
         </span>
-        {children}
       </label>
+      {control}
+      {error && <p id={`${id}-error`} role="alert" className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>}
     </div>
   );
 }

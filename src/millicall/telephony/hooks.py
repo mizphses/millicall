@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class ExtensionChangeListener(Protocol):
-    async def notify(self, session: AsyncSession, *, sync_gateway: str | None = None) -> None: ...
+    async def notify(self, session: AsyncSession, *, sync_gateway: str | None = None) -> str | None: ...
 
 
 class NullChangeListener:

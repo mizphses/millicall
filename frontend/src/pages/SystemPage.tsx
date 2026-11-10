@@ -151,6 +151,11 @@ export function SystemPage() {
           <p className={css({ fontSize: "sm", mt: "1" })}>
             この環境では Docker コンテナの管理機能が利用できません。
           </p>
+          <button type="button" className={cx(button({ variant: "secondary", size: "sm" }), css({ mt: "4" }))}
+            disabled={containersQuery.isFetching || infoQuery.isFetching}
+            onClick={() => { void containersQuery.refetch(); void infoQuery.refetch(); }}>
+            <RotateCw size={14} />状態を再確認
+          </button>
         </div>
       ) : (
         <div className={css({ display: "flex", flexDirection: "column", gap: "6" })}>
@@ -165,6 +170,8 @@ export function SystemPage() {
               rows={containersQuery.data ?? []}
               rowKey={(c) => c.name}
               loading={containersQuery.isLoading}
+              error={containersQuery.error}
+              onRetry={() => void containersQuery.refetch()}
               emptyMessage="コンテナがありません"
             />
           </div>
@@ -178,11 +185,17 @@ export function SystemPage() {
             <div className={cx(panel(), css({ p: "5" }))}>
               {infoQuery.isLoading ? (
                 <p className={css({ color: "text.muted", fontSize: "sm" })}>読み込み中…</p>
+              ) : infoQuery.isError ? (
+                <div role="alert" className={css({ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "3" })}>
+                  <p className={css({ color: "danger.text", fontSize: "sm" })}>システム情報を取得できませんでした。接続状況を確認して再試行してください。</p>
+                  <button type="button" className={button({ variant: "secondary", size: "sm" })}
+                    disabled={infoQuery.isFetching} onClick={() => { void infoQuery.refetch(); }}>再試行</button>
+                </div>
               ) : infoQuery.data ? (
                 <dl
                   className={css({
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
                     gap: "3",
                   })}
                 >
