@@ -154,14 +154,35 @@ check_for_update() {
 BACKUP_CIPHER_ARGS=(-aes-256-cbc -salt -pbkdf2 -iter 600000 -md sha256)
 BACKUP_PASSPHRASE_MIN=12
 
-# パスフレーズを BACKUP_PASS（非 export のシェル変数）へ読み込む。
-# $1=1 のとき対話入力で確認入力を求める（backup 時）。
+# パスフレーズの取得元を決める。優先順:
+#   1) MILLICALL_BACKUP_PASSPHRASE_FILE（cron 向け。openssl に -pass file: で渡す）
+#   2) MILLICALL_BACKUP_PASSPHRASE（読んだ直後に unset し、子プロセスへ継承させない）
+#   3) 対話入力
+# 結果は BACKUP_PASS_FILE または BACKUP_PASS（非 export のシェル変数）に入る。
+# $1=1 のとき（backup 時）は確認入力と最小長チェックを行う。
 read_backup_passphrase() {
-  local confirm="${1:-0}" again
+  local confirm="${1:-0}" again first_line
+  BACKUP_PASS=""
+  BACKUP_PASS_FILE=""
+  if [ -n "${MILLICALL_BACKUP_PASSPHRASE_FILE:-}" ]; then
+    BACKUP_PASS_FILE="${MILLICALL_BACKUP_PASSPHRASE_FILE}"
+    unset MILLICALL_BACKUP_PASSPHRASE MILLICALL_BACKUP_PASSPHRASE_FILE
+    [ -f "${BACKUP_PASS_FILE}" ] && [ -r "${BACKUP_PASS_FILE}" ] \
+      || die "パスフレーズファイルを読めません: ${BACKUP_PASS_FILE}"
+    # openssl は 1 行目をパスフレーズとして使う。長さの検査だけ行い、値は保持しない。
+    first_line="$(head -n1 "${BACKUP_PASS_FILE}")"
+    if [ "${confirm}" = "1" ] && [ "${#first_line}" -lt "${BACKUP_PASSPHRASE_MIN}" ]; then
+      die "パスフレーズは ${BACKUP_PASSPHRASE_MIN} 文字以上にしてください"
+    fi
+    [ -n "${first_line}" ] || die "パスフレーズファイルが空です"
+    first_line=""
+    return 0
+  fi
   if [ -n "${MILLICALL_BACKUP_PASSPHRASE:-}" ]; then
     BACKUP_PASS="${MILLICALL_BACKUP_PASSPHRASE}"
+    unset MILLICALL_BACKUP_PASSPHRASE
   else
-    [ -t 0 ] || die "MILLICALL_BACKUP_PASSPHRASE が未設定で対話入力もできません（無暗号では続行しません）"
+    [ -t 0 ] || die "MILLICALL_BACKUP_PASSPHRASE / MILLICALL_BACKUP_PASSPHRASE_FILE が未設定で対話入力もできません（無暗号では続行しません）"
     printf 'バックアップのパスフレーズ: ' >&2
     IFS= read -rs BACKUP_PASS
     printf '\n' >&2
@@ -176,6 +197,16 @@ read_backup_passphrase() {
     die "パスフレーズは ${BACKUP_PASSPHRASE_MIN} 文字以上にしてください"
   fi
   [ -n "${BACKUP_PASS}" ] || die "パスフレーズが空です"
+}
+
+# openssl enc をバックアップ用の暗号パラメータとパスフレーズで実行する。
+# 環境変数経由の場合は別名の変数（BACKUP_PASS）をこの openssl 呼び出しにだけ渡す。
+backup_openssl() {
+  if [ -n "${BACKUP_PASS_FILE}" ]; then
+    openssl enc "$@" "${BACKUP_CIPHER_ARGS[@]}" -pass "file:${BACKUP_PASS_FILE}"
+  else
+    BACKUP_PASS="${BACKUP_PASS}" openssl enc "$@" "${BACKUP_CIPHER_ARGS[@]}" -pass env:BACKUP_PASS
+  fi
 }
 
 # ファイル先頭のバイト列で形式を判定する: enc（openssl enc の "Salted__"）/ gzip / unknown
@@ -205,8 +236,7 @@ do_backup() {
   [ -f .env ] && members="data .env"
   # shellcheck disable=SC2086 # members は固定の 1〜2 語
   if ! tar czf - ${members} \
-      | BACKUP_PASS="${BACKUP_PASS}" openssl enc -e "${BACKUP_CIPHER_ARGS[@]}" \
-          -pass env:BACKUP_PASS -out "${tmp_out}"; then
+      | backup_openssl -e -out "${tmp_out}"; then
     rm -f "${tmp_out}"
     die "backup の作成に失敗しました"
   fi
@@ -235,8 +265,7 @@ do_restore() {
     enc)
       command -v openssl >/dev/null 2>&1 || die "openssl が見つかりません（暗号化バックアップの復号に必要）"
       read_backup_passphrase 0
-      BACKUP_PASS="${BACKUP_PASS}" openssl enc -d "${BACKUP_CIPHER_ARGS[@]}" \
-          -pass env:BACKUP_PASS -in "${src}" -out "${work}/archive.tar.gz" 2>/dev/null \
+      backup_openssl -d -in "${src}" -out "${work}/archive.tar.gz" 2>/dev/null \
         || die "復号に失敗しました（パスフレーズ違い、またはファイル破損）"
       ;;
     gzip)
@@ -246,7 +275,8 @@ do_restore() {
     *) die "backup の形式を判別できません: ${src}" ;;
   esac
 
-  # 展開前にメンバーを検証する: data/ と .env 以外・絶対パス・.. ・リンクは拒否。
+  # 展開前にメンバーを検証する: data/ と .env 以外・絶対パス・.. は拒否。
+  # 種別は通常ファイルとディレクトリのみ許可（リンク・デバイス・FIFO 等は拒否）。
   listing="$(tar tzf "${work}/archive.tar.gz")" || die "backup を展開できません（破損の可能性）"
   while IFS= read -r m; do
     case "${m}" in
@@ -257,22 +287,26 @@ do_restore() {
   done <<EOF_LIST
 ${listing}
 EOF_LIST
-  if tar tvzf "${work}/archive.tar.gz" | cut -c1 | grep -q '[lh]'; then
-    die "backup にリンクが含まれています（復元しません）"
+  if tar tvzf "${work}/archive.tar.gz" | cut -c1 | grep -q '[^d-]'; then
+    die "backup に通常ファイル・ディレクトリ以外（リンク・デバイス等）が含まれています（復元しません）"
   fi
   mkdir "${work}/x"
-  tar xzf "${work}/archive.tar.gz" -C "${work}/x" || die "backup の展開に失敗しました"
+  tar xzf "${work}/archive.tar.gz" -C "${work}/x" --no-same-owner --no-same-permissions \
+    || die "backup の展開に失敗しました"
   [ -d "${work}/x/data" ] || die "backup に data/ が含まれていません"
 
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   if [ -e data ]; then
     mv data "data.pre-restore-${ts}"
+    # 退避物にも鍵・平文の FreeSWITCH 設定が入るため所有者のみにする
+    chmod 700 "data.pre-restore-${ts}"
     log "既存の data/ を data.pre-restore-${ts} に退避しました"
   fi
   mv "${work}/x/data" data
   if [ -f "${work}/x/.env" ]; then
     if [ -e .env ]; then
       mv .env ".env.pre-restore-${ts}"
+      chmod 600 ".env.pre-restore-${ts}"
       log "既存の .env を .env.pre-restore-${ts} に退避しました"
     fi
     mv "${work}/x/.env" .env
@@ -286,6 +320,10 @@ EOF_LIST
   fi
   log "復元しました。'millicallctl up' で起動し、'millicallctl logs core' で"
   log "SIP 認証情報の鍵整合性チェックにエラーが出ていないことを確認してください。"
+  if [ -e "data.pre-restore-${ts}" ] || [ -e ".env.pre-restore-${ts}" ]; then
+    log "退避物には旧データの鍵・認証情報が含まれます。動作確認後に削除してください:"
+    log "  rm -rf '${MILLICALL_HOME}/data.pre-restore-${ts}' '${MILLICALL_HOME}/.env.pre-restore-${ts}'"
+  fi
 }
 
 usage() {
