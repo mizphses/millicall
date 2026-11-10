@@ -13,7 +13,8 @@ Fernet）で暗号化した列へ移す。平文と暗号文の混在期間は�
 暗号化/復号すべき行があるのに鍵が無い場合は失敗する（fail-closed）。
 
 旧列の平文は SQLite の空きページと WAL に残り得るため、env.py がこのリビジョンの
-適用後（トランザクション外）に VACUUM と wal_checkpoint(TRUNCATE) を行う。
+適用後（トランザクション外）に VACUUM と wal_checkpoint(TRUNCATE) を行う。完了できなければ
+data/ に <db>.compact-pending マーカーを残し、次回起動時の upgrade_to_head が再試行する。
 
 downgrade は鍵で復号して平文列へ戻す（鍵が無ければ失敗）。
 
@@ -31,7 +32,7 @@ from millicall.crypto import SecretBox
 from millicall.db_migrations import MASTER_KEY_ATTR, VACUUM_FLAG_ATTR
 
 revision: str = "0027"
-# NOTE: 0024〜0026 は別ブランチで先行マージ予定。マージ時に "0026" へ付け替えること。
+# NOTE: 0024（別セッション）・0025（#106）・0026（#107）のマージ後に down_revision を "0026" へ付け替えること。
 down_revision: str | None = "0023"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

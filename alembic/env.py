@@ -1,5 +1,4 @@
 import json
-import logging
 from logging.config import fileConfig
 from pathlib import Path
 
@@ -8,7 +7,12 @@ from sqlalchemy import engine_from_config, pool
 
 import millicall.models  # noqa: F401  models を import して metadata を確定
 from millicall.db import Base
-from millicall.db_migrations import MASTER_KEY_ATTR, VACUUM_FLAG_ATTR
+from millicall.db_migrations import (
+    MASTER_KEY_ATTR,
+    VACUUM_FLAG_ATTR,
+    compact_sqlite,
+    sqlite_path,
+)
 
 config = context.config
 if config.config_file_name is not None:
@@ -34,29 +38,6 @@ def _load_master_key_from_x_args() -> None:
         return
     data = json.loads(Path(secrets_file).read_text(encoding="utf-8"))
     config.attributes[MASTER_KEY_ATTR] = data["master_key"]
-
-
-def _compact_sqlite(connection) -> None:
-    """旧平文列の残骸（空きページ・WAL フレーム）を消す。
-
-    VACUUM はトランザクション内で実行できないため、マイグレーションのトランザクションを
-    閉じた後に AUTOCOMMIT で実行する。VACUUM でファイルを作り直し、
-    wal_checkpoint(TRUNCATE) で WAL を本体へ書き戻して WAL ファイルを 0 バイトにする。
-    """
-    if connection.dialect.name != "sqlite":
-        return
-    try:
-        autocommit = connection.execution_options(isolation_level="AUTOCOMMIT")
-        autocommit.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
-        autocommit.exec_driver_sql("VACUUM")
-        autocommit.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
-    except Exception:
-        # マイグレーション自体は確定済み。ここで落としても次回起動では再試行されないため、
-        # 起動は続けて手動での実行を促す（VACUUM は DB サイズ分の空き容量を要する）。
-        logging.getLogger("millicall.migrations").exception(
-            "マイグレーション後の VACUUM に失敗しました。旧平文列の残骸が DB ファイルに"
-            "残っている可能性があります。core 停止中に DB へ VACUUM を実行してください"
-        )
 
 
 def _sync_url() -> str:
@@ -89,8 +70,13 @@ def run_migrations_online() -> None:
         )
         with context.begin_transaction():
             context.run_migrations()
-        if config.attributes.pop(VACUUM_FLAG_ATTR, False):
-            _compact_sqlite(connection)
+    # 旧平文列の残骸（空きページ・WAL フレーム）を消す。VACUUM はトランザクション内で
+    # 実行できないため、マイグレーションの接続を閉じた後に別接続で行う。失敗時は
+    # data/ にマーカーを残し、次回の upgrade_to_head で再試行する。
+    if config.attributes.pop(VACUUM_FLAG_ATTR, False):
+        db_path = sqlite_path(_sync_url())
+        if db_path is not None:
+            compact_sqlite(db_path)
 
 
 _load_master_key_from_x_args()

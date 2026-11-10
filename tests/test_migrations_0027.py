@@ -176,3 +176,56 @@ def test_cli_secrets_file_x_argument(tmp_path):
     tok = con.execute("SELECT sip_password_encrypted FROM extensions").fetchone()[0]
     con.close()
     assert SecretBox(_KEY).decrypt(tok) == _EXT_PW
+
+
+@pytest.fixture
+def _fast_compaction(monkeypatch):
+    # 再試行の待ち時間を短くする。fileConfig は caplog のハンドラを外すので無効化する。
+    import logging.config
+
+    import millicall.db_migrations as dbm
+
+    monkeypatch.setattr(dbm, "_COMPACT_ATTEMPTS", 2)
+    monkeypatch.setattr(dbm, "_COMPACT_RETRY_INTERVAL", 0.01)
+    monkeypatch.setattr(dbm, "_COMPACT_BUSY_TIMEOUT", 0.05)
+    monkeypatch.setattr(logging.config, "fileConfig", lambda *a, **k: None)
+
+
+def _open_reader(db_path: Path) -> sqlite3.Connection:
+    """読み取りトランザクションを保持した別接続（WAL の checkpoint を busy にする）。"""
+    reader = sqlite3.connect(db_path, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM extensions").fetchone()
+    return reader
+
+
+def test_busy_checkpoint_is_detected_and_retried_on_next_start(tmp_path, caplog, _fast_compaction):
+    """読み取り中の接続があると WAL を切り詰められない → ERROR + マーカー → 次回起動で再試行。"""
+    from millicall.db_migrations import compaction_marker
+
+    db = tmp_path / "m.db"
+    _seed_0023(db)
+    reader = _open_reader(db)
+    upgrade(_cfg(db), "0027")
+    assert "DB の圧縮（VACUUM / wal_checkpoint）を完了できませんでした" in caplog.text
+    marker = compaction_marker(db)
+    assert marker.exists()
+    reader.close()
+
+    # 次回起動（upgrade_to_head）でマーカーを見て再試行し、成功したら消す
+    caplog.clear()
+    upgrade_to_head(f"sqlite+aiosqlite:///{db}", _KEY)
+    assert not marker.exists()
+    assert "完了できませんでした" not in caplog.text
+    raw = _raw_bytes(db)
+    assert _EXT_PW.encode() not in raw
+    assert _TRUNK_PW.encode() not in raw
+
+
+def test_compaction_success_leaves_no_marker(tmp_path):
+    from millicall.db_migrations import compaction_marker
+
+    db = tmp_path / "m.db"
+    _seed_0023(db)
+    upgrade(_cfg(db), "0027")
+    assert not compaction_marker(db).exists()
