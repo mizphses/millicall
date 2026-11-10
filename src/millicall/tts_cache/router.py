@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.ai import registry
-from millicall.ai.tts.cache import PromptCache
+from millicall.ai.tts.cache import PromptCache, tts_cache_key
 from millicall.crypto import SecretBox
 from millicall.deps import get_secret_box, get_session, require_admin
 from millicall.models import Provider
@@ -33,7 +33,8 @@ async def synthesize(
     api_key = box.decrypt(p.api_key_encrypted) if p.api_key_encrypted else None
     tts = registry.build_tts(p.kind, config, api_key)
     cache = PromptCache(request.app.state.settings.tts_cache_dir / "prompts")
-    key = f"{body.provider_id}:{body.text}"
+    # キーは kind + 音声に影響する設定のハッシュ + テキスト（設定変更で別キーになる）
+    key = tts_cache_key(p.kind, config, body.text)
     existed = cache.path_for(key).exists()
     path = await cache.get_or_synth(key, tts, body.text)
     return SynthesizeResult(path=str(path), cached=existed)
