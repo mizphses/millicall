@@ -146,6 +146,148 @@ check_for_update() {
   rm -f "${remote_file}"
 }
 
+# ---- バックアップ暗号化 --------------------------------------------------------
+# data/ には DB・secrets.json（master_key）・平文の FreeSWITCH 設定が入るため、
+# バックアップは必ずパスフレーズで暗号化する（無暗号では作らない）。
+# パスフレーズは MILLICALL_BACKUP_PASSPHRASE か対話入力。openssl には -pass env: で
+# 渡し、コマンドライン（ps で見える）には出さない。restore と同じ引数を使うこと。
+BACKUP_CIPHER_ARGS=(-aes-256-cbc -salt -pbkdf2 -iter 600000 -md sha256)
+BACKUP_PASSPHRASE_MIN=12
+
+# パスフレーズを BACKUP_PASS（非 export のシェル変数）へ読み込む。
+# $1=1 のとき対話入力で確認入力を求める（backup 時）。
+read_backup_passphrase() {
+  local confirm="${1:-0}" again
+  if [ -n "${MILLICALL_BACKUP_PASSPHRASE:-}" ]; then
+    BACKUP_PASS="${MILLICALL_BACKUP_PASSPHRASE}"
+  else
+    [ -t 0 ] || die "MILLICALL_BACKUP_PASSPHRASE が未設定で対話入力もできません（無暗号では続行しません）"
+    printf 'バックアップのパスフレーズ: ' >&2
+    IFS= read -rs BACKUP_PASS
+    printf '\n' >&2
+    if [ "${confirm}" = "1" ]; then
+      printf 'もう一度入力: ' >&2
+      IFS= read -rs again
+      printf '\n' >&2
+      [ "${BACKUP_PASS}" = "${again}" ] || die "パスフレーズが一致しません"
+    fi
+  fi
+  if [ "${confirm}" = "1" ] && [ "${#BACKUP_PASS}" -lt "${BACKUP_PASSPHRASE_MIN}" ]; then
+    die "パスフレーズは ${BACKUP_PASSPHRASE_MIN} 文字以上にしてください"
+  fi
+  [ -n "${BACKUP_PASS}" ] || die "パスフレーズが空です"
+}
+
+# ファイル先頭のバイト列で形式を判定する: enc（openssl enc の "Salted__"）/ gzip / unknown
+backup_format() {
+  local head
+  head="$(od -An -tx1 -N8 "$1" | tr -d ' \n')"
+  case "${head}" in
+    53616c7465645f5f*) echo enc ;;
+    1f8b*) echo gzip ;;
+    *) echo unknown ;;
+  esac
+}
+
+do_backup() {
+  command -v openssl >/dev/null 2>&1 || die "openssl が見つかりません（暗号化バックアップに必要）"
+  [ -d data ] || die "data/ がありません: ${MILLICALL_HOME}/data"
+  read_backup_passphrase 1
+  # 成果物・一時ファイルとも所有者のみ読み書き可（0600 / ディレクトリ 0700）
+  umask 077
+  mkdir -p backups
+  chmod 700 backups
+  local ts out tmp_out members
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  out="backups/millicall-${ts}.tar.gz.enc"
+  tmp_out="${out}.partial"
+  members="data"
+  [ -f .env ] && members="data .env"
+  # shellcheck disable=SC2086 # members は固定の 1〜2 語
+  if ! tar czf - ${members} \
+      | BACKUP_PASS="${BACKUP_PASS}" openssl enc -e "${BACKUP_CIPHER_ARGS[@]}" \
+          -pass env:BACKUP_PASS -out "${tmp_out}"; then
+    rm -f "${tmp_out}"
+    die "backup の作成に失敗しました"
+  fi
+  mv "${tmp_out}" "${out}"
+  log "backup 作成（暗号化済み）: ${MILLICALL_HOME}/${out}"
+  log "パスフレーズを失うと復元できません。バックアップとは別の場所に保管してください。"
+}
+
+do_restore() {
+  local src="${1:-}"
+  [ -n "${src}" ] || die "usage: millicallctl restore <backup ファイル>"
+  [ -f "${src}" ] || die "backup ファイルが見つかりません: ${src}"
+  # 稼働中の core に DB を差し替えさせない（WAL 書き込み中の差し替えで破損しうる）。
+  if [ -n "$(dc ps -q 2>/dev/null || true)" ]; then
+    die "稼働中のコンテナがあります。先に 'millicallctl down' を実行してください"
+  fi
+
+  umask 077
+  local work fmt ts listing
+  work="$(mktemp -d "${MILLICALL_HOME}/.restore.XXXXXX")"
+  # shellcheck disable=SC2064 # work はここで確定させる
+  trap "rm -rf '${work}'" EXIT
+
+  fmt="$(backup_format "${src}")"
+  case "${fmt}" in
+    enc)
+      command -v openssl >/dev/null 2>&1 || die "openssl が見つかりません（暗号化バックアップの復号に必要）"
+      read_backup_passphrase 0
+      BACKUP_PASS="${BACKUP_PASS}" openssl enc -d "${BACKUP_CIPHER_ARGS[@]}" \
+          -pass env:BACKUP_PASS -in "${src}" -out "${work}/archive.tar.gz" 2>/dev/null \
+        || die "復号に失敗しました（パスフレーズ違い、またはファイル破損）"
+      ;;
+    gzip)
+      log "無暗号の旧形式バックアップ（tar.gz）として復元します"
+      cp "${src}" "${work}/archive.tar.gz"
+      ;;
+    *) die "backup の形式を判別できません: ${src}" ;;
+  esac
+
+  # 展開前にメンバーを検証する: data/ と .env 以外・絶対パス・.. ・リンクは拒否。
+  listing="$(tar tzf "${work}/archive.tar.gz")" || die "backup を展開できません（破損の可能性）"
+  while IFS= read -r m; do
+    case "${m}" in
+      */../*|../*|*/..|..) die "backup に不正なパスが含まれています: ${m}" ;;
+      data|data/|data/*|./data|./data/|./data/*|.env|./.env) ;;
+      *) die "backup に想定外のパスが含まれています: ${m}" ;;
+    esac
+  done <<EOF_LIST
+${listing}
+EOF_LIST
+  if tar tvzf "${work}/archive.tar.gz" | cut -c1 | grep -q '[lh]'; then
+    die "backup にリンクが含まれています（復元しません）"
+  fi
+  mkdir "${work}/x"
+  tar xzf "${work}/archive.tar.gz" -C "${work}/x" || die "backup の展開に失敗しました"
+  [ -d "${work}/x/data" ] || die "backup に data/ が含まれていません"
+
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  if [ -e data ]; then
+    mv data "data.pre-restore-${ts}"
+    log "既存の data/ を data.pre-restore-${ts} に退避しました"
+  fi
+  mv "${work}/x/data" data
+  if [ -f "${work}/x/.env" ]; then
+    if [ -e .env ]; then
+      mv .env ".env.pre-restore-${ts}"
+      log "既存の .env を .env.pre-restore-${ts} に退避しました"
+    fi
+    mv "${work}/x/.env" .env
+    chmod 600 .env
+  fi
+  chmod 700 data
+  if [ -f data/secrets.json ]; then
+    chmod 600 data/secrets.json
+  else
+    log "警告: backup に data/secrets.json がありません。暗号化保存された SIP 認証情報等を復号できません"
+  fi
+  log "復元しました。'millicallctl up' で起動し、'millicallctl logs core' で"
+  log "SIP 認証情報の鍵整合性チェックにエラーが出ていないことを確認してください。"
+}
+
 usage() {
   cat <<'EOF'
 millicallctl <command>
@@ -157,7 +299,8 @@ millicallctl <command>
   pull             イメージ取得のみ
   logs [service]   ログ追尾 (既定: 全サービス)
   ps               コンテナ状態
-  backup           data/ と .env を backups/ に tar.gz
+  backup           data/ と .env を暗号化して backups/ に保存 (tar.gz + openssl AES-256)
+  restore <file>   backup を復元 (停止中に実行。旧 data/ は data.pre-restore-* へ退避)
   version          MILLICALL_VERSION と稼働イメージ digest
   self-update      millicallctl 自身を最新へ更新
   help             このヘルプ
@@ -231,13 +374,8 @@ case "${cmd}" in
     apply_profiles
     dc ps
     ;;
-  backup)
-    mkdir -p backups
-    ts="$(date -u +%Y%m%dT%H%M%SZ)"
-    out="backups/millicall-${ts}.tar.gz"
-    tar czf "${out}" data .env
-    printf '[millicallctl] backup 作成: %s/%s\n' "${MILLICALL_HOME}" "${out}"
-    ;;
+  backup)   do_backup ;;
+  restore)  do_restore "$@" ;;
   version)
     if [ -f .env ]; then grep '^MILLICALL_VERSION=' .env || echo "MILLICALL_VERSION=(未設定 -> latest)"; fi
     dc images
