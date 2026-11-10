@@ -7,6 +7,12 @@
  *   (c) 未プロビジョニングデバイスへの「内線割当」アクション → SlidePanel でフォーム入力
  *       → POST /api/devices/{id}/quick-provision
  *   (d) 削除アクション（confirm ダイアログ）→ DELETE /api/devices/{id}
+ *   (e) 状態列（issue #85）: 取得待ち / トークン待ち / 取得済み（登録未確認・未登録）/ 完了。
+ *       「完了」は設定ファイル取得済み かつ SIP 登録確認済み（GET /api/devices/registrations）
+ *       のときだけ表示する（deviceStatus.ts）。
+ *   (f) 再同期 → POST /api/devices/{id}/resync（再取得の「指示」。結果をトーストに出す）
+ *   (g) 厳格モード切替 → PATCH /api/devices/{id}、トークン発行 → POST /api/devices/{id}/token
+ *       （トークン付き URL は一度だけ表示）、トークン破棄 → DELETE /api/devices/{id}/token
  *
  * デザイン原則:
  *   - PandaCSS css()/cx() + styled-system/recipes (panel, button, input, badge)
@@ -18,31 +24,43 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import {
   RefreshCw,
+  RotateCw,
   Smartphone,
   Trash2,
   PhoneCall,
   Loader2,
   CheckCircle2,
   Circle,
+  KeyRound,
+  ShieldCheck,
+  ShieldOff,
+  Copy,
+  Check,
+  AlertTriangle,
 } from "lucide-react";
 
-import { css } from "styled-system/css";
-import { badge, button, input } from "styled-system/recipes";
+import { css, cx } from "styled-system/css";
+import { badge, button, input, panel } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import type { components } from "../api/schema.d";
-import { DEVICES_KEY } from "../queryKeys";
+import { DEVICE_REGISTRATIONS_KEY, DEVICES_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
 import { SlidePanel } from "../components/SlidePanel";
 import { useToast } from "../toast/ToastProvider";
+import { deviceStatus, resyncToast } from "./devices/deviceStatus";
 
 // ---------------------------------------------------------------------------
 // 型エイリアス（schema.d.ts の自動生成型を再利用）
 // ---------------------------------------------------------------------------
 
 type DeviceRead = components["schemas"]["DeviceRead"];
+type DeviceRegistrations = components["schemas"]["DeviceRegistrations"];
+type ProvisionTokenIssued = components["schemas"]["ProvisionTokenIssued"];
+type ResyncResultRead = components["schemas"]["ResyncResultRead"];
+type ProvisionMode = DeviceRead["provision_mode"];
 
 // ---------------------------------------------------------------------------
 // API 関数
@@ -95,6 +113,59 @@ async function deleteDevice(deviceId: number): Promise<void> {
   if (error) throw new Error("デバイスの削除に失敗しました");
 }
 
+async function fetchRegistrations(): Promise<DeviceRegistrations> {
+  const { data, error } = await api.GET("/api/devices/registrations");
+  // 取得できない場合も「未確認」として扱う（登録済みと偽らない）
+  if (error || !data) return { available: false, registered_device_ids: [] };
+  return data;
+}
+
+async function resyncDevice(deviceId: number): Promise<ResyncResultRead> {
+  const { data, error } = await api.POST("/api/devices/{device_id}/resync", {
+    params: { path: { device_id: deviceId } },
+  });
+  if (error || !data) throw new Error("再取得の指示に失敗しました");
+  return data;
+}
+
+async function updateProvisionMode(deviceId: number, mode: ProvisionMode): Promise<DeviceRead> {
+  const { data, error } = await api.PATCH("/api/devices/{device_id}", {
+    params: { path: { device_id: deviceId } },
+    body: { provision_mode: mode },
+  });
+  if (error || !data) throw new Error("配信モードの変更に失敗しました");
+  return data;
+}
+
+async function issueToken(deviceId: number): Promise<ProvisionTokenIssued> {
+  const { data, error, response } = await api.POST("/api/devices/{device_id}/token", {
+    params: { path: { device_id: deviceId } },
+  });
+  if (response.status === 409) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? "トークンを発行できません");
+  }
+  if (error || !data) throw new Error("トークンの発行に失敗しました");
+  return data;
+}
+
+async function revokeToken(deviceId: number): Promise<DeviceRead> {
+  const { data, error } = await api.DELETE("/api/devices/{device_id}/token", {
+    params: { path: { device_id: deviceId } },
+  });
+  if (error || !data) throw new Error("トークンの破棄に失敗しました");
+  return data;
+}
+
+function formatDateTime(value: string): string {
+  return new Date(value).toLocaleString("ja-JP", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 // ---------------------------------------------------------------------------
 // フォーム状態型
 // ---------------------------------------------------------------------------
@@ -117,6 +188,21 @@ export function DevicesPage() {
   const queryClient = useQueryClient();
 
   const listQuery = useQuery({ queryKey: DEVICES_KEY, queryFn: fetchDevices });
+  const registrationsQuery = useQuery({
+    queryKey: DEVICE_REGISTRATIONS_KEY,
+    queryFn: fetchRegistrations,
+  });
+
+  // 配信モード切替の確認
+  const [modeTarget, setModeTarget] = useState<{ device: DeviceRead; mode: ProvisionMode } | null>(
+    null
+  );
+  // トークン破棄の確認
+  const [revokeTarget, setRevokeTarget] = useState<DeviceRead | null>(null);
+  // 発行したトークン付き URL（一度だけ表示）
+  const [issued, setIssued] = useState<{ device: DeviceRead; result: ProvisionTokenIssued } | null>(
+    null
+  );
 
   // 内線割当パネル
   const [provisionTarget, setProvisionTarget] = useState<DeviceRead | null>(null);
@@ -168,6 +254,62 @@ export function DevicesPage() {
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "削除に失敗しました");
+    },
+  });
+
+  // ─── 再同期（再取得の指示）ミューテーション ───
+  const resyncMutation = useMutation({
+    mutationFn: (id: number) => resyncDevice(id),
+    onSuccess: (result) => {
+      const t = resyncToast(result);
+      if (t.tone === "success") toast.success(t.message);
+      else toast.error(t.message);
+      queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "再取得の指示に失敗しました");
+    },
+  });
+
+  // ─── 配信モード切替ミューテーション ───
+  const modeMutation = useMutation({
+    mutationFn: ({ id, mode }: { id: number; mode: ProvisionMode }) => updateProvisionMode(id, mode),
+    onSuccess: (device) => {
+      queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
+      toast.success(
+        device.provision_mode === "strict"
+          ? "厳格モードにしました。トークンを発行して電話機に入力してください"
+          : "標準モードに戻しました（トークンは破棄しました）"
+      );
+      setModeTarget(null);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "配信モードの変更に失敗しました");
+    },
+  });
+
+  // ─── トークン発行ミューテーション ───
+  const issueMutation = useMutation({
+    mutationFn: (device: DeviceRead) => issueToken(device.id),
+    onSuccess: (result, device) => {
+      queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
+      setIssued({ device, result });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "トークンの発行に失敗しました");
+    },
+  });
+
+  // ─── トークン破棄ミューテーション ───
+  const revokeMutation = useMutation({
+    mutationFn: (id: number) => revokeToken(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
+      toast.success("トークンを破棄しました");
+      setRevokeTarget(null);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "トークンの破棄に失敗しました");
     },
   });
 
@@ -263,20 +405,50 @@ export function DevicesPage() {
         ),
     },
     {
-      key: "provisioned",
-      header: "プロビジョニング",
-      width: "140px",
+      key: "status",
+      header: "状態",
+      width: "200px",
+      render: (row) => {
+        const s = deviceStatus(row, registrationsQuery.data ?? null);
+        return (
+          <div title={s.hint}>
+            <div className={css({ display: "flex", alignItems: "center", gap: "1" })}>
+              {s.kind === "complete" ? (
+                <CheckCircle2 size={14} className={css({ color: "green.600" })} />
+              ) : (
+                <Circle size={14} className={css({ color: "text.subtle" })} />
+              )}
+              <span className={badge({ tone: s.tone })}>{s.label}</span>
+            </div>
+            {row.last_config_fetch_at ? (
+              <p className={css({ fontSize: "xs", color: "text.muted", mt: "1" })}>
+                取得 {formatDateTime(row.last_config_fetch_at)}
+                {row.last_config_fetch_used_token ? "（トークン）" : ""}
+              </p>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      key: "provision_mode",
+      header: "配信",
+      width: "110px",
       render: (row) =>
-        row.provisioned ? (
-          <div className={css({ display: "flex", alignItems: "center", gap: "1" })}>
-            <CheckCircle2 size={14} className={css({ color: "green.600" })} />
-            <span className={badge({ tone: "success" })}>完了</span>
-          </div>
+        row.provision_mode === "strict" ? (
+          <span
+            className={badge({ tone: "accent" })}
+            title="端末固有の設定はトークン付き URL からのみ配信します"
+          >
+            厳格
+          </span>
         ) : (
-          <div className={css({ display: "flex", alignItems: "center", gap: "1" })}>
-            <Circle size={14} className={css({ color: "text.subtle" })} />
-            <span className={badge({ tone: "neutral" })}>未完了</span>
-          </div>
+          <span
+            className={badge({ tone: "neutral" })}
+            title="LAN 内・登録済み端末・IP 一致で配信します"
+          >
+            標準
+          </span>
         ),
     },
     {
@@ -286,12 +458,7 @@ export function DevicesPage() {
       render: (row) =>
         row.last_seen ? (
           <span className={css({ fontSize: "sm", color: "text.muted" })}>
-            {new Date(row.last_seen).toLocaleString("ja-JP", {
-              month: "2-digit",
-              day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
+            {formatDateTime(row.last_seen)}
           </span>
         ) : (
           <span className={css({ color: "text.subtle", fontSize: "sm" })}>—</span>
@@ -300,10 +467,17 @@ export function DevicesPage() {
     {
       key: "actions",
       header: "操作",
-      width: "200px",
+      width: "340px",
       align: "right",
       render: (row) => (
-        <div className={css({ display: "flex", gap: "2", justifyContent: "flex-end" })}>
+        <div
+          className={css({
+            display: "flex",
+            gap: "2",
+            justifyContent: "flex-end",
+            flexWrap: "wrap",
+          })}
+        >
           {!row.provisioned && (
             <button
               type="button"
@@ -315,6 +489,59 @@ export function DevicesPage() {
               内線割当
             </button>
           )}
+          {row.provisioned && (
+            <button
+              type="button"
+              className={button({ variant: "secondary", size: "sm" })}
+              style={{ height: "28px" }}
+              title="電話機に設定の再取得を指示します（取得したかは状態列で確認）"
+              disabled={resyncMutation.isPending && resyncMutation.variables === row.id}
+              onClick={() => resyncMutation.mutate(row.id)}
+            >
+              {resyncMutation.isPending && resyncMutation.variables === row.id ? (
+                <Loader2 size={13} className={css({ animation: "spin" })} />
+              ) : (
+                <RotateCw size={13} />
+              )}
+              再同期
+            </button>
+          )}
+          {row.provision_mode === "strict" && (
+            <button
+              type="button"
+              className={button({ variant: "secondary", size: "sm" })}
+              style={{ height: "28px" }}
+              disabled={issueMutation.isPending}
+              onClick={() => issueMutation.mutate(row)}
+            >
+              <KeyRound size={13} />
+              {row.token_issued ? "トークン再発行" : "トークン発行"}
+            </button>
+          )}
+          {row.provision_mode === "strict" && row.token_issued && (
+            <button
+              type="button"
+              className={button({ variant: "ghost", size: "sm" })}
+              style={{ height: "28px" }}
+              onClick={() => setRevokeTarget(row)}
+            >
+              トークン破棄
+            </button>
+          )}
+          <button
+            type="button"
+            className={button({ variant: "ghost", size: "sm" })}
+            style={{ height: "28px" }}
+            onClick={() =>
+              setModeTarget({
+                device: row,
+                mode: row.provision_mode === "strict" ? "standard" : "strict",
+              })
+            }
+          >
+            {row.provision_mode === "strict" ? <ShieldOff size={13} /> : <ShieldCheck size={13} />}
+            {row.provision_mode === "strict" ? "標準に戻す" : "厳格モード"}
+          </button>
           <button
             type="button"
             className={button({ variant: "ghost", size: "sm" })}
@@ -466,6 +693,50 @@ export function DevicesPage() {
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         onCancel={() => setDeleteTarget(null)}
       />
+
+      {/* 配信モード切替の確認 */}
+      <ConfirmDialog
+        open={modeTarget !== null}
+        title={modeTarget?.mode === "strict" ? "厳格モードにする" : "標準モードに戻す"}
+        message={
+          modeTarget
+            ? modeTarget.mode === "strict"
+              ? `${modeTarget.device.mac_address} の設定ファイルを、トークン付き URL からのみ配信します。トークンを発行して電話機の Web 画面に入力するまで、この端末は設定を取得できません（通常の URL は 404 になります）。`
+              : `${modeTarget.device.mac_address} のトークンを破棄し、LAN 内・登録済み端末・IP 一致での配信に戻します。電話機に入力したトークン付き URL は使えなくなるため、電話機側のプロビジョニング URL も通常の URL に戻してください。`
+            : ""
+        }
+        confirmLabel={modeTarget?.mode === "strict" ? "厳格モードにする" : "標準に戻す"}
+        busy={modeMutation.isPending}
+        onConfirm={() =>
+          modeTarget && modeMutation.mutate({ id: modeTarget.device.id, mode: modeTarget.mode })
+        }
+        onCancel={() => setModeTarget(null)}
+      />
+
+      {/* トークン破棄の確認 */}
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        title="トークンを破棄"
+        message={
+          revokeTarget
+            ? `${revokeTarget.mac_address} のトークンを破棄します。厳格モードのままなので、新しいトークンを発行して電話機に入力するまで、この端末は設定を取得できなくなります。`
+            : ""
+        }
+        confirmLabel="破棄"
+        destructive
+        busy={revokeMutation.isPending}
+        onConfirm={() => revokeTarget && revokeMutation.mutate(revokeTarget.id)}
+        onCancel={() => setRevokeTarget(null)}
+      />
+
+      {/* 発行したトークン付き URL（一度だけ表示） */}
+      {issued && (
+        <TokenIssuedDialog
+          device={issued.device}
+          result={issued.result}
+          onClose={() => setIssued(null)}
+        />
+      )}
     </PageLayout>
   );
 }
@@ -473,6 +744,141 @@ export function DevicesPage() {
 // ---------------------------------------------------------------------------
 // 補助コンポーネント
 // ---------------------------------------------------------------------------
+
+/**
+ * 発行したトークン付き URL を一度だけ表示するダイアログ。
+ * 閉じると二度と表示できない（サーバーはハッシュのみ保存）。管理者が電話機の Web 画面へ手入力する。
+ */
+function TokenIssuedDialog({
+  device,
+  result,
+  onClose,
+}: {
+  device: DeviceRead;
+  result: ProvisionTokenIssued;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className={css({
+        position: "fixed",
+        inset: 0,
+        zIndex: 950,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        p: "4",
+      })}
+    >
+      <div
+        aria-hidden
+        className={css({ position: "absolute", inset: 0, bg: "gray.900", opacity: 0.2 })}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="トークン付き URL"
+        className={cx(
+          panel(),
+          css({
+            position: "relative",
+            w: "640px",
+            maxW: "100%",
+            p: "5",
+            display: "flex",
+            flexDirection: "column",
+            gap: "4",
+          })
+        )}
+      >
+        <div className={css({ display: "flex", alignItems: "center", gap: "2" })}>
+          <AlertTriangle size={18} className={css({ color: "warn.text" })} />
+          <h2 className={css({ fontSize: "lg", fontWeight: "600" })}>
+            トークン付き URL（{device.mac_address}）
+          </h2>
+        </div>
+        <p className={css({ fontSize: "sm", color: "text.muted" })}>
+          この URL は<strong>この画面でしか表示されません</strong>。電話機の Web
+          管理画面に入力してください。閉じた後に必要になった場合は再発行してください
+          （再発行すると古い URL は使えなくなります）。電話機側で DHCP
+          のプロビジョニング（option 66）が有効だと通常の URL で上書きされることがあるため、
+          無効にしてください。
+        </p>
+        <CopyRow
+          label="Yealink: 自動プロビジョニングのサーバー URL"
+          value={result.yealink_server_url}
+        />
+        <CopyRow
+          label="Panasonic: Standard File URL"
+          value={result.panasonic_standard_file_url}
+        />
+        <CopyRow label="Panasonic: Master File URL" value={result.panasonic_master_file_url} />
+        <p className={css({ fontSize: "sm", color: "text.muted" })}>
+          入力後、電話機を再起動するか「再同期」を押し、状態列が「完了」になることを確認してください。
+        </p>
+        <div className={css({ display: "flex", justifyContent: "flex-end" })}>
+          <button
+            type="button"
+            className={button({ variant: "primary" })}
+            style={{ height: "36px" }}
+            onClick={onClose}
+          >
+            入力しました
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CopyRow({ label, value }: { label: string; value: string }) {
+  const toast = useToast();
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("コピーに失敗しました");
+    }
+  };
+  return (
+    <div>
+      <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+        {label}
+      </span>
+      <div className={css({ display: "flex", gap: "2", alignItems: "center" })}>
+        <code
+          className={css({
+            flex: "1",
+            fontFamily: "mono",
+            fontSize: "sm",
+            p: "2",
+            bg: "gray.50",
+            borderRadius: "sm",
+            borderWidth: "1px",
+            borderStyle: "solid",
+            borderColor: "border",
+            wordBreak: "break-all",
+          })}
+        >
+          {value}
+        </code>
+        <button
+          type="button"
+          className={button({ variant: "secondary", size: "sm" })}
+          style={{ height: "32px" }}
+          onClick={copy}
+          aria-label={`${label} をコピー`}
+        >
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+          {copied ? "コピー済み" : "コピー"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /** フォーム 1 項目（ラベル + 入力 + インラインエラー）。ExtensionsPage と同パターン。 */
 function ProvisionField({

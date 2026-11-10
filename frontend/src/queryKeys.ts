@@ -55,6 +55,9 @@ export const NETWORK_TAILSCALE_STATUS_KEY = ["network-tailscale-status"] as cons
 /** デバイス一覧取得 / sync / delete 後の invalidate に使う。 */
 export const DEVICES_KEY = ["devices"] as const;
 
+/** SIP 登録状態（DEVICES_KEY 配下。一覧の invalidate で一緒に再取得される）。 */
+export const DEVICE_REGISTRATIONS_KEY = ["devices", "registrations"] as const;
+
 // ─────────────────────────────────────────────────────────
 // Phase 6 認証強化用キー（T9b）
 // トップレベルが既存と衝突しないよう "p6-" プレフィックスを使用する。
