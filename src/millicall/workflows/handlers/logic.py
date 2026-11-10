@@ -144,6 +144,10 @@ async def handle_time_condition(node: object, ctx: ChannelContext) -> str:
     現在時刻（ctx.now で注入可能）が config.start_time から config.end_time の
     半開区間 [start, end) 内、かつ config.days_of_week に該当する場合に "match"、
     それ以外は "no_match" を返す。
+
+    - 開始 > 終了 は翌日までの区間（例 22:00〜06:00）。
+    - 曜日は「営業開始日の曜日」で判定する（金 22:00〜06:00 なら土曜 05:59 まで金曜分）。
+    - 開始 = 終了 は不正設定（保存時に拒否）。保存済みの場合は "no_match" を返す。
     """
     config = node.config  # type: ignore[attr-defined]
     now = _local_now(config.timezone, ctx)
@@ -158,11 +162,24 @@ async def handle_time_condition(node: object, ctx: ChannelContext) -> str:
     start_t = time(sh, sm)
     end_t = time(eh, em)
 
-    # 曜日チェック (weekday(): 0=月 … 6=日)
-    current_day = _WEEKDAY_MAP[now.weekday()]
+    # 開始 = 終了 は設定ミス（保存時に拒否される）。保存済みデータでも通話を落とさず不一致にする。
+    if start_t == end_t:
+        return "no_match"
 
-    in_time_range = start_t <= current_time < end_t
-    in_day_range = current_day in config.days_of_week
+    # 曜日チェック (weekday(): 0=月 … 6=日)
+    weekday = now.weekday()
+
+    if start_t < end_t:
+        # 同日内の区間 [start, end)。曜日は評価時点の曜日
+        in_time_range = start_t <= current_time < end_t
+    else:
+        # 日跨ぎ区間（開始 > 終了）: 開始当日の [start, 24:00) と翌日の [00:00, end)。
+        # 曜日は「営業開始日」の曜日で判定するため、深夜側（終了前）は前日の曜日で照合する
+        in_time_range = current_time >= start_t or current_time < end_t
+        if current_time < end_t:
+            weekday = (weekday - 1) % 7
+
+    in_day_range = _WEEKDAY_MAP[weekday] in config.days_of_week
 
     return "match" if (in_time_range and in_day_range) else "no_match"
 

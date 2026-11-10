@@ -3,32 +3,49 @@ import {
   createRoute,
   createRouter,
   Outlet,
+  lazyRouteComponent,
   redirect,
+  type RouterHistory,
 } from "@tanstack/react-router";
 
 import { fetchCurrentUser, fetchLoginConfig, USER_HOME_PATH } from "../auth/auth";
 import type { CurrentUser } from "../auth/auth";
-import { AppShell } from "../shell/AppShell";
-import { LoginPage } from "../pages/LoginPage";
-import { DashboardPage } from "../pages/DashboardPage";
-import { ExtensionsPage } from "../pages/ExtensionsPage";
-import { TrunksPage } from "../pages/TrunksPage";
-import { RoutesPage } from "../pages/RoutesPage";
-import { ProvidersPage } from "../pages/ProvidersPage";
-import { AiAgentsPage } from "../pages/AiAgentsPage";
-import { ContactsPage } from "../pages/ContactsPage";
-import { CdrPage } from "../pages/CdrPage";
-import { WorkflowsPage } from "../pages/WorkflowsPage";
-import { WorkflowEditorPage } from "../pages/WorkflowEditorPage";
-import { NetworkPage } from "../pages/NetworkPage";
-import { NetworkRemotePage } from "../pages/NetworkRemotePage";
-import { DevicesPage } from "../pages/DevicesPage";
-import { UsersPage } from "../pages/UsersPage";
-import { SecurityPage } from "../pages/SecurityPage";
-import { SystemPage } from "../pages/SystemPage";
-import { AuditPage } from "../pages/AuditPage";
-import { SsoPage } from "../pages/SsoPage";
-import { SettingsPage } from "../pages/SettingsPage";
+import { RouteError, RoutePending } from "./RouteStatus";
+
+// 各ページはルート単位で別チャンクに分割する（Issue #82）。
+// beforeLoad（認証ガード）はルート定義側に残るため、未認証ユーザーは
+// 保護ページのチャンクを取得する前に /login へリダイレクトされる。
+// lazyRouteComponent は router の preload（Link の intent）からも先読みされる。
+const AppShell = lazyRouteComponent(() => import("../shell/AppShell"), "AppShell");
+const LoginPage = lazyRouteComponent(() => import("../pages/LoginPage"), "LoginPage");
+const DashboardPage = lazyRouteComponent(() => import("../pages/DashboardPage"), "DashboardPage");
+const ExtensionsPage = lazyRouteComponent(
+  () => import("../pages/ExtensionsPage"),
+  "ExtensionsPage",
+);
+const TrunksPage = lazyRouteComponent(() => import("../pages/TrunksPage"), "TrunksPage");
+const RoutesPage = lazyRouteComponent(() => import("../pages/RoutesPage"), "RoutesPage");
+const ProvidersPage = lazyRouteComponent(() => import("../pages/ProvidersPage"), "ProvidersPage");
+const AiAgentsPage = lazyRouteComponent(() => import("../pages/AiAgentsPage"), "AiAgentsPage");
+const ContactsPage = lazyRouteComponent(() => import("../pages/ContactsPage"), "ContactsPage");
+const CdrPage = lazyRouteComponent(() => import("../pages/CdrPage"), "CdrPage");
+const WorkflowsPage = lazyRouteComponent(() => import("../pages/WorkflowsPage"), "WorkflowsPage");
+const WorkflowEditorPage = lazyRouteComponent(
+  () => import("../pages/WorkflowEditorPage"),
+  "WorkflowEditorPage",
+);
+const NetworkPage = lazyRouteComponent(() => import("../pages/NetworkPage"), "NetworkPage");
+const NetworkRemotePage = lazyRouteComponent(
+  () => import("../pages/NetworkRemotePage"),
+  "NetworkRemotePage",
+);
+const DevicesPage = lazyRouteComponent(() => import("../pages/DevicesPage"), "DevicesPage");
+const UsersPage = lazyRouteComponent(() => import("../pages/UsersPage"), "UsersPage");
+const SecurityPage = lazyRouteComponent(() => import("../pages/SecurityPage"), "SecurityPage");
+const SystemPage = lazyRouteComponent(() => import("../pages/SystemPage"), "SystemPage");
+const AuditPage = lazyRouteComponent(() => import("../pages/AuditPage"), "AuditPage");
+const SsoPage = lazyRouteComponent(() => import("../pages/SsoPage"), "SsoPage");
+const SettingsPage = lazyRouteComponent(() => import("../pages/SettingsPage"), "SettingsPage");
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -229,10 +246,21 @@ const routeTree = rootRoute.addChildren([
   ]),
 ]);
 
-export const router = createRouter({
-  routeTree,
-  defaultPreload: "intent",
-});
+/** テストで memory history を差し込めるよう、router 生成を関数に切り出している。 */
+export function createAppRouter(history?: RouterHistory) {
+  return createRouter({
+    routeTree,
+    history,
+    defaultPreload: "intent",
+    // チャンク取得が速い場合に pending 表示がちらつかないよう閾値を短めに保つ。
+    defaultPendingMs: 200,
+    defaultPendingMinMs: 300,
+    defaultPendingComponent: RoutePending,
+    defaultErrorComponent: RouteError,
+  });
+}
+
+export const router = createAppRouter();
 
 declare module "@tanstack/react-router" {
   interface Register {

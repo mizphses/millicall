@@ -26,13 +26,16 @@ from millicall.workflows.schema import WorkflowDefinition
 logger = logging.getLogger("millicall.workflows.runner")
 
 
-def _build_provider_from_row(p: Provider, key: str | None):
-    """Provider ORM 行から適切なプロバイダオブジェクトを構築する。"""
+async def _build_provider_from_row(p: Provider, key: str | None):
+    """Provider ORM 行から適切なプロバイダオブジェクトを構築する。
+
+    DNS 解決（SSRF ガード）を伴う kind はスレッドで構築し、ループを止めない（issue #81）。
+    """
     config = json.loads(p.config_json or "{}")
     if p.type == "llm":
-        return ai_registry.build_llm(p.kind, config, key)
+        return await ai_registry.build_llm_async(p.kind, config, key)
     if p.type == "tts":
-        return ai_registry.build_tts(p.kind, config, key)
+        return await ai_registry.build_tts_async(p.kind, config, key)
     if p.type == "stt":
         return ai_registry.build_stt(p.kind, config, key)
     raise ValueError(f"unknown provider type: {p.type!r}")
@@ -210,7 +213,7 @@ class WorkflowRunner:
                 if p is not None and p.enabled:
                     try:
                         key = box.decrypt(p.api_key_encrypted) if p.api_key_encrypted else None
-                        tts = _build_provider_from_row(p, key)
+                        tts = await _build_provider_from_row(p, key)
                     except Exception:
                         logger.warning(
                             "workflow runner: TTS provider %d build failed", tts_pid, exc_info=True
@@ -222,7 +225,7 @@ class WorkflowRunner:
                 if p is not None:
                     try:
                         key = box.decrypt(p.api_key_encrypted) if p.api_key_encrypted else None
-                        tts = _build_provider_from_row(p, key)
+                        tts = await _build_provider_from_row(p, key)
                     except Exception:
                         logger.warning("workflow runner: fallback TTS build failed", exc_info=True)
 
@@ -233,7 +236,7 @@ class WorkflowRunner:
             if p_stt is not None:
                 try:
                     key = box.decrypt(p_stt.api_key_encrypted) if p_stt.api_key_encrypted else None
-                    stt = _build_provider_from_row(p_stt, key)
+                    stt = await _build_provider_from_row(p_stt, key)
                 except Exception:
                     logger.warning("workflow runner: STT provider build failed", exc_info=True)
 
@@ -250,7 +253,7 @@ class WorkflowRunner:
                     if p is None:
                         return None
                     key = box.decrypt(p.api_key_encrypted) if p.api_key_encrypted else None
-                    return _build_provider_from_row(p, key)
+                    return await _build_provider_from_row(p, key)
                 except Exception:
                     logger.warning("provider_resolver(%d) failed", pid, exc_info=True)
                     return None

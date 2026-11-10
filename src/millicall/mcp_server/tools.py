@@ -34,7 +34,7 @@ from millicall.models import Trunk, User
 from millicall.telephony.esl import ESLError
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 # 発信者番号通知の既定ボイス（互換のためシグネチャに残すが未使用＝裁定#2）。
 _DEFAULT_VOICE = "ja-JP-Chirp3-HD-Aoede"
@@ -114,8 +114,8 @@ async def _require_admin_subject(state) -> str:
     return subject
 
 
-def register_tools(mcp: FastMCP) -> None:
-    """契約 §1–§15 の 15 ツール + guide リソースを FastMCP に登録する。
+def register_tools(mcp: MCPServer) -> None:
+    """契約 §1–§15 の 15 ツール + guide リソースを MCPServer に登録する。
 
     `build_mcp` から呼ばれる。ダミー `ping` は骨格テスト互換のため残置（Task 1）。
     """

@@ -15,6 +15,7 @@ from millicall.ai_agents.router import router as ai_agents_router
 from millicall.app_settings.router import router as app_settings_router
 from millicall.app_settings.service import SettingsService
 from millicall.audit_router import router as audit_router
+from millicall.auth import hashing as argon2_hashing
 from millicall.auth.csrf import CsrfMiddleware
 from millicall.auth.router import router as auth_router
 from millicall.auth.saml.router import router as saml_router
@@ -330,6 +331,8 @@ async def lifespan(app: FastAPI):
             await event_listener.stop()
             await esl_command.close()
             await engine.dispose()
+            # Argon2 専用 executor を停止し、未開始の計算を取り消す（issue #81）
+            argon2_hashing.shutdown()
 
 
 # SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。
