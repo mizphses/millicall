@@ -38,7 +38,7 @@ millicall はフレッツ光電話の HGW 配下に設置する LAN 内 PBX で�
 | IdP なりすまし（SAML） | IdP 証明書の out-of-band 事前共有、XSW/XXE 対策、origin 保護 |
 | Docker socket 経由の特権昇格 | socket-proxy（Tecnativa）で最小 API のみ許可。core は raw socket に非接触 |
 | netd 特権の悪用 | UNIX ソケット（SO_PEERCRED で core UID のみ接続可）。入力再検証。`shell=False` の argv |
-| プロビジョニング情報の漏洩 | LAN CIDR・登録済み端末の現在 IP・active/enabled 状態を検証。設定済みトークンは追加ゲート |
+| プロビジョニング情報の漏洩 | LAN CIDR・登録済み端末の現在 IP・active/enabled 状態を検証（標準モード）。端末ごとの厳格モードでは、管理者が明示発行し電話機へ手入力したパス形式トークンを追加で要求する |
 
 ---
 
@@ -127,6 +127,7 @@ MILLICALL_SIP_REJECT_ANONYMOUS=false   # デフォルト・変更しないこと
 | TOTP シークレット | DB 内 Fernet 暗号化 |
 | SIP 内線・トランクのパスワード | **現状は DB と生成 XML に平文保存**。data ディレクトリの権限で保護。暗号化・移行設計は [#87](https://github.com/mizphses/millicall/issues/87) |
 | SCIM トークン | Argon2 ハッシュ（平文は一度だけ表示） |
+| プロビジョニングトークン（厳格モード） | SHA-256 ハッシュ（256bit 乱数。平文は発行時に一度だけ表示）。アクセスログではパスを伏字化 |
 | TOTP リカバリコード | Argon2 ハッシュ（一度だけ表示） |
 | 管理者初期パスワード | 起動ログに一度だけ表示。DB には Argon2 ハッシュ |
 
@@ -202,7 +203,7 @@ SAML の bearer 条件は [OASIS SAML Profiles](https://docs.oasis-open.org/secu
 | 管理画面の初期 JavaScript の分割 | [#82](https://github.com/mizphses/millicall/issues/82) |
 | 端末同期・一覧の N+1 SQL | [#83](https://github.com/mizphses/millicall/issues/83) |
 | 日付を跨ぐワークフロー時間条件 | [#84](https://github.com/mizphses/millicall/issues/84) |
-| 電話機への provision_token 配送 | [#85](https://github.com/mizphses/millicall/issues/85) |
+| 電話機への provision_token 配送（厳格モードの手動配送・取得確認を実装済み。実機検証が残る） | [#85](https://github.com/mizphses/millicall/issues/85) |
 | OAuth・SAML・音声接続状態の単一ワーカー前提、登録数・TTL管理 | [#86](https://github.com/mizphses/millicall/issues/86) |
 | SIP 認証情報の保存暗号化と復旧設計 | [#87](https://github.com/mizphses/millicall/issues/87) |
 | MCP ログインのブラウザフローと CSRF/CSP の整合 | [#88](https://github.com/mizphses/millicall/issues/88) |
