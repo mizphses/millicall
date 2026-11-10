@@ -184,7 +184,8 @@ core は **1 つの data_dir につき 1 プロセス**で動かす（同梱の 
 コンテナは非対応。core は起動時に `data/core.lock` を排他ロックし、2 つ目のプロセスは
 「別の millicall core プロセスが同じ data_dir で稼働中です」と出して起動しない。
 認証状態（MCP OAuth・SAML）は DB で共有できるが、ESL イベント購読・音声 WebSocket・
-MCP セッションはプロセス内の状態のため。詳細は [セキュリティモデル](../security-model.md) の
+MCP セッションはプロセス内の状態のため。ロックは data_dir 単位なので、`MILLICALL_DATABASE_URL` で
+別々の data_dir から同じ DB を共有する構成は検出できない（これも非対応）。詳細は [セキュリティモデル](../security-model.md) の
 「認証状態の保存と対応プロセス構成」を参照。
 
 ## 6. トラブルシュート
