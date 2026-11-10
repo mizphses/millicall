@@ -713,3 +713,84 @@ async def test_second_core_on_same_data_dir_refuses_to_start(tmp_path):
             async with second.router.lifespan_context(second):
                 pass
     assert os.path.exists(tmp_path / "core.lock")
+
+
+async def test_lock_released_when_startup_fails(tmp_path, monkeypatch):
+    """ロック取得後〜yield 前の起動失敗でもロックが残らず、同一プロセスで再起動できる。"""
+    import millicall.main as main_module
+
+    def broken_upgrade(url):
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(main_module, "upgrade_to_head", broken_upgrade)
+    app = create_app(_mcp_settings(tmp_path, tmp_path, tmp_path / "test.db"))
+    with pytest.raises(RuntimeError, match="migration failed"):
+        async with app.router.lifespan_context(app):
+            pass
+    monkeypatch.undo()
+
+    restarted = create_app(_mcp_settings(tmp_path, tmp_path, tmp_path / "test.db"))
+    async with restarted.router.lifespan_context(restarted):
+        pass
+    acquire_single_process_lock(tmp_path).release()
+
+
+async def test_lock_released_when_shutdown_step_fails(tmp_path):
+    app = create_app(_mcp_settings(tmp_path, tmp_path, tmp_path / "test.db"))
+
+    async def broken_stop():
+        raise RuntimeError("stop failed")
+
+    with pytest.raises(RuntimeError, match="stop failed"):
+        async with app.router.lifespan_context(app):
+            app.state.event_listener.stop = broken_stop
+    acquire_single_process_lock(tmp_path).release()
+
+
+@pytest.mark.parametrize("grant", ["authorization_code", "refresh_token"])
+async def test_failed_issuance_does_not_consume_grant(shared_db, monkeypatch, grant):
+    """発行側で失敗したら旧コード/旧 refresh の消費もロールバックされ、再試行できる。"""
+    _, make_sm, _ = shared_db
+    sm = make_sm()
+    provider = _provider(sm)
+    client = _client()
+    await provider.register_client(client)
+    code = await _code(provider, client)
+    if grant == "refresh_token":
+        tokens = await provider.exchange_authorization_code(
+            client, await provider.load_authorization_code(client, code)
+        )
+
+    async def attempt():
+        if grant == "authorization_code":
+            loaded = await provider.load_authorization_code(client, code)
+            return await provider.exchange_authorization_code(client, loaded)
+        loaded = await provider.load_refresh_token(client, tokens.refresh_token)
+        return await provider.exchange_refresh_token(client, loaded, [])
+
+    original = MillicallOAuthProvider._enforce_subject_caps
+
+    async def broken_caps(session, subject):
+        raise RuntimeError("issuance failed")
+
+    monkeypatch.setattr(MillicallOAuthProvider, "_enforce_subject_caps", staticmethod(broken_caps))
+    tokens_before = await _count(sm, McpOAuthToken)
+    with pytest.raises(RuntimeError, match="issuance failed"):
+        await attempt()
+    assert await _count(sm, McpOAuthToken) == tokens_before
+    monkeypatch.setattr(MillicallOAuthProvider, "_enforce_subject_caps", staticmethod(original))
+    assert isinstance(await attempt(), OAuthToken)
+    # 成功した交換で消費済み（以後は load 段階で見つからない）。
+    if grant == "authorization_code":
+        assert await provider.load_authorization_code(client, code) is None
+    else:
+        assert await provider.load_refresh_token(client, tokens.refresh_token) is None
+
+
+def test_revoke_route_requires_hashed_client_auth():
+    from starlette.routing import Route
+
+    provider = MillicallOAuthProvider("http://localhost")
+    routes = [Route("/token", endpoint=lambda r: None), Route("/revoke", endpoint=lambda r: None)]
+    with pytest.raises(RuntimeError, match="/revoke"):
+        oauth_module.install_hashed_client_auth(routes, provider)

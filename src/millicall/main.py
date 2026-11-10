@@ -139,8 +139,18 @@ async def lifespan(app: FastAPI):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     # 認証状態は DB 共有だが、ESL 購読・メディア WS・MCP セッション等はプロセスローカルのため
     # core は data_dir あたり 1 プロセスのみ対応（issue #86）。2 つ目の起動は拒否する。
+    # 起動途中の失敗や停止処理の例外でもロックが残らないよう、取得直後から必ず解放する。
     process_lock = acquire_single_process_lock(settings.data_dir)
+    try:
+        async with _core_lifespan(app, settings):
+            yield
+    finally:
+        process_lock.release()
 
+
+@asynccontextmanager
+async def _core_lifespan(app: FastAPI, settings: Settings):
+    """core の起動〜停止本体（単一プロセスロックは呼び出し側 lifespan が保持する）。"""
     # alembic の fileConfig(disable_existing_loggers=True) によって millicall.* ロガーが
     # 無効化されることがある。upgrade_to_head 実行前に ERROR レベルを明示的に保証する。
     # basicConfig は呼ばず、既存のハンドラ（RichHandler 等）を破壊しない。
@@ -313,7 +323,6 @@ async def lifespan(app: FastAPI):
             await event_listener.stop()
             await esl_command.close()
             await engine.dispose()
-            process_lock.release()
 
 
 # SPA catch-all が index.html を返してはいけないパス接頭辞（API/メディア/ヘルス/ドキュメント）。

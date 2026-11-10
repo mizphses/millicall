@@ -376,37 +376,51 @@ class MillicallOAuthProvider(
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
-        # 一回限りの消費: 条件付き DELETE ... RETURNING。並行交換では片方だけが行を得る。
+        code_hash = _digest(authorization_code.code)
+        # ユーザー状態の確認は読み取りだけで先に済ませる（書き込みロックを持ったまま
+        # 別接続で User を読まない）。消費は下の DELETE で確認済みの発行時状態に限定する。
+        async with self._session() as session:
+            peek = await session.get(McpOAuthCode, code_hash)
+        if peek is None or peek.client_id != client.client_id:
+            raise TokenError("invalid_grant", "Authorization code no longer valid")
+        issued_state = (peek.user_id, peek.session_epoch, peek.credential_tag)
+        await self._validate_grant_state(peek.subject, issued_state)
+        assert client.client_id is not None
+
+        # 一回限りの消費: 条件付き DELETE ... RETURNING を最初の文にして書き込みロックを取り、
+        # 新トークンの INSERT まで同一トランザクションで commit する。並行交換では片方だけが
+        # 行を得る。発行側で失敗した場合はロールバックされ、コードは消費されない。
         async with self._session() as session:
             result = await session.execute(
                 delete(McpOAuthCode)
                 .where(
-                    McpOAuthCode.code_hash == _digest(authorization_code.code),
+                    McpOAuthCode.code_hash == code_hash,
                     McpOAuthCode.client_id == client.client_id,
+                    McpOAuthCode.user_id == issued_state[0],
+                    McpOAuthCode.session_epoch == issued_state[1],
+                    McpOAuthCode.credential_tag == issued_state[2],
                 )
                 .returning(*McpOAuthCode.__table__.columns)
             )
             row = result.first()
+            if (
+                row is None
+                or self._code_from_row(row, authorization_code.code) != authorization_code
+                or time.time() >= row.expires_at
+            ):
+                await session.rollback()
+                raise TokenError("invalid_grant", "Authorization code no longer valid")
+            scopes = json.loads(row.scopes)
+            access, refresh = await self._issue_tokens(
+                session,
+                client_id=client.client_id,
+                subject=row.subject,
+                scopes=scopes,
+                resource=row.resource,
+                issued_state=issued_state,
+                grant_id=secrets.token_hex(16),
+            )
             await session.commit()
-        if (
-            row is None
-            or self._code_from_row(row, authorization_code.code) != authorization_code
-            or time.time() >= row.expires_at
-        ):
-            raise TokenError("invalid_grant", "Authorization code no longer valid")
-        issued_state = (row.user_id, row.session_epoch, row.credential_tag)
-        await self._validate_grant_state(row.subject, issued_state)
-        assert client.client_id is not None
-
-        scopes = json.loads(row.scopes)
-        access, refresh = await self._issue_tokens(
-            client_id=client.client_id,
-            subject=row.subject,
-            scopes=scopes,
-            resource=row.resource,
-            issued_state=issued_state,
-            grant_id=secrets.token_hex(16),
-        )
         logger.info(
             "MCP OAuth: issued tokens for subject=%s access=%s",
             row.subject,
@@ -421,6 +435,7 @@ class MillicallOAuthProvider(
 
     async def _issue_tokens(
         self,
+        session,
         *,
         client_id: str,
         subject: str,
@@ -429,7 +444,11 @@ class MillicallOAuthProvider(
         issued_state: tuple[int, int, str],
         grant_id: str,
     ) -> tuple[str, str]:
-        """access/refresh を発行して保存し、平文を返す（平文は DB に残らない）。"""
+        """access/refresh を呼び出し側の書き込みトランザクション内で保存し、平文を返す。
+
+        commit は呼び出し側の責務（旧トークンの消費と同一トランザクションにするため）。
+        平文は DB に残らない。
+        """
         access = secrets.token_urlsafe(48)
         refresh = secrets.token_urlsafe(48)
         now = time.time()
@@ -445,35 +464,34 @@ class MillicallOAuthProvider(
             resource=resource,
             created_at=now,
         )
-        async with self._session() as session:
-            # 先頭の UPDATE で書き込みロックを取る。清掃でクライアントが消えていたら発行しない。
-            touched = await session.execute(
-                update(McpOAuthClient)
-                .where(McpOAuthClient.client_id == client_id)
-                .values(last_used_at=now)
-            )
-            if touched.rowcount != 1:
-                await session.rollback()
-                raise TokenError("invalid_grant", "Client no longer registered")
-            await self._purge_expired(session, now)
-            await self._enforce_subject_caps(session, subject)
-            session.add_all(
-                [
-                    McpOAuthToken(
-                        token_hash=_digest(access),
-                        kind="access",
-                        expires_at=now + _ACCESS_TTL,
-                        **common,
-                    ),
-                    McpOAuthToken(
-                        token_hash=_digest(refresh),
-                        kind="refresh",
-                        expires_at=now + _REFRESH_TTL,
-                        **common,
-                    ),
-                ]
-            )
-            await session.commit()
+        # 清掃でクライアントが消えていたら発行しない（呼び出し側の txn ごとロールバック）。
+        touched = await session.execute(
+            update(McpOAuthClient)
+            .where(McpOAuthClient.client_id == client_id)
+            .values(last_used_at=now)
+        )
+        if touched.rowcount != 1:
+            await session.rollback()
+            raise TokenError("invalid_grant", "Client no longer registered")
+        await self._purge_expired(session, now)
+        await self._enforce_subject_caps(session, subject)
+        session.add_all(
+            [
+                McpOAuthToken(
+                    token_hash=_digest(access),
+                    kind="access",
+                    expires_at=now + _ACCESS_TTL,
+                    **common,
+                ),
+                McpOAuthToken(
+                    token_hash=_digest(refresh),
+                    kind="refresh",
+                    expires_at=now + _REFRESH_TTL,
+                    **common,
+                ),
+            ]
+        )
+        await session.flush()
         return access, refresh
 
     @staticmethod
@@ -562,44 +580,56 @@ class MillicallOAuthProvider(
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        # ローテーション: 旧 refresh を条件付き DELETE ... RETURNING で消費する。
-        # 並行リフレッシュでは片方だけが行を得て、もう片方は invalid_grant。
-        async with self._session() as session:
-            result = await session.execute(
-                delete(McpOAuthToken)
-                .where(
-                    McpOAuthToken.token_hash == _digest(refresh_token.token),
-                    McpOAuthToken.kind == "refresh",
-                    McpOAuthToken.client_id == client.client_id,
-                )
-                .returning(*McpOAuthToken.__table__.columns)
-            )
-            row = result.first()
-            await session.commit()
-        if (
-            row is None
-            or self._refresh_from_row(row, refresh_token.token) != refresh_token
-            or time.time() >= row.expires_at
-        ):
-            raise TokenError("invalid_grant", "Refresh token no longer valid")
-        assert client.client_id is not None
-
+        token_hash = _digest(refresh_token.token)
         # リフレッシュ時にも enabled/epoch を再検証する。無効化/失効済みなら新トークンを
-        # 発行しない（漏洩リフレッシュトークンや無効化ユーザーの延命を防ぐ）。
-        issued_state = (row.user_id, row.session_epoch, row.credential_tag)
-        await self._validate_grant_state(row.subject, issued_state)
+        # 発行しない（漏洩リフレッシュトークンや無効化ユーザーの延命を防ぐ）。確認は読み取り
+        # だけで先に済ませ、書き込みトランザクションの最初の文を DELETE にする。
+        async with self._session() as session:
+            peek = await session.get(McpOAuthToken, token_hash)
+        if peek is None or peek.kind != "refresh" or peek.client_id != client.client_id:
+            raise TokenError("invalid_grant", "Refresh token no longer valid")
+        issued_state = (peek.user_id, peek.session_epoch, peek.credential_tag)
+        await self._validate_grant_state(peek.subject, issued_state)
+        assert client.client_id is not None
 
         use_scopes = scopes or refresh_token.scopes
         if not set(use_scopes).issubset(refresh_token.scopes):
             raise TokenError("invalid_scope", "Cannot expand refresh token scopes")
-        access, refresh = await self._issue_tokens(
-            client_id=client.client_id,
-            subject=row.subject,
-            scopes=use_scopes,
-            resource=row.resource,
-            issued_state=issued_state,
-            grant_id=row.grant_id,
-        )
+
+        # ローテーション: 旧 refresh を条件付き DELETE ... RETURNING で消費し、新トークンの
+        # INSERT まで同一トランザクションで commit する。並行リフレッシュでは片方だけが行を得て、
+        # もう片方は invalid_grant。発行側で失敗した場合は旧 refresh も残る（ロールバック）。
+        async with self._session() as session:
+            result = await session.execute(
+                delete(McpOAuthToken)
+                .where(
+                    McpOAuthToken.token_hash == token_hash,
+                    McpOAuthToken.kind == "refresh",
+                    McpOAuthToken.client_id == client.client_id,
+                    McpOAuthToken.user_id == issued_state[0],
+                    McpOAuthToken.session_epoch == issued_state[1],
+                    McpOAuthToken.credential_tag == issued_state[2],
+                )
+                .returning(*McpOAuthToken.__table__.columns)
+            )
+            row = result.first()
+            if (
+                row is None
+                or self._refresh_from_row(row, refresh_token.token) != refresh_token
+                or time.time() >= row.expires_at
+            ):
+                await session.rollback()
+                raise TokenError("invalid_grant", "Refresh token no longer valid")
+            access, refresh = await self._issue_tokens(
+                session,
+                client_id=client.client_id,
+                subject=row.subject,
+                scopes=use_scopes,
+                resource=row.resource,
+                issued_state=issued_state,
+                grant_id=row.grant_id,
+            )
+            await session.commit()
         return OAuthToken(
             access_token=access,
             refresh_token=refresh,
@@ -727,9 +757,11 @@ def install_hashed_client_auth(
 
     ラッパ構成（CORS 最外 → 本文サイズ上限 → ハンドラ）は SDK の create_auth_routes と同じ。
     /token が見つからなければ起動を失敗させる（SDK 更新で差し替えが黙って外れるのを防ぐ）。
-    /revoke は無効（RevocationOptions 未指定）。有効化された場合は SDK 標準認証が
-    ダミーの client_secret と比較するため secret 付きクライアントは fail-closed になる。
+    /revoke は無効（RevocationOptions 未指定）。有効化された場合は SDK 標準認証のままに
+    なってしまうため、存在したら起動を止める（差し替え対象に加えること）。
     """
+    if any(isinstance(route, Route) and route.path == "/revoke" for route in routes):
+        raise RuntimeError("MCP OAuth /revoke route requires hashed client auth; not supported")
     handler = TokenHandler(provider, HashedSecretClientAuthenticator(provider))
     replacement = Route(
         "/token",
