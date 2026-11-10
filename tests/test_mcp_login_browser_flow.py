@@ -376,3 +376,104 @@ def test_form_token_path_is_exact_match():
     assert _is_form_token_path("/mcp-login") is False
     # 除外パスではない（ヘッダー検証の代わりにフォームトークン検証が必須）。
     assert _is_exempt("/mcp-login/callback") is False
+
+
+# --------------------------------------------------------------------------
+# レビュー L-1: セッション Cookie あり・専用 Cookie なしでも HTML の 403 と再試行導線
+# --------------------------------------------------------------------------
+async def test_session_cookie_without_login_cookie_shows_html_retry(mcp_app, browser):
+    """並行タブの一方が成功して専用 Cookie が消えた後、他方を送信した状況。"""
+    await _make_user(mcp_app, username="tabs", password="TabsPass1")
+    await _admin_session(browser, "tabs", "TabsPass1")
+    client_id = await _register_client_via_app(mcp_app)
+    ticket_a = _ticket(mcp_app, client_id=client_id)
+    ticket_b = _ticket(mcp_app, client_id=client_id)
+    tab_a = await _form(browser, ticket_a, username="tabs", password="TabsPass1")
+    tab_b = await _form(browser, ticket_b, username="tabs", password="TabsPass1")
+    _redirect_location(await browser.post("/mcp-login/callback", data=tab_a))
+    assert browser.cookies.get(MCP_LOGIN_CSRF_COOKIE) is None
+    assert browser.cookies.get("millicall_session")
+
+    r = await browser.post("/mcp-login/callback", data=tab_b)
+    assert r.status_code == 403
+    _assert_csp_safe_html(r)
+    href = html.unescape(re.search(r'<a class="retry" href="([^"]*)"', r.text).group(1))
+    assert href == "/mcp-login?" + urllib.parse.urlencode({"ticket": ticket_b})
+    # 再試行リンクからフォームを取り直せば成功する。
+    retry = await _form(browser, ticket_b, username="tabs", password="TabsPass1")
+    _redirect_location(await browser.post("/mcp-login/callback", data=retry))
+
+
+# --------------------------------------------------------------------------
+# レビュー L-2: Cookie 注入による double-submit 突破を送信元オリジン確認で防ぐ
+# --------------------------------------------------------------------------
+_INJECTED = "i" * 43
+
+
+def _inject_cookie(client):
+    """兄弟サブドメイン / 平文 HTTP の中間者が既知の値の専用 Cookie を注入した状況。
+
+    http.cookiejar はドットを含まないホスト名を `<host>.local` として扱うため、
+    base_url=http://localhost に送られる Cookie の domain は "localhost.local" になる
+    （送信されることは test_injected_cookie_without_origin_headers_is_the_known_gap で確認）。
+    """
+    client.cookies.set(
+        MCP_LOGIN_CSRF_COOKIE, _INJECTED, domain="localhost.local", path="/mcp-login"
+    )
+
+
+async def _injected_form(app, username, password):
+    client_id = await _register_client_via_app(app)
+    return {
+        "ticket": _ticket(app, client_id=client_id),
+        "csrf_token": _INJECTED,
+        "username": username,
+        "password": password,
+    }
+
+
+async def test_injected_cookie_without_origin_headers_is_the_known_gap(mcp_app, browser):
+    """前提確認: ヘッダーが無ければ注入 Cookie と同値のトークンは通る（以下のテストの対照）。"""
+    await _make_user(mcp_app, username="gap", password="GapPass1")
+    _inject_cookie(browser)
+    data = await _injected_form(mcp_app, "gap", "GapPass1")
+    _redirect_location(await browser.post("/mcp-login/callback", data=data))
+
+
+async def test_cross_site_fetch_metadata_rejected_even_with_matching_tokens(mcp_app, browser):
+    await _make_user(mcp_app, username="fm", password="FetchMetaPass1")
+    _inject_cookie(browser)
+    data = await _injected_form(mcp_app, "fm", "FetchMetaPass1")
+    for site in ("cross-site", "same-site"):
+        r = await browser.post("/mcp-login/callback", data=data, headers={"Sec-Fetch-Site": site})
+        assert r.status_code == 403
+        _assert_csp_safe_html(r)
+        assert "ログイン画面からやり直してください" in r.text
+    assert _no_codes(mcp_app)
+    assert await _failure_count(mcp_app, "fm") == 0
+
+
+async def test_mismatched_origin_rejected_even_with_matching_tokens(mcp_app, browser):
+    await _make_user(mcp_app, username="og", password="OriginPass1")
+    _inject_cookie(browser)
+    data = await _injected_form(mcp_app, "og", "OriginPass1")
+    for origin in ("http://evil.example", "http://sub.localhost", "https://localhost", "null"):
+        r = await browser.post("/mcp-login/callback", data=data, headers={"Origin": origin})
+        assert r.status_code == 403, origin
+        _assert_csp_safe_html(r)
+    assert _no_codes(mcp_app)
+
+
+async def test_same_origin_submission_allowed(mcp_app, browser):
+    await _make_user(mcp_app, username="so", password="SameOrigin1")
+    client_id = await _register_client_via_app(mcp_app)
+    for headers in (
+        {"Sec-Fetch-Site": "same-origin", "Origin": "http://localhost"},
+        {"Sec-Fetch-Site": "none"},
+        {"Origin": "http://localhost"},
+        {},  # どちらのヘッダーも送らない古いクライアントは Cookie 照合のみ
+    ):
+        ticket = _ticket(mcp_app, client_id=client_id)
+        data = await _form(browser, ticket, username="so", password="SameOrigin1")
+        r = await browser.post("/mcp-login/callback", data=data, headers=headers)
+        assert "code=" in _redirect_location(r), headers

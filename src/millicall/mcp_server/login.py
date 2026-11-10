@@ -29,6 +29,7 @@ from millicall.auth.csrf import (
     MCP_LOGIN_CSRF_COOKIE_PATH,
     generate_csrf_token,
     verify_form_csrf,
+    verify_request_origin,
 )
 from millicall.auth.router import _verify_code
 from millicall.auth.security import hash_password, verify_password
@@ -172,7 +173,9 @@ def _redirect_page(url: str) -> str:
 def _login_csrf_token(request: Request) -> str:
     """フォームに埋める CSRF トークン。既に妥当な Cookie があれば再利用する。
 
-    再利用により、複数タブで並行して認可しても互いのフォームを無効化しない。
+    再利用により、同じブラウザで続けて開いたフォーム同士が互いを無効化しにくくする。
+    ただし認可成功時に Cookie を破棄するため、並行タブの一方が成功すると他方の送信は
+    CSRF 不一致となり、再試行リンクからフォームを取り直す必要がある。
     """
     token = request.cookies.get(MCP_LOGIN_CSRF_COOKIE, "")
     return token if _CSRF_TOKEN_RE.fullmatch(token) else generate_csrf_token()
@@ -247,8 +250,11 @@ async def mcp_login_callback(
     認証失敗・TOTP 不一致・429 は同じ ticket のフォームをエラー付きで再表示する。
     """
     # CSRF はセッション Cookie の有無に関係なく必ず検証する（ログイン CSRF 対策を兼ねる）。
+    # 送信元オリジン確認は、注入された Cookie で double-submit を突破されるのを防ぐ。
     # 資格情報検証・レート制限カウントより前に行い、偽造要求では何も状態を変えない。
-    if not verify_form_csrf(request, csrf_token):
+    if not verify_request_origin(
+        request, trusted_origins=(request.app.state.settings.mcp_issuer_url,)
+    ) or not verify_form_csrf(request, csrf_token):
         retry_ticket = ticket if _verify_ticket(request, ticket) is not None else None
         return HTMLResponse(
             _message_page(message=_MSG_CSRF, retry_ticket=retry_ticket),

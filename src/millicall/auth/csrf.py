@@ -20,14 +20,17 @@ GET / HEAD / OPTIONS は常に免除する。
   /mcp-login/callback — JS を使わない通常の HTML form から POST されるため
     X-CSRF-Token ヘッダーを付けられない（issue #88）。代わりに GET /mcp-login が
     発行する専用 Cookie（HttpOnly / SameSite=Strict / path=/mcp-login）と同値の
-    hidden フィールド `csrf_token` を double-submit で照合する。照合本体は
-    セッション Cookie の有無に関係なくハンドラが `verify_form_csrf()` で必ず行い
-    （ログイン CSRF 対策を兼ねる）、ミドルウェアはセッション Cookie 付き要求に対し
-    専用 Cookie の存在を前段で要求する。
+    hidden フィールド `csrf_token` を double-submit で照合する。さらに Cookie 注入
+    （兄弟サブドメイン / 平文 HTTP の中間者）で double-submit を突破されないよう、
+    `Sec-Fetch-Site`（無ければ `Origin`）で同一オリジンからの送信であることも確認する。
+    照合はセッション Cookie の有無に関係なくハンドラ先頭が `verify_request_origin()` と
+    `verify_form_csrf()` で必ず行い（ログイン CSRF 対策を兼ねる）、ミドルウェアは
+    当該パスではヘッダー検証を行わずハンドラに委ねる。
 """
 
 import hmac
 import secrets
+from urllib.parse import urlsplit
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -66,6 +69,30 @@ def _is_form_token_path(path: str) -> bool:
     return path in _FORM_TOKEN_PATHS
 
 
+def _origin_of(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
+def verify_request_origin(request: Request, *, trusted_origins: tuple[str, ...] = ()) -> bool:
+    """フォーム送信元が同一オリジンかを Fetch Metadata / Origin ヘッダーで確認する。
+
+    - `Sec-Fetch-Site` があれば `same-origin` / `none` のみ許可（`same-site` は兄弟サブドメイン
+      からの送信になり得るため拒否）。
+    - 無ければ `Origin` があるとき、要求自身のオリジンまたは trusted_origins（公開 URL）と
+      一致することを要求する（`null` は拒否）。
+    - どちらも無い古いクライアントは True（Cookie 照合のみで判定する）。
+    """
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if fetch_site is not None:
+        return fetch_site.lower() in ("same-origin", "none")
+    origin = request.headers.get("Origin")
+    if origin is None:
+        return True
+    allowed = {_origin_of(str(request.base_url))} | {_origin_of(o) for o in trusted_origins}
+    return origin.lower().rstrip("/") in allowed
+
+
 def verify_form_csrf(request: Request, form_token: str) -> bool:
     """MCP ログインフォームの `csrf_token` を専用 Cookie と定数時間比較する。
 
@@ -96,14 +123,10 @@ class CsrfMiddleware(BaseHTTPMiddleware):
             and request.cookies.get(session_cookie_name)  # セッション Cookie あり = Cookie 認証
         ):
             if _is_form_token_path(request.url.path):
-                # 通常の HTML form はヘッダーを送れない。専用 Cookie が無い（= クロスサイト
-                # または /mcp-login を経ていない）要求はここで落とし、Cookie とフォーム値の
-                # 照合はハンドラの verify_form_csrf() が必ず行う。
-                if not request.cookies.get(MCP_LOGIN_CSRF_COOKIE):
-                    return JSONResponse(
-                        status_code=403,
-                        content={"detail": "CSRF token missing or invalid"},
-                    )
+                # 通常の HTML form はヘッダーを送れない。照合（verify_request_origin +
+                # verify_form_csrf）はハンドラ先頭がセッション Cookie の有無に関係なく必ず行い、
+                # 失敗時は再試行リンク付きの HTML 403 を返す（ここで JSON 403 にすると
+                # 専用 Cookie 失効時に再試行導線が出ない）。
                 return await call_next(request)
 
             csrf_cookie = request.cookies.get(cookie_name)
