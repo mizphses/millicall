@@ -103,8 +103,8 @@ curl -s -o /dev/null -w "%{http_code}" $BASE/mcp
       + ping（疎通確認ダミー）が表示されること
 ```
 
-> **注意**: OAuth トークンはインメモリ保持のため、**プロセス再起動（`docker compose restart`）で全失効**する。  
-> 再起動後は claude.ai のコネクタ設定から「再認証」を行うこと（旧実装と同等の動作）。
+> **注意**: OAuth の登録・トークンは DB に保存されるため（issue #86）、プロセス再起動（`docker compose restart`）では失効しない。  
+> 失効するのはユーザー無効化・パスワード変更・ログアウト全デバイス・期限切れの場合。詳細は docs/mcp.md と docs/security-model.md を参照。
 
 ---
 
@@ -290,7 +290,7 @@ docker compose logs core | grep "AI latency"
 
 | 症状 | 確認 | 対処 |
 |------|------|------|
-| `/mcp` が 401（トークン失効） | `docker compose logs core` でプロセス再起動を確認 | claude.ai コネクタから「再認証」を実行（インメモリ OAuth の仕様） |
+| `/mcp` が 401（トークン失効） | ユーザーの無効化・パスワード変更・ログアウト全デバイス、またはリフレッシュ期限（30 日）切れを確認 | claude.ai コネクタから「再認証」を実行（core の再起動だけでは失効しない） |
 | `/mcp` が 4xx（認可前） | curl で `/.well-known/oauth-authorization-server` を確認 | Bearer なし → 認可フローを完了させていない。claude.ai で再度コネクタを認証 |
 | issuer HTTPS エラー | `MILLICALL_MCP_ISSUER_URL` を確認 | `https://` プレフィックスが必要。`localhost` / `127.0.0.1` のみ `http` 許可 |
 | `/mcp` が常に接続エラー | `MILLICALL_MCP_ALLOWED_HOSTS` を確認 | claude.ai から届く Host ヘッダ（公開ホスト名）が `allowed_hosts` に含まれていなければ 4xx で全拒否される。カンマ区切りで追加 |
