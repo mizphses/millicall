@@ -142,7 +142,7 @@ async def test_healthz_ok_when_credentials_decryptable(tmp_path):
         await _login_admin(app, client)
         await _create_ext_and_trunk(client)
     async with _running(tmp_path) as (app, client):
-        assert app.state.sip_credentials_status.ok
+        assert app.state.change_listener.sip_credential_status.ok
         assert (await client.get("/healthz")).json() == {"status": "ok"}
 
 
@@ -154,35 +154,54 @@ async def _corrupt_key(tmp_path) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
-async def test_key_mismatch_is_detected_and_fails_closed(tmp_path, caplog):
+async def test_key_mismatch_excludes_undecryptable_entries(tmp_path, caplog):
+    """鍵不一致: 復号できない内線・トランクだけを XML から除外し、変更は常に反映する。"""
     async with _running(tmp_path) as (app, client):
         await _login_admin(app, client)
-        ext_id, _ = await _create_ext_and_trunk(client)
-    user_xml = tmp_path / "fs" / "directory" / "default" / "1001.xml"
-    before = user_xml.read_text(encoding="utf-8")
+        ext_id, trunk_id = await _create_ext_and_trunk(client)
+    user_dir = tmp_path / "fs" / "directory" / "default"
+    trunk_xml = tmp_path / "fs" / "sip_profiles" / "external_hgw.xml"
+    assert (user_dir / "1001.xml").exists() and trunk_xml.exists()
 
     await _corrupt_key(tmp_path)
     caplog.set_level(logging.ERROR)
     async with _running(tmp_path) as (app, client):
-        status = app.state.sip_credentials_status
+        status = app.state.change_listener.sip_credential_status
         assert status.undecryptable_extensions == ["1001"]
         assert status.undecryptable_trunks == ["hgw"]
+        # 番号はログにだけ出る
         assert "SIP 認証情報を復号できません" in caplog.text
+        assert "内線=1001 トランク=hgw" in caplog.text
 
+        # healthz は 200 のまま、件数だけを返す
         health = await client.get("/healthz")
         assert health.status_code == 200
-        assert health.json() == {"status": "degraded", "sip_credentials": "undecryptable"}
+        assert health.json() == {
+            "status": "degraded",
+            "sip_credentials": "undecryptable",
+            "undecryptable_extensions": 1,
+            "undecryptable_trunks": 1,
+        }
 
-        # 設定ファイルは空パスワードで上書きされず、直前の内容のまま
-        assert user_xml.read_text(encoding="utf-8") == before
+        # 復号できない項目は設定から外れる（空パスワードでは書かない = 登録できない）
+        assert not (user_dir / "1001.xml").exists()
+        assert not trunk_xml.exists()
 
         await _login_admin(app, client)
+        # 個別の平文が必要な credentials API は 503
         cred = await client.get(f"/api/extensions/{ext_id}/credentials")
         assert cred.status_code == 503
-        # 内線追加は DB には入るが、設定再生成は復号失敗で 503（部分的な設定を書かない）
+        # 変更 API は成功し、FreeSWITCH にも反映される（DB と FS をずらさない）
         add = await client.post("/api/extensions", json={"number": "1002", "display_name": "B"})
-        assert add.status_code == 503
-        assert not (tmp_path / "fs" / "directory" / "default" / "1002.xml").exists()
+        assert add.status_code == 201
+        assert (user_dir / "1002.xml").exists()
+        assert (await client.get("/healthz")).json()["undecryptable_extensions"] == 1
+        # 復号できない内線の削除も反映され、degraded の件数も減る
+        assert (await client.delete(f"/api/extensions/{ext_id}")).status_code == 204
+        assert (
+            await client.patch(f"/api/trunks/{trunk_id}", json={"enabled": False})
+        ).status_code == 200
+        assert (await client.get("/healthz")).json() == {"status": "ok"}
 
 
 def test_extension_repr_excludes_password():

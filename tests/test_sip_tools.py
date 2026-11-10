@@ -42,7 +42,7 @@ async def test_recover_sip_regenerates_extensions_and_disables_trunks(tmp_path, 
     assert "再生成しました" in out and "millicallctl restart" in out
 
     async with _running(tmp_path) as (app, client):
-        assert app.state.sip_credentials_status.ok
+        assert app.state.change_listener.sip_credential_status.ok
         assert (await client.get("/healthz")).json() == {"status": "ok"}
         async with app.state.sessionmaker() as session:
             trunk = await session.scalar(select(Trunk).where(Trunk.name == "hgw"))

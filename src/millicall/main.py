@@ -28,7 +28,7 @@ from millicall.config import Settings, get_settings
 from millicall.contacts.router import router as contacts_router
 from millicall.crypto import SecretBox
 from millicall.db import create_db_engine
-from millicall.db_migrations import upgrade_to_head
+from millicall.db_migrations import sqlite_path, upgrade_to_head
 from millicall.extensions.router import router as extensions_router
 from millicall.mcp_server.ephemeral import EphemeralAgentStore
 from millicall.mcp_server.integration import mcp_session_context, mount_mcp
@@ -45,11 +45,7 @@ from millicall.ring_groups.router import router as ring_groups_router
 from millicall.scim.router import api_router as scim_api_router
 from millicall.scim.router import scim_router
 from millicall.secrets_store import load_or_create_secrets
-from millicall.sip_credentials import (
-    SipCredentialError,
-    check_sip_credentials,
-    log_sip_credential_status,
-)
+from millicall.sip_credentials import SipCredentialError
 from millicall.system.router import router as system_router
 from millicall.telephony.esl import ESLClient
 from millicall.telephony.events import CdrRecorder, EslEventListener
@@ -159,7 +155,10 @@ async def lifespan(app: FastAPI):
 
     # secrets はマイグレーションより先に確定させる。0027（SIP 認証情報の暗号化）が
     # master_key を必要とするため、upgrade_to_head へ鍵を渡す。
-    app.state.secrets = load_or_create_secrets(settings.data_dir)
+    # 暗号化済みデータがある DB に secrets.json が無い場合は鍵を新規作成せず起動を止める。
+    app.state.secrets = load_or_create_secrets(
+        settings.data_dir, db_path=sqlite_path(settings.database_url)
+    )
     # upgrade_to_head は同期関数のため asyncio.to_thread で実行してイベントループをブロックしない
     await asyncio.to_thread(upgrade_to_head, settings.database_url, app.state.secrets.master_key)
 
@@ -195,15 +194,6 @@ async def lifespan(app: FastAPI):
     )
     app.state.change_listener = listener
 
-    # 鍵整合性チェック: 保存済み SIP 認証情報が現在の master_key で復号できるか。
-    # 不一致でも起動は止めない（管理画面・復旧 CLI を使えるようにする）が、
-    # ERROR ログと /healthz の status=degraded で明示する。
-    async with app.state.sessionmaker() as session:
-        app.state.sip_credentials_status = await check_sip_credentials(
-            session, SecretBox(app.state.secrets.master_key)
-        )
-    log_sip_credential_status(app.state.sip_credentials_status)
-
     async with app.state.sessionmaker() as session:
         new_admin_password = await ensure_admin_user(session)
     if new_admin_password:
@@ -218,12 +208,10 @@ async def lifespan(app: FastAPI):
     # テンプレート変更が反映されずキャッシュ済み dialplan が古いまま残る。
     # FreeSWITCH 未起動（初回同時起動）なら notify 内で警告ログのみ出して継続する。
     async with app.state.sessionmaker() as session:
-        try:
-            await listener.notify(session)
-        except SipCredentialError:
-            # 復号できない認証情報があるときは設定ファイルを書き換えない（直前の設定を維持）。
-            # 詳細は上の鍵整合性チェックのログを参照。
-            logger.error("起動時の FreeSWITCH 設定再生成を中止しました（SIP 認証情報の復号失敗）")
+        # 鍵整合性チェックを兼ねる: 有効な内線・トランクを全件復号し、復号できないものは
+        # 設定から除外して ERROR ログに出す（listener.sip_credential_status → /healthz）。
+        # 不一致でも起動は止めない（管理画面・復旧 CLI を使えるようにする）。
+        await listener.notify(session)
 
     recorder = CdrRecorder(app.state.sessionmaker)
 
@@ -429,11 +417,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
+    async def healthz() -> dict[str, str | int]:
         # 200 は維持する（compose の healthcheck で core を落とすと復旧操作もできなくなる）。
-        sip_status = getattr(app.state, "sip_credentials_status", None)
+        # 番号はログのみに出し、未認証で読める healthz には件数だけを返す。
+        listener = getattr(app.state, "change_listener", None)
+        sip_status = getattr(listener, "sip_credential_status", None)
         if sip_status is not None and not sip_status.ok:
-            return {"status": "degraded", "sip_credentials": "undecryptable"}
+            return {
+                "status": "degraded",
+                "sip_credentials": "undecryptable",
+                "undecryptable_extensions": len(sip_status.undecryptable_extensions),
+                "undecryptable_trunks": len(sip_status.undecryptable_trunks),
+            }
         return {"status": "ok"}
 
     register_media_ws(app)

@@ -8,8 +8,9 @@ DB には SecretBox（master_key 由来の Fernet）で暗号化したトーク�
   - 電話機 cfg の描画（provisioning）
   - credentials API（管理者限定・監査記録あり）
 
-復号に失敗した場合（鍵不一致・改ざん）は黙って空文字へ劣化させず、
-SipCredentialError を送出する。例外メッセージ・ログには平文も暗号文も含めない。
+復号に失敗した場合（鍵不一致・改ざん）は黙って空文字へ劣化させない。個別の復号は
+SipCredentialError を送出し（API は 503）、設定生成では該当の内線・トランクを除外して
+書く（load_enabled_sip_credentials）。例外メッセージ・ログには平文も暗号文も含めない。
 """
 
 import logging
@@ -71,7 +72,7 @@ def decrypt_trunk_password(box: SecretBox, trunk: Trunk) -> str:
 
 @dataclass
 class SipCredentialStatus:
-    """起動時の鍵整合性チェック結果。"""
+    """直近の設定生成（起動時を含む）で復号できなかった項目。番号/名前だけを持つ。"""
 
     undecryptable_extensions: list[str] = field(default_factory=list)
     undecryptable_trunks: list[str] = field(default_factory=list)
@@ -81,24 +82,40 @@ class SipCredentialStatus:
         return not self.undecryptable_extensions and not self.undecryptable_trunks
 
 
-async def check_sip_credentials(session: AsyncSession, box: SecretBox) -> SipCredentialStatus:
-    """保存済みの SIP 認証情報が現在の master_key で復号できるかを確認する。
+@dataclass
+class DecryptedSipCredentials:
+    """設定生成に使う有効な内線・トランクと、その平文パスワード（呼び出し側で即座に使い捨てる）。"""
 
-    件数は PBX 規模（高々数百行）なので全件を試す。復号できない行の番号/名前だけを
-    返し、平文は保持しない。
+    extensions: list[tuple[Extension, str]] = field(default_factory=list)
+    trunks: list[tuple[Trunk, str]] = field(default_factory=list)
+    status: SipCredentialStatus = field(default_factory=SipCredentialStatus)
+
+
+async def load_enabled_sip_credentials(
+    session: AsyncSession, box: SecretBox
+) -> DecryptedSipCredentials:
+    """有効な内線・トランクを読み、パスワードを復号する。
+
+    復号できない行は結果から除外し、番号/名前を status に記録する（FreeSWITCH 設定から
+    外れるのでその端末/トランクは登録できない = fail-closed）。空パスワードで書き出す
+    ことはしない。起動時チェックと設定生成は同じ対象（有効な行）をこの関数で判定する。
     """
-    status = SipCredentialStatus()
-    for ext in await session.scalars(select(Extension).order_by(Extension.number)):
+    result = DecryptedSipCredentials()
+    for ext in await session.scalars(
+        select(Extension).where(Extension.enabled.is_(True)).order_by(Extension.number)
+    ):
         try:
-            decrypt_extension_password(box, ext)
+            result.extensions.append((ext, decrypt_extension_password(box, ext)))
         except SipCredentialError:
-            status.undecryptable_extensions.append(ext.number)
-    for trunk in await session.scalars(select(Trunk).order_by(Trunk.name)):
+            result.status.undecryptable_extensions.append(ext.number)
+    for trunk in await session.scalars(
+        select(Trunk).where(Trunk.enabled.is_(True)).order_by(Trunk.name)
+    ):
         try:
-            decrypt_trunk_password(box, trunk)
+            result.trunks.append((trunk, decrypt_trunk_password(box, trunk)))
         except SipCredentialError:
-            status.undecryptable_trunks.append(trunk.name)
-    return status
+            result.status.undecryptable_trunks.append(trunk.name)
+    return result
 
 
 def log_sip_credential_status(status: SipCredentialStatus) -> None:
@@ -106,7 +123,7 @@ def log_sip_credential_status(status: SipCredentialStatus) -> None:
         return
     logger.error(
         "SIP 認証情報を復号できません（master_key 不一致の可能性）: 内線=%s トランク=%s — "
-        "FreeSWITCH 設定は再生成されず直前の設定のまま動作します。"
+        "これらは FreeSWITCH 設定から除外しました（登録できません）。"
         "data/secrets.json を正しいバックアップから戻して再起動するか、"
         "鍵を失った場合は python -m millicall.tools.recover_sip を実行してください",
         ",".join(status.undecryptable_extensions) or "-",
