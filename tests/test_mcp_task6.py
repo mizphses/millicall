@@ -1,4 +1,4 @@
-"""Task 6: 全 15 ツール + guide を FastMCP に登録し統合。
+"""Task 6: 全 15 ツール + guide を MCPServer に登録し統合。
 
 受入条件（プラン Task 6）:
   - list_tools が 15 個（+ ping 残置）を verbatim シグネチャで返す。
@@ -24,6 +24,7 @@ from httpx import ASGITransport, AsyncClient
 from millicall.config import Settings
 from millicall.main import create_app
 from millicall.models import Contact, Extension, Trunk
+from tests.test_mcp_oauth import _form, _redirect_location
 
 
 @pytest.fixture(autouse=True)
@@ -84,9 +85,8 @@ async def mcp_client(mcp_app):
 
 
 def _tool_text(result) -> str:
-    """FastMCP.call_tool の戻り（tuple([TextContent...], structured)）からテキストを取り出す。"""
-    blocks = result[0] if isinstance(result, tuple) else result
-    return blocks[0].text
+    """MCPServer.call_tool の戻り（mcp SDK 2.x は CallToolResult）からテキストを取り出す。"""
+    return result.content[0].text
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ async def test_guide_resource_body(mcp_app):
 async def test_converse_signature_verbatim(mcp_app):
     tools = await mcp_app.state.mcp.list_tools()
     converse = next(t for t in tools if t.name == "converse")
-    props = converse.inputSchema["properties"]
+    props = converse.input_schema["properties"]
     # 契約 §6 の引数名。
     for arg in (
         "phone_number",
@@ -135,7 +135,7 @@ async def test_converse_signature_verbatim(mcp_app):
 async def test_dial_signature_verbatim(mcp_app):
     tools = await mcp_app.state.mcp.list_tools()
     dial = next(t for t in tools if t.name == "dial")
-    props = dial.inputSchema["properties"]
+    props = dial.input_schema["properties"]
     for arg in ("phone_number", "caller_id", "trunk"):
         assert arg in props
 
@@ -308,7 +308,7 @@ async def test_dial_tool_accepts_voice_arg_ignored(mcp_app):
     """say/say_and_listen が voice を受理して無視することを say で確認（channel 無し→error だが型は許容）。"""
     tools = await mcp_app.state.mcp.list_tools()
     say = next(t for t in tools if t.name == "say")
-    assert "voice" in say.inputSchema["properties"]
+    assert "voice" in say.input_schema["properties"]
 
 
 # ---------------------------------------------------------------------------
@@ -367,9 +367,9 @@ async def test_oauth_bearer_tools_call(mcp_app, mcp_client):
     )
     cb = await mcp_client.post(
         "/mcp-login/callback",
-        data={"ticket": ticket, "username": "flow", "password": "FlowPass1"},
+        data=await _form(mcp_client, ticket=ticket, username="flow", password="FlowPass1"),
     )
-    code = urllib.parse.parse_qs(urllib.parse.urlparse(cb.headers["location"]).query)["code"][0]
+    code = urllib.parse.parse_qs(urllib.parse.urlparse(_redirect_location(cb)).query)["code"][0]
     tok = await mcp_client.post(
         "/token",
         data={

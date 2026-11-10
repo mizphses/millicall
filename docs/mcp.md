@@ -191,6 +191,8 @@ dial で 18609000000000 に電話をかけてください
 | `/mcp` が 401（トークン失効） | ユーザーの無効化・パスワード変更・ログアウト全デバイス、または 30 日以上リフレッシュされていない。claude.ai コネクタから「再認証」を実行（core の再起動だけでは失効しない） |
 | issuer HTTPS エラー | `MILLICALL_MCP_ISSUER_URL` に `https://` が付いているか確認。`localhost` 以外は HTTPS 必須 |
 | `/mcp` が常に接続エラー | `MILLICALL_MCP_ALLOWED_HOSTS` に公開ホスト名が含まれているか確認 |
+| OAuth 開始直後に issuer 不一致で失敗 | `/.well-known/oauth-authorization-server` の `issuer` と `/.well-known/oauth-protected-resource` の `authorization_servers` が完全一致しているか確認（mcp SDK 2.x 準拠クライアントは厳密照合する）。プロキシでのホスト/パス書き換えを避ける |
+| `/mcp` が 413 | リクエストボディが 4 MiB 上限（mcp SDK 2.x 既定）を超えている |
 | `converse` で「既定エージェントが見つかりません」 | `GET /api/ai-agents` で `enabled=true` のエージェントが存在するか確認 |
 | `dial` で「利用可能なトランクがありません」 | `GET /api/trunks` で `enabled=true` のトランクが存在するか確認 |
 | `dial` が 30 秒でタイムアウト | 正常動作（応答なし）。FreeSWITCH と ESL の接続（`127.0.0.1:8021`）を確認 |

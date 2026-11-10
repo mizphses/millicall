@@ -22,7 +22,7 @@ from millicall.media.vad import VadSegmenter
 from millicall.models import McpOAuthCode, McpOAuthToken, User
 from millicall.net_guard import _is_blocked_ip, _PinnedTransport
 from millicall.network.validation import is_valid_hostname, is_valid_interface
-from tests.test_mcp_oauth import _register_client, _ticket
+from tests.test_mcp_oauth import _form, _redirect_location, _register_client, _ticket
 from tests.test_totp import _setup_and_enable_totp
 
 
@@ -146,7 +146,9 @@ async def test_mcp_login_requires_totp(client, app, user_factory):
     username, password = await user_factory()
     secret, _ = await _setup_and_enable_totp(client, username, password)
     client_id = await _register_client(client)
-    data = dict(ticket=_ticket(app, client_id=client_id), username=username, password=password)
+    data = await _form(
+        client, _ticket(app, client_id=client_id), username=username, password=password
+    )
     for code in ("", "invalid"):
         response = await client.post("/mcp-login/callback", data={**data, "code": code})
         assert response.status_code == 401
@@ -154,7 +156,7 @@ async def test_mcp_login_requires_totp(client, app, user_factory):
     response = await client.post(
         "/mcp-login/callback", data={**data, "code": pyotp.TOTP(secret).now()}
     )
-    assert response.status_code == 302
+    assert "code=" in _redirect_location(response)
 
 
 async def test_oauth_code_is_single_use_under_concurrency(app, user_factory):

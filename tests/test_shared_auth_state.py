@@ -38,7 +38,15 @@ from millicall.mcp_server import oauth as oauth_module
 from millicall.mcp_server.oauth import MillicallOAuthProvider
 from millicall.models import McpOAuthClient, McpOAuthCode, McpOAuthToken, SamlConsumedId, User
 from millicall.process_lock import acquire_single_process_lock
-from tests.test_mcp_oauth import MCP_HEADERS, MCP_INIT, _make_user, _pkce, _ticket
+from tests.test_mcp_oauth import (
+    MCP_HEADERS,
+    MCP_INIT,
+    _form,
+    _make_user,
+    _pkce,
+    _redirect_location,
+    _ticket,
+)
 
 REDIRECT = "https://claude.ai/cb"
 
@@ -315,14 +323,14 @@ def _mcp_settings(tmp_path, data_dir, db_path):
 
 
 async def _http_login(app, http, client_id, challenge):
-    """/mcp-login/callback でログインし、発行された認可コードを返す。"""
+    """/mcp-login（CSRF 付きフォーム）→ callback でログインし、発行された認可コードを返す。"""
     ticket = _ticket(app, client_id=client_id, code_challenge=challenge)
     callback = await http.post(
         "/mcp-login/callback",
-        data={"ticket": ticket, "username": "restart", "password": "Passw0rd1"},
+        data=await _form(http, ticket, username="restart", password="Passw0rd1"),
     )
-    assert callback.status_code == 302
-    query = urllib.parse.parse_qs(urllib.parse.urlparse(callback.headers["location"]).query)
+    location = _redirect_location(callback)
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)
     return query["code"][0]
 
 

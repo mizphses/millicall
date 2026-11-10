@@ -15,9 +15,16 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING
 
+from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend
+from starlette.middleware.authentication import AuthenticationMiddleware
+
 from millicall.mcp_server.login import router as login_router
-from millicall.mcp_server.oauth import MillicallOAuthProvider, install_hashed_client_auth
-from millicall.mcp_server.server import build_mcp
+from millicall.mcp_server.oauth import (
+    MillicallOAuthProvider,
+    ResourceBoundTokenVerifier,
+    install_hashed_client_auth,
+)
+from millicall.mcp_server.server import build_mcp, build_transport_security
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -42,7 +49,9 @@ def mount_mcp(app: FastAPI) -> None:
     app.state.mcp = mcp
 
     # streamable_http_app() 呼び出しで session_manager が遅延生成される。
-    mcp_app = mcp.streamable_http_app()
+    # mcp SDK 2.x ではトランスポート設定（Host 制限）はここで渡す（コンストラクタからは削除）。
+    # リクエストボディ上限は SDK 既定（4 MiB、超過は 413）のまま。
+    mcp_app = mcp.streamable_http_app(transport_security=build_transport_security(settings))
     app.state.mcp_session_manager = mcp.session_manager
 
     # /.well-known/*, /authorize, /token, /register, /mcp を本体アプリの root に取り込む
@@ -52,8 +61,20 @@ def mount_mcp(app: FastAPI) -> None:
 
     # Bearer 認証（BearerAuthBackend）+ AuthContext ミドルウェアを引き継ぐ。
     # 未取り込みだと /mcp の RequireAuthMiddleware が認証コンテキストを得られず全拒否になる。
+    # mcp SDK 2.x は `AuthSettings.validate_token_resource` を廃止したため、Bearer 検証器を
+    # resource（RFC 8707）束縛付きの ResourceBoundTokenVerifier に差し替えて、1.x の
+    # validate_token_resource=True と同等に「issuer 以外の resource 宛トークン」を拒否する。
+    replaced = False
     for mw in mcp_app.user_middleware:
-        app.add_middleware(mw.cls, *mw.args, **mw.kwargs)
+        kwargs = dict(mw.kwargs)
+        if mw.cls is AuthenticationMiddleware:
+            kwargs["backend"] = BearerAuthBackend(
+                ResourceBoundTokenVerifier(provider, settings.mcp_issuer_url)
+            )
+            replaced = True
+        app.add_middleware(mw.cls, *mw.args, **kwargs)
+    if not replaced:  # SDK 構成変更で差し替え漏れ → 認証境界が緩むので fail-closed
+        raise RuntimeError("MCP bearer authentication middleware not found")
 
     # ログインページ（GET /mcp-login, POST /mcp-login/callback）を登録。
     app.include_router(login_router)

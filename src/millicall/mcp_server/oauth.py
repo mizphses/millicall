@@ -1,7 +1,7 @@
 """MCP OAuth 2.1 プロバイダ（SQLite 共有ストア）。
 
 旧実装 (`../millicall-pbx/src/millicall/mcp_server.py:63-240`) の `MillicallOAuthProvider`
-の仕様を v2 / mcp SDK 1.30 の型 (`AuthorizationCode` / `AccessToken` / `RefreshToken`) に
+の仕様を v2 / mcp SDK 2.x の型 (`AuthorizationCode` / `AccessToken` / `RefreshToken`) に
 載せ替えたもの。DCR(RFC7591) + PKCE(S256) をサポートする。
 
 状態の保存先（issue #86）: クライアント登録・認可コード・トークンは DB
@@ -44,18 +44,18 @@ from mcp.server.auth.provider import (
     RefreshToken,
     RegistrationError,
     TokenError,
+    TokenVerifier,
 )
-from mcp.server.streamable_http import MCP_PROTOCOL_VERSION_HEADER
-from mcp.server.transport_security import (
+from mcp.server.auth.routes import cors_middleware
+from mcp.server.streamable_http_manager import (
     DEFAULT_MAX_REQUEST_BODY_SIZE,
     RequestBodyLimitMiddleware,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
-from pydantic import AnyHttpUrl, AnyUrl
+from pydantic import AnyHttpUrl, AnyUrl, ValidationError
 from sqlalchemy import and_, delete, func, or_, select, update
-from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.routing import BaseRoute, Route, request_response
+from starlette.routing import BaseRoute, Route
 
 from millicall.crypto import SecretBox
 from millicall.models import McpOAuthClient, McpOAuthCode, McpOAuthToken
@@ -65,7 +65,7 @@ logger = logging.getLogger("millicall")
 _AUTH_CODE_TTL = 600  # 10 分
 _ACCESS_TTL = 86400  # 24 時間
 _REFRESH_TTL = 86400 * 30  # 30 日
-_LOGIN_TICKET_TTL = 600  # ログイン往復チケットの有効期限（10 分）
+LOGIN_TICKET_TTL = 600  # ログイン往復チケットの有効期限（10 分）
 
 # DCR の上限。/register は未認証で叩けるため、テーブルを無制限に膨らませない。
 _MAX_CLIENTS = 1000
@@ -156,7 +156,7 @@ class MillicallOAuthProvider(
         """
         if self._signer is None:
             raise RuntimeError("OAuth signer not configured")
-        return json.loads(self._signer.decrypt(token, ttl=_LOGIN_TICKET_TTL))
+        return json.loads(self._signer.decrypt(token, ttl=LOGIN_TICKET_TTL))
 
     # -- 清掃 --
 
@@ -738,6 +738,12 @@ class HashedSecretClientAuthenticator(ClientAuthenticator):
                 f"Unsupported auth method: {client.token_endpoint_auth_method}"
             )
 
+        # SDK 2.x と同じく、secret 方式で登録されたのに保存済み secret が無いクライアントは
+        # 何も検証していないので通さない。
+        if client.token_endpoint_auth_method != "none" and secret_hash is None:
+            raise AuthenticationError(
+                "Client is registered for secret-based authentication but has no stored secret"
+            )
         if secret_hash is not None:
             if not request_client_secret:
                 raise AuthenticationError("Client secret is required")
@@ -755,26 +761,23 @@ def install_hashed_client_auth(
 ) -> list[BaseRoute]:
     """SDK が生成した /token ルートを HashedSecretClientAuthenticator 版に差し替える。
 
-    ラッパ構成（CORS 最外 → 本文サイズ上限 → ハンドラ）は SDK の create_auth_routes と同じ。
+    構成は mcp SDK 2.x の create_auth_routes と同じ（`cors_middleware(TokenHandler(...).handle)`）。
+    SDK 2.x は /token に本文サイズ上限を掛けなくなったが、1.x と同じ 4 MiB 上限を内側に残す
+    （差し替えで防御を弱めない）。identity assertion（jwt-bearer グラント）は本プロバイダが
+    実装しないため無効のまま。
     /token が見つからなければ起動を失敗させる（SDK 更新で差し替えが黙って外れるのを防ぐ）。
     /revoke は無効（RevocationOptions 未指定）。有効化された場合は SDK 標準認証のままに
     なってしまうため、存在したら起動を止める（差し替え対象に加えること）。
     """
     if any(isinstance(route, Route) and route.path == "/revoke" for route in routes):
         raise RuntimeError("MCP OAuth /revoke route requires hashed client auth; not supported")
-    handler = TokenHandler(provider, HashedSecretClientAuthenticator(provider))
-    replacement = Route(
-        "/token",
-        endpoint=CORSMiddleware(
-            app=RequestBodyLimitMiddleware(
-                request_response(handler.handle), DEFAULT_MAX_REQUEST_BODY_SIZE
-            ),
-            allow_origins="*",
-            allow_methods=["POST", "OPTIONS"],
-            allow_headers=[MCP_PROTOCOL_VERSION_HEADER],
-        ),
-        methods=["POST", "OPTIONS"],
+    handler = TokenHandler(
+        provider, HashedSecretClientAuthenticator(provider), identity_assertion_enabled=False
     )
+    cors_app = cors_middleware(handler.handle, ["POST", "OPTIONS"])
+    # cors_middleware は CORSMiddleware(app=request_response(handler)) を返す。内側に本文上限を挟む。
+    cors_app.app = RequestBodyLimitMiddleware(cors_app.app, DEFAULT_MAX_REQUEST_BODY_SIZE)
+    replacement = Route("/token", endpoint=cors_app, methods=["POST", "OPTIONS"])
     replaced = 0
     result: list[BaseRoute] = []
     for route in routes:
@@ -786,3 +789,30 @@ def install_hashed_client_auth(
     if replaced != 1:
         raise RuntimeError("MCP OAuth /token route not found; cannot install client auth")
     return result
+
+
+class ResourceBoundTokenVerifier(TokenVerifier):
+    """resource（RFC 8707）が本サーバー（issuer）宛のアクセストークンだけを受理する検証器。
+
+    mcp SDK 1.x の `AuthSettings.validate_token_resource=True`（BearerAuthBackend 内の
+    `_issued_for_this_resource`）は 2.x で廃止されたため、同じ比較規則（URL として正規化し、
+    末尾スラッシュ差を無視）をここで再実装する。provider は `load_access_token` で
+    期限・ユーザー有効性・epoch を検証済みのトークンを返す。
+    """
+
+    def __init__(self, provider: MillicallOAuthProvider, resource_server_url: str) -> None:
+        self._provider = provider
+        self._resource = str(AnyHttpUrl(resource_server_url)).removesuffix("/")
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        access = await self._provider.load_access_token(token)
+        if access is None:
+            return None
+        try:
+            token_resource = str(AnyHttpUrl(access.resource or ""))
+        except ValidationError:
+            return None
+        if token_resource.removesuffix("/") != self._resource:
+            logger.warning("MCP OAuth: rejected bearer token for another resource")
+            return None
+        return access

@@ -130,14 +130,27 @@ class MenuConfig(_Config):
 
 
 class TimeConditionConfig(_Config):
-    start_time: str = Field(default="09:00", json_schema_extra=_ui("開始時刻", "string"))
-    end_time: str = Field(default="18:00", json_schema_extra=_ui("終了時刻", "string"))
+    start_time: str = Field(
+        default="09:00",
+        json_schema_extra=_ui(
+            "開始時刻",
+            "string",
+            description="HH:MM。開始が終了より後の場合は翌日までの区間（例 22:00〜06:00）",
+        ),
+    )
+    end_time: str = Field(
+        default="18:00",
+        json_schema_extra=_ui(
+            "終了時刻", "string", description="HH:MM。開始と同じ時刻にはできません"
+        ),
+    )
     days_of_week: list[str] = Field(
         default_factory=lambda: ["mon", "tue", "wed", "thu", "fri"],
         json_schema_extra=_ui(
-            "対象曜日",
+            "対象曜日（営業開始日の曜日）",
             "multi_select",
             options=["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+            description="日跨ぎ区間では営業開始日の曜日で判定（金曜 22:00〜06:00 は土曜朝まで金曜扱い）",
         ),
     )
     timezone: str = Field(default="Asia/Tokyo", json_schema_extra=_ui("タイムゾーン", "string"))
