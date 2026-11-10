@@ -7,8 +7,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.audit import get_client_ip, record_audit
+from millicall.auth.hashing import hash_password_async
 from millicall.auth.schemas import UserRead
-from millicall.auth.security import bump_session_epoch, hash_password
+from millicall.auth.security import bump_session_epoch
 from millicall.deps import get_current_user, get_session, require_admin
 from millicall.models import User
 
@@ -93,7 +94,7 @@ async def create_user(
     user = User(
         username=body.username,
         display_name=body.display_name,
-        hashed_password=hash_password(body.password),
+        hashed_password=await hash_password_async(body.password),
         role=body.role,
         email=body.email,
         origin="local",
@@ -226,7 +227,7 @@ async def reset_password(
             detail="ローカルユーザーのみパスワードをリセットできます",
         )
 
-    user.hashed_password = hash_password(body.new_password)
+    user.hashed_password = await hash_password_async(body.new_password)
     bump_session_epoch(user)
 
     await record_audit(
