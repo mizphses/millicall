@@ -339,7 +339,8 @@ async def test_app_state_di_bridge(mcp_app):
 # TransportSecurity allowed_hosts
 # --------------------------------------------------------------------------
 async def test_allowed_hosts_wired(mcp_app):
-    hosts = mcp_app.state.mcp.settings.transport_security.allowed_hosts
+    # mcp SDK 2.x では transport_security は streamable_http_app() 引数（session manager 保持）。
+    hosts = mcp_app.state.mcp_session_manager.security_settings.allowed_hosts
     assert "localhost" in hosts
     assert "127.0.0.1" in hosts
 
@@ -625,3 +626,56 @@ async def test_mcp_callback_disabled_user_records_failure(tmp_path):
                 .where(LoginAttempt.username == "th4")
             )
         assert count and count >= 3
+
+
+# --------------------------------------------------------------------------
+# mcp SDK 2.x 移行: resource（RFC 8707）束縛とボディ上限
+# --------------------------------------------------------------------------
+async def _bearer_for(mcp_app, username: str, token: str, resource: str | None) -> None:
+    """provider 内部に resource 指定のアクセストークンを直接登録する（epoch も記録）。"""
+    from mcp.server.auth.provider import AccessToken
+
+    provider = mcp_app.state.mcp_oauth_provider
+    provider._access_tokens[token] = AccessToken(
+        token=token, client_id="c", scopes=[], expires_at=None, subject=username, resource=resource
+    )
+    await provider._record_token_epoch(username, token, f"ref-{token}")
+
+
+async def test_bearer_for_other_resource_rejected_on_mcp(mcp_app, mcp_client):
+    """issuer 以外の resource 宛トークンは /mcp で 401（1.x validate_token_resource 相当）。"""
+    await _make_user(mcp_app, username="rsrc", password="RsrcPass1", role="admin")
+    await _bearer_for(mcp_app, "rsrc", "tok-own", "http://localhost")
+    await _bearer_for(mcp_app, "rsrc", "tok-other", "https://other.example")
+    await _bearer_for(mcp_app, "rsrc", "tok-none", None)
+
+    ok = await mcp_client.post(
+        "/mcp", json=MCP_INIT, headers={**MCP_HEADERS, "Authorization": "Bearer tok-own"}
+    )
+    assert ok.status_code == 200
+    for tok in ("tok-other", "tok-none"):
+        r = await mcp_client.post(
+            "/mcp", json=MCP_INIT, headers={**MCP_HEADERS, "Authorization": f"Bearer {tok}"}
+        )
+        assert r.status_code == 401, tok
+
+
+async def test_mcp_request_body_limit(mcp_app, mcp_client):
+    """mcp SDK 2.x の Streamable HTTP は 4 MiB 超の POST ボディを 413 で拒否する。"""
+    await _make_user(mcp_app, username="big", password="BigPass1", role="admin")
+    await _bearer_for(mcp_app, "big", "tok-big", "http://localhost")
+    body = (
+        b'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"'
+        + b"x" * (5 * 1024 * 1024)
+        + b'"}}'
+    )
+    r = await mcp_client.post(
+        "/mcp",
+        content=body,
+        headers={
+            **MCP_HEADERS,
+            "Content-Type": "application/json",
+            "Authorization": "Bearer tok-big",
+        },
+    )
+    assert r.status_code == 413
