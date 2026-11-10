@@ -151,13 +151,14 @@ MILLICALL_SIP_REJECT_ANONYMOUS=false   # デフォルト・変更しないこと
 
 master_key が DB と一致しない場合（`secrets.json` を失った、別環境のものを置いた等）、空パスワードで動作を続けることはありません（fail-closed）。
 
-- 起動時に全件の復号を試し、失敗した内線とトランクを ERROR ログに出します。`/healthz` は HTTP 200 のまま `{"status": "degraded", "sip_credentials": "undecryptable"}` を返します。200 を維持するのは、compose の healthcheck が core を落とすと復旧操作もできなくなるためです。
-- FreeSWITCH 設定は書き換えず、直前に生成した設定のまま動作します。
-- credentials API・電話機 cfg・設定の再生成を伴う API は 503 を返します。
+- 設定を生成するたびに（起動時を含む）有効な内線とトランクを全件復号します。復号できないものは FreeSWITCH 設定から**除外**して書きます。除外された端末やトランクは登録できません。一方、削除・無効化・発信権限・トランクの変更は常に FreeSWITCH に反映されるので、DB と FreeSWITCH の設定はずれません。
+- 除外した内線番号・トランク名は ERROR ログに出します。`/healthz` は HTTP 200 のまま、件数だけを `{"status": "degraded", "sip_credentials": "undecryptable", "undecryptable_extensions": N, "undecryptable_trunks": M}` で返します。200 を維持するのは、compose の healthcheck が core を落とすと復旧操作もできなくなるためです。
+- 変更 API（内線の追加・削除、トランクの変更など）は通常どおり成功します。平文そのものが必要な credentials API と電話機 cfg は、復号できない項目について 503 を返します。
+- 暗号化済みの値（SIP 認証情報、AI プロバイダ API キー、TOTP シークレット、SMTP/電話機管理者パスワード、Tailscale auth key のいずれか）がある DB に対して `secrets.json` が無い場合、新しい鍵は作らず core の起動を失敗させます。黙って鍵を作ると既存の暗号文が全て読めなくなり、その後に保存した値まで誤った鍵で暗号化されてしまうためです。空の DB（新規インストール）では従来どおり鍵を生成します。
 
 ### 移行（マイグレーション 0027）
 
-既存の平文列は 0027 で暗号化列へ移し、旧列は削除します。平文と暗号文が混在する期間はありません。core 起動時に `secrets.json` を読み、その master_key を alembic へ渡します。暗号化すべき行があるのに鍵を渡せない場合、0027 は失敗します。移行直後には `VACUUM` と `wal_checkpoint(TRUNCATE)` を実行し、旧列の平文を SQLite の空きページと WAL から消します。downgrade では鍵で復号して平文列へ戻します。
+既存の平文列は 0027 で暗号化列へ移し、旧列は削除します。平文と暗号文が混在する期間はありません。core 起動時に `secrets.json` を読み、その master_key を alembic へ渡します。暗号化すべき行があるのに鍵を渡せない場合、0027 は失敗します。移行直後には `VACUUM` と `wal_checkpoint(TRUNCATE)` を実行し、旧列の平文を SQLite の空きページと WAL から消します。他の接続が読み取り中だと checkpoint が busy になるため数回再試行し、それでも完了できなければ ERROR ログを出して `data/millicall.db.compact-pending` を残します。このマーカーがある間は、起動のたびに圧縮を再試行します。downgrade では鍵で復号して平文列へ戻します。
 
 移行してもパスワード自体は変わりません。移行前の DB ファイル・バックアップ・ログに平文が残っている可能性がある場合は、移行後に内線パスワードを再生成してください（[運用手順](ops/deployment.md#sip-認証情報の再生成と復旧)）。トランクのパスワードは HGW またはプロバイダ側で変更してから、管理画面で再入力します。
 

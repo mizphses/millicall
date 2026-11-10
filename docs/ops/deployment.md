@@ -173,11 +173,14 @@ FreeSWITCH 設定が入る。そのためバックアップは**必ずパスフ�
 # 対話入力（確認のため 2 回。12 文字以上）
 millicallctl backup      # ~/millicall/backups/millicall-<UTC>.tar.gz.enc (data/ と .env)
 
-# cron 等の非対話実行: 環境変数で渡す（未設定なら失敗し、無暗号では続行しない）
+# cron 等の非対話実行: パスフレーズファイル（1 行目を使う。0600 で置く）か環境変数で渡す
+# （どちらも未設定なら失敗し、無暗号では続行しない）
+MILLICALL_BACKUP_PASSPHRASE_FILE=/root/.millicall-backup-pass millicallctl backup
 MILLICALL_BACKUP_PASSPHRASE='...' millicallctl backup
 ```
 
-- パスフレーズは `openssl` に `-pass env:` で渡す。コマンドライン（`ps`）には出ない。
+- パスフレーズは `openssl` に `-pass file:` または `-pass env:`（別名の変数を openssl の起動にだけ渡す）で
+  渡す。コマンドライン（`ps`）には出ない。`MILLICALL_BACKUP_PASSPHRASE` は読み込んだ直後に unset する。
 - 成果物は 0600、`backups/` は 0700。
 - **パスフレーズを失うと復元できない。** バックアップとは別の場所（パスワードマネージャ等）に保管する。
 - バックアップには master_key も含まれる。パスフレーズが漏れれば SIP 認証情報も読めるため、
@@ -197,14 +200,15 @@ millicallctl down
 millicallctl restore backups/millicall-<UTC>.tar.gz.enc   # パスフレーズを聞かれる
 millicallctl up
 millicallctl logs core   # 「SIP 認証情報を復号できません」が出ていないこと
-curl -fsS http://127.0.0.1/healthz   # {"status":"ok"}（degraded なら鍵が DB と一致していない）
+curl -fsS http://127.0.0.1/healthz   # {"status":"ok"}（degraded なら一部の認証情報を復号できていない）
 ```
 
-- 既存の `data/` と `.env` は `data.pre-restore-<UTC>` / `.env.pre-restore-<UTC>` に退避する。
-  問題がなければ後で削除する。
+- 既存の `data/` と `.env` は `data.pre-restore-<UTC>`（0700）/ `.env.pre-restore-<UTC>`（0600）に退避する。
+  旧データの鍵と認証情報を含むので、動作を確認したら削除する（削除コマンドを出力する）。
 - 以前の無暗号バックアップ（`millicall-<UTC>.tar.gz`）もそのまま `restore` できる。
   ファイル先頭のバイト列で形式を判別する。
-- `data/` と `.env` 以外のパス、`..`、シンボリックリンク・ハードリンクを含むアーカイブは拒否する。
+- `data/` と `.env` 以外のパスや `..` を含むアーカイブ、通常ファイルとディレクトリ以外（リンク・デバイス・
+  FIFO 等）を含むアーカイブは拒否する。展開時は所有者・権限を復元しない（`--no-same-owner --no-same-permissions`）。
 
 ### 鍵（secrets.json）の保管
 
@@ -225,6 +229,16 @@ docker compose exec core uv run --no-dev python -m millicall.tools.rotate_sip_pa
 # master_key を失った場合の復旧（復号できない行だけを対象にする）
 docker compose exec core uv run --no-dev python -m millicall.tools.recover_sip --yes
 millicallctl restart     # 起動時に FreeSWITCH 設定を再生成する
+```
+
+`secrets.json` が無く、DB に暗号化済みの値がある場合、core は起動しない（新しい鍵を黙って作らない）。
+ログに `secrets ファイルがありません` が出る。まず `secrets.json` をバックアップや写しから戻す。
+戻せない場合に限り、core を起動せずに `recover_sip --yes` を実行する。新しい鍵が作られるので、その後に起動する。
+
+```bash
+cd ~/millicall
+docker compose run --rm --no-deps core uv run --no-dev python -m millicall.tools.recover_sip --yes
+millicallctl up
 ```
 
 `recover_sip` は次を行う。
