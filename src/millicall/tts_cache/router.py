@@ -31,7 +31,7 @@ async def synthesize(
         )
     config = json.loads(p.config_json or "{}")
     api_key = box.decrypt(p.api_key_encrypted) if p.api_key_encrypted else None
-    tts = registry.build_tts(p.kind, config, api_key)
+    tts = await registry.build_tts_async(p.kind, config, api_key)
     cache = PromptCache(request.app.state.settings.tts_cache_dir / "prompts")
     key = f"{body.provider_id}:{body.text}"
     existed = cache.path_for(key).exists()

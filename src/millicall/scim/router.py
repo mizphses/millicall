@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
-from millicall.auth.hashing import hash_password_async, verify_password_async
+from millicall.auth.hashing import SCIM_LANE, hash_password_async, verify_password_async
 from millicall.auth.security import bump_session_epoch
 from millicall.deps import get_session, require_admin
 from millicall.gen import generate_password
@@ -133,8 +133,13 @@ async def _verify_bearer(request: Request, session: AsyncSession) -> None:
             detail="SCIM not configured",
         )
 
-    # Argon2 はイベントループ外（上限付き専用 executor）で計算する（issue #81）
-    if not await verify_password_async(token_hash, provided_token):
+    # Argon2 はイベントループ外で計算する（issue #81）。Bearer 失敗はレート制限が無いため
+    # /login と別の scim レーンで計算し、待ち行列が上限を超えたら計算せず 503 を返す。
+    # 計算待ちの間 DB コネクションを握り続けると、大量送信でコネクションプールが枯渇し
+    # /login 等の他のリクエストが待たされる。ここまでは読み取りのみ（全呼び出し元が
+    # 先頭で本関数を呼ぶ）なので rollback でトランザクションを閉じてプールへ返す。
+    await session.rollback()
+    if not await verify_password_async(token_hash, provided_token, lane=SCIM_LANE):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             headers={"WWW-Authenticate": "Bearer"},
@@ -493,7 +498,9 @@ async def create_user(
             return _scim_error(409, f"email '{email}' already exists", "uniqueness")
 
     # 使用不可パスワード（SCIM ユーザーはローカルログイン不可）
-    unusable_pw = await hash_password_async(f"__scim_unusable_{secrets.token_hex(16)}__")
+    unusable_pw = await hash_password_async(
+        f"__scim_unusable_{secrets.token_hex(16)}__", lane=SCIM_LANE
+    )
 
     user = User(
         username=username,

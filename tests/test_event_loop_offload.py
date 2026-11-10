@@ -105,6 +105,7 @@ async def test_cancelled_waiter_does_not_compute():
     waiter = asyncio.ensure_future(hashing.run_argon2(_job, 1))
     await asyncio.sleep(0.01)
     waiter.cancel()
+    await asyncio.sleep(0)  # キャンセルを concurrent future へ伝播させてから解放する
     release.set()
     await asyncio.gather(*blockers)
     await hashing.run_argon2(_job, 2)  # キュー消化を待つ
@@ -302,6 +303,101 @@ async def test_scim_bearer_verify_does_not_block_loop(tmp_path):
     assert ok.status_code == 200
     assert bad.status_code == 401
     assert max(gap_ok, gap_bad) < _MAX_ALLOWED_GAP
+
+
+async def test_lane_rejects_when_pending_limit_reached():
+    """未完了ジョブ数が上限に達したレーンは計算せずに Argon2Busy（503）を送出する。"""
+    lane = hashing._LANES[hashing.SCIM_LANE]
+    release = threading.Event()
+    ran: list[int] = []
+
+    def _blocker() -> None:
+        release.wait(5)
+
+    futs = [
+        asyncio.ensure_future(hashing.run_argon2(_blocker, lane=hashing.SCIM_LANE))
+        for _ in range(lane.max_pending)
+    ]
+    try:
+        await asyncio.sleep(0.05)
+        assert lane.pending == lane.max_pending
+        try:
+            await hashing.run_argon2(ran.append, 1, lane=hashing.SCIM_LANE)
+        except hashing.Argon2Busy as exc:
+            assert exc.status_code == 503
+            assert exc.headers["Retry-After"] == str(hashing._BUSY_RETRY_AFTER_SECONDS)
+        else:
+            raise AssertionError("Argon2Busy が送出されなかった")
+        # 別レーン（auth）は影響を受けない
+        assert await hashing.run_argon2(lambda: "ok") == "ok"
+    finally:
+        release.set()
+        await asyncio.gather(*futs)
+    assert ran == []
+    assert lane.pending == 0
+
+
+async def test_shutdown_then_reuse_recreates_executor():
+    hashing.shutdown()
+    assert await hashing.run_argon2(lambda: 42) == 42
+
+
+async def test_scim_flood_does_not_delay_login(tmp_path):
+    """不正 SCIM トークンの大量同時送信中も /login は待たされず、超過分は 503 になる。
+
+    レビューでの再現（不正トークン 400 件同時送信で /login が 11 秒待ち、その間
+    SQLite 書き込みロックを保持）の回帰テスト。
+    """
+    from millicall.config import Settings
+    from millicall.main import create_app
+
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
+        fs_config_dir=tmp_path / "fs",
+        cookie_secure=False,
+        esl_timeout_seconds=1.0,
+        scim_enabled=True,
+    )
+    application = create_app(settings)
+    real_verify = hashing.verify_password
+
+    def _verify_50ms(*args):
+        time.sleep(0.05)
+        return real_verify(*args)
+
+    async with application.router.lifespan_context(application):
+        async with application.state.sessionmaker() as s:
+            s.add(AppSetting(key="scim_bearer_token_hash", value=hash_password("scim_tok")))
+            await s.commit()
+        await _create_local_user(application, "flood1", "Passw0rd1")
+        transport = ASGITransport(app=application)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            with patch.object(hashing, "verify_password", _verify_50ms):
+                flood = [
+                    asyncio.ensure_future(
+                        c.get("/scim/v2/Users", headers={"Authorization": f"Bearer bad{i}"})
+                    )
+                    for i in range(200)
+                ]
+                await asyncio.sleep(0.2)  # scim レーンを埋める
+                t0 = time.perf_counter()
+                login = await c.post(
+                    "/api/auth/login", json={"username": "flood1", "password": "Passw0rd1"}
+                )
+                login_elapsed = time.perf_counter() - t0
+                results = await asyncio.gather(*flood)
+
+    assert login.status_code == 200
+    # scim レーンは 1 本 × 50ms × 32 件 ≈ 1.6 秒分詰まっているが、/login は別レーン
+    assert login_elapsed < 1.0
+    codes = [r.status_code for r in results]
+    assert set(codes) <= {401, 503}
+    busy = [r for r in results if r.status_code == 503]
+    assert busy, "上限超過分が 503 になっていない"
+    assert all(r.headers.get("Retry-After") for r in busy)
+    # 計算されたのは上限以内（＋解放後の後続分）に限られ、大半は計算せずに断っている
+    assert codes.count(401) < len(codes) // 2
 
 
 # ---------------------------------------------------------------------------
