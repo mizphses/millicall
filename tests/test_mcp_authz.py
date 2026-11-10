@@ -157,11 +157,10 @@ async def test_require_admin_admin_role_allowed(mcp_app):
 def _extract_text(result) -> str:
     """call_tool の戻り値から JSON テキストを取り出す。
 
-    FastMCP の call_tool は (list[ContentBlock], dict) のタプルを返す。
-    list の先頭要素の .text を取り出す。
+    mcp SDK 2.x の MCPServer.call_tool は CallToolResult を返す（1.x はタプル）。
+    content の先頭要素の .text を取り出す。
     """
-    content_blocks, _ = result
-    return content_blocks[0].text
+    return result.content[0].text
 
 
 async def test_tool_add_contact_denied_for_user_role(mcp_app):
@@ -175,7 +174,7 @@ async def test_tool_add_contact_denied_for_user_role(mcp_app):
         "millicall.mcp_server.tools.get_access_token",
         return_value=mock_token,
     ):
-        # FastMCP の tool を直接呼び出す
+        # MCPServer の tool を直接呼び出す
         tools = {t.name: t for t in await mcp_app.state.mcp.list_tools()}
         assert "add_contact" in tools
 
