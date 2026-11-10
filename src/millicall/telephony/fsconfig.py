@@ -1,9 +1,14 @@
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from jinja2 import Environment, PackageLoader
 from markupsafe import Markup
+
+# 生成する FreeSWITCH 設定の権限（SIP/ESL パスワードを平文で含むため所有者のみ）。
+_CONFIG_FILE_MODE = 0o600
+_CONFIG_DIR_MODE = 0o700
 
 # プレフィックスは 2〜8 桁の数字のみ（正規表現インジェクション防止・多層防御）
 _SAFE_PREFIX_RE = re.compile(r"^[0-9]{2,8}$")
@@ -306,7 +311,12 @@ class FreeswitchConfigWriter:
     def _write(self, rel_path: str, content: str) -> Path:
         path = self.output_dir / rel_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:  # in-place で bind mount inode を保持
+        # 生成物には SIP パスワード・ESL パスワードが平文で入る（FreeSWITCH の仕様上不可避）。
+        # 新規作成時から 0600 で開き、既存ファイルも fchmod で 0600 に揃える。
+        # rename ではなく O_TRUNC の in-place 上書きで、ファイル単位 bind mount の inode を保持する。
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _CONFIG_FILE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), _CONFIG_FILE_MODE)
             f.write(content)
         return path
 
@@ -346,6 +356,15 @@ class FreeswitchConfigWriter:
         (self.output_dir / "directory" / "default").mkdir(parents=True, exist_ok=True)
         self._clear_user_files()
         (self.output_dir / "sip_profiles").mkdir(parents=True, exist_ok=True)
+        # 認証情報入りファイルを置くディレクトリは所有者（root: core/FreeSWITCH とも root 実行）
+        # 以外から辿れないようにする。ディレクトリ単位 bind mount の inode は chmod では変わらない。
+        for d in (
+            self.output_dir,
+            self.output_dir / "directory",
+            self.output_dir / "directory" / "default",
+            self.output_dir / "sip_profiles",
+        ):
+            os.chmod(d, _CONFIG_DIR_MODE)
         # stale 掃除: 旧 external.xml と全 external_*.xml を消してから今回分を書く
         self._clear_external_profiles()
 
