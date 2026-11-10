@@ -13,7 +13,7 @@ import asyncio
 import socket
 import threading
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pyotp
 from httpx import ASGITransport, AsyncClient
@@ -23,33 +23,25 @@ from millicall.auth import hashing
 from millicall.auth.security import hash_password
 from millicall.models import AppSetting, AuditLog, LoginAttempt, User
 
-# ループが止まったとみなすしきい値。疑似の重い処理は 0.3 秒ブロックするため、
-# ループ上で実行されていればティッカーの最大間隔は 0.3 秒以上になる。
-_BLOCK_SECONDS = 0.3
-_MAX_ALLOWED_GAP = 0.15
 
+def _offload_probe(fn):
+    """同期関数がループ外で動き、実行中にもループが進むことを確認する spy。
 
-async def _run_with_ticker(coro):
-    """coro を実行しつつ 5ms 周期のティッカーを回し、(結果, ティック最大間隔) を返す。"""
-    gaps: list[float] = []
-    done = asyncio.Event()
+    HTTP 処理全体のティック間隔は CI の負荷や GC にも左右されるため、処理スレッドと
+    ループ間で通知を往復させる。10 秒は性能のしきい値ではなくデッドロックの安全弁。
+    呼び出し回数も検証し、対象処理を通らなかった場合の偽陽性を防ぐ。
+    """
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
 
-    async def _ticker() -> None:
-        last = time.perf_counter()
-        while not done.is_set():
-            await asyncio.sleep(0.005)
-            now = time.perf_counter()
-            gaps.append(now - last)
-            last = now
+    def _checked(*args, **kwargs):
+        assert threading.get_ident() != loop_thread, "blocking work ran on the event loop"
+        resumed = threading.Event()
+        loop.call_soon_threadsafe(resumed.set)
+        assert resumed.wait(10), "event loop did not progress while the worker was running"
+        return fn(*args, **kwargs)
 
-    task = asyncio.create_task(_ticker())
-    await asyncio.sleep(0)  # ティッカーを先に走らせる
-    try:
-        result = await coro
-    finally:
-        done.set()
-        await task
-    return result, max(gaps)
+    return Mock(wraps=_checked)
 
 
 # ---------------------------------------------------------------------------
@@ -63,8 +55,9 @@ async def test_run_argon2_runs_on_dedicated_thread():
 
 
 async def test_run_argon2_does_not_block_loop():
-    _, max_gap = await _run_with_ticker(hashing.run_argon2(time.sleep, _BLOCK_SECONDS))
-    assert max_gap < _MAX_ALLOWED_GAP
+    work = _offload_probe(lambda: 42)
+    assert await hashing.run_argon2(work) == 42
+    work.assert_called_once_with()
 
 
 async def test_run_argon2_concurrency_is_bounded():
@@ -158,37 +151,28 @@ async def _create_local_user(app, username: str, password: str) -> None:
         await s.commit()
 
 
-def _slow(fn):
-    """fn の前に _BLOCK_SECONDS だけ同期ブロックする版を返す（重い Argon2/DNS の代用）。"""
-
-    def _wrapped(*args, **kwargs):
-        time.sleep(_BLOCK_SECONDS)
-        return fn(*args, **kwargs)
-
-    return _wrapped
-
-
 async def test_login_does_not_block_loop(app):
     await _create_local_user(app, "offload1", "Passw0rd1")
-    slow_verify = _slow(hashing.verify_password)
+    verify = _offload_probe(hashing.verify_password)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        with patch.object(hashing, "verify_password", slow_verify):
-            resp, max_gap = await _run_with_ticker(
-                c.post("/api/auth/login", json={"username": "offload1", "password": "Passw0rd1"})
+        with patch.object(hashing, "verify_password", verify):
+            resp = await c.post(
+                "/api/auth/login", json={"username": "offload1", "password": "Passw0rd1"}
             )
     assert resp.status_code == 200
-    assert max_gap < _MAX_ALLOWED_GAP
+    verify.assert_called_once()
 
 
 async def test_login_unknown_user_still_runs_dummy_hash_off_loop(app):
     """存在しないユーザーでもダミーハッシュ検証が（ループ外で）走る（タイミングガード維持）。"""
     transport = ASGITransport(app=app)
-    with patch.object(hashing, "verify_password", wraps=hashing.verify_password) as spy:
+    verify = _offload_probe(hashing.verify_password)
+    with patch.object(hashing, "verify_password", verify):
         async with AsyncClient(transport=transport, base_url="http://test") as c:
             resp = await c.post("/api/auth/login", json={"username": "nobody", "password": "x"})
     assert resp.status_code == 401
-    assert spy.call_count == 1
+    verify.assert_called_once()
 
 
 async def _enable_totp(app, username: str, password: str) -> list[str]:
@@ -252,13 +236,14 @@ async def test_login_totp_recovery_code_does_not_block_loop(app):
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         lr = await c.post("/api/auth/login", json={"username": "offload3", "password": "Totp1234!"})
         ticket = lr.json()["ticket"]
-        with patch.object(hashing, "_verify_or_false", _slow(hashing._verify_or_false)):
+        verify = _offload_probe(hashing._verify_or_false)
+        with patch.object(hashing, "_verify_or_false", verify):
             # 末尾のコードは 10 件目で一致する → 10 回分の重い検証がループ外で走る
-            resp, max_gap = await _run_with_ticker(
-                c.post("/api/auth/login/totp", json={"ticket": ticket, "code": codes[-1]})
+            resp = await c.post(
+                "/api/auth/login/totp", json={"ticket": ticket, "code": codes[-1]}
             )
     assert resp.status_code == 200
-    assert max_gap < _MAX_ALLOWED_GAP
+    assert verify.call_count == hashing.RECOVERY_CODE_COUNT
 
 
 def test_sync_verify_code_kept_for_mcp_login():
@@ -293,16 +278,15 @@ async def test_scim_bearer_verify_does_not_block_loop(tmp_path):
             await s.commit()
         transport = ASGITransport(app=application)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
-            with patch.object(hashing, "verify_password", _slow(hashing.verify_password)):
-                ok, gap_ok = await _run_with_ticker(
-                    c.get("/scim/v2/Users", headers={"Authorization": "Bearer scim_tok"})
-                )
-                bad, gap_bad = await _run_with_ticker(
-                    c.get("/scim/v2/Users", headers={"Authorization": "Bearer wrong"})
-                )
+            verify = _offload_probe(hashing.verify_password)
+            with patch.object(hashing, "verify_password", verify):
+                ok = await c.get("/scim/v2/Users", headers={"Authorization": "Bearer scim_tok"})
+                verify.assert_called_once()
+                verify.reset_mock()
+                bad = await c.get("/scim/v2/Users", headers={"Authorization": "Bearer wrong"})
+                verify.assert_called_once()
     assert ok.status_code == 200
     assert bad.status_code == 401
-    assert max(gap_ok, gap_bad) < _MAX_ALLOWED_GAP
 
 
 async def test_lane_rejects_when_pending_limit_reached():
@@ -405,36 +389,33 @@ async def test_scim_flood_does_not_delay_login(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _slow_getaddrinfo(ip: str):
+def _offloaded_getaddrinfo(ip: str):
     def _fake(*_args, **_kwargs):
-        time.sleep(_BLOCK_SECONDS)
         return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, 443))]
 
-    return patch("millicall.net_guard.socket.getaddrinfo", _fake)
+    return patch("millicall.net_guard.socket.getaddrinfo", _offload_probe(_fake))
 
 
-async def test_build_llm_async_does_not_block_loop_on_slow_dns():
+async def test_build_llm_async_does_not_block_loop_on_dns():
     from millicall.ai import registry
 
-    with _slow_getaddrinfo("93.184.216.34"):
-        llm, max_gap = await _run_with_ticker(
-            registry.build_llm_async(
-                "openai_compatible", {"base_url": "https://llm.example.com/v1"}, "k"
-            )
+    with _offloaded_getaddrinfo("93.184.216.34") as resolve:
+        llm = await registry.build_llm_async(
+            "openai_compatible", {"base_url": "https://llm.example.com/v1"}, "k"
         )
     assert llm._transport._pinned_ip == "93.184.216.34"
-    assert max_gap < _MAX_ALLOWED_GAP
+    resolve.assert_called_once()
 
 
-async def test_build_tts_async_does_not_block_loop_on_slow_dns():
+async def test_build_tts_async_does_not_block_loop_on_dns():
     from millicall.ai import registry
 
-    with _slow_getaddrinfo("192.168.1.10"):
-        tts, max_gap = await _run_with_ticker(
-            registry.build_tts_async("voicevox", {"engine_url": "http://vv.lan:50021"}, None)
+    with _offloaded_getaddrinfo("192.168.1.10") as resolve:
+        tts = await registry.build_tts_async(
+            "voicevox", {"engine_url": "http://vv.lan:50021"}, None
         )
     assert tts._transport._pinned_ip == "192.168.1.10"
-    assert max_gap < _MAX_ALLOWED_GAP
+    resolve.assert_called_once()
 
 
 async def test_build_llm_async_keeps_ssrf_rejection():
@@ -442,7 +423,7 @@ async def test_build_llm_async_keeps_ssrf_rejection():
 
     from millicall.ai import registry
 
-    with _slow_getaddrinfo("127.0.0.1"), pytest.raises(ValueError, match="SSRF"):
+    with _offloaded_getaddrinfo("127.0.0.1"), pytest.raises(ValueError, match="SSRF"):
         await registry.build_llm_async(
             "openai_compatible", {"base_url": "https://evil.example.com/v1"}, "k"
         )

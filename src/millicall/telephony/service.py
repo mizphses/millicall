@@ -177,7 +177,7 @@ class TelephonyChangeListener:
         """
         self._writer.update_outbound_policy(international_allow_prefixes, sip_reject_anonymous)
 
-    async def regenerate(self, session: AsyncSession) -> None:
+    async def _configuration(self, session: AsyncSession) -> tuple:
         configs = await self._load_configs(session)
         trunks = await self._load_trunks(session)
         ring_groups = await self._load_ring_groups(session)
@@ -188,13 +188,14 @@ class TelephonyChangeListener:
         # 未適用時は None を渡して従来動作（sip_bind_ip / sip_domain）を維持する。
         child_lan_ip = await self._load_child_lan_ip(session)
         self._writer.set_internal_network(child_lan_ip, child_lan_ip)
-        self._writer.write_all(
-            configs,
-            trunks,
-            ring_groups=ring_groups,
-            ai_agents=ai_agents,
-            workflows=workflows,
-        )
+        return configs, trunks, ring_groups, ai_agents, workflows
+
+    async def validate(self, session: AsyncSession) -> None:
+        """Preflight pending DB changes without touching FreeSWITCH or its files."""
+        self._writer.render_all(*await self._configuration(session))
+
+    async def regenerate(self, session: AsyncSession) -> None:
+        self._writer.write_all(*await self._configuration(session))
 
     def _current_internal_bind(self) -> tuple[str | None, str | None]:
         """今回生成に使う internal の実効バインド（sip-ip, domain）を返す。
@@ -217,14 +218,16 @@ class TelephonyChangeListener:
         restart_internal: bool = False,
     ) -> None:
         await client.connect()
-        await client.reloadxml()
-        if restart_internal:
+        if (await client.reloadxml()).lstrip().startswith("-ERR"):
+            raise ESLError("reloadxml was rejected")
+        if restart_internal:  # noqa: SIM102 - keep the side-effecting command separate
             # internal の実効バインド（sip-ip / domain）が前回生成時から変化した、または
             # 初回（core 起動相当）のケース。reloadxml だけでは sofia プロファイルの
             # sip-ip / bind は再バインドされないため、profile restart で確実に新しい IP へ
             # バインドし直す。internal は固定プロファイル名のため安全な固定文字列を使う。
             # 外線トランクの restart（build_reload_commands）とは独立に送る。
-            await client.api("sofia profile internal restart")
+            if (await client.api("sofia profile internal restart")).lstrip().startswith("-ERR"):
+                raise ESLError("internal profile restart was rejected")
         if sync_gateway is not None:
             # トランクごとに external_<name> プロファイルが分かれたため、
             # 対象トランクのプロファイルを操作する。current_trunk_names（現存する
@@ -235,9 +238,10 @@ class TelephonyChangeListener:
             # ゲートウェイは restart 後に直ちに REGISTER を試行するため、保存直後に
             # HGW 側で登録状態を確認できる。
             for cmd in build_reload_commands(current_trunk_names or [], changed=sync_gateway):
-                await client.api(cmd)
+                if (await client.api(cmd)).lstrip().startswith("-ERR"):
+                    raise ESLError("trunk profile update was rejected")
 
-    async def notify(self, session: AsyncSession, *, sync_gateway: str | None = None) -> None:
+    async def notify(self, session: AsyncSession, *, sync_gateway: str | None = None) -> str | None:
         await self.regenerate(session)
         # regenerate 後の DB 状態から現存トランク名を取得する。削除直後は対象が
         # ここに含まれないため、_esl_connect_and_reload が stop を選択する。
@@ -269,7 +273,10 @@ class TelephonyChangeListener:
             logger.warning(
                 "reloadxml skipped (ESL connect timed out after %.1fs)", self._esl_timeout
             )
+            return "設定は保存されましたが、電話サービスへの反映がタイムアウトしました。接続を確認し、再度保存して反映してください。"
         except (OSError, ESLError) as exc:
             logger.warning("reloadxml skipped (FreeSWITCH ESL unreachable): %s", exc)
+            return "設定は保存されましたが、電話サービスに反映できませんでした。接続を確認し、再度保存して反映してください。"
         finally:
             await client.close()
+        return None

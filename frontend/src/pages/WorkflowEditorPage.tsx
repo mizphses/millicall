@@ -1,14 +1,4 @@
-/**
- * ワークフロー GUI エディタ（Phase 4b Task 10）。
- * xyflow ReactFlow ベースのビジュアルエディタ。
- *
- * 位置の永続化方式: バックエンドの _NodeBase は
- * `position: Position | None = None` を正式フィールドとして保持するため、
- * xyflow ノードの position: {x, y} を各ノードオブジェクトにそのまま格納する。
- * round-trip で完全保全される（backend変更不要）。
- */
 import "@xyflow/react/dist/style.css";
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addEdge,
@@ -18,651 +8,1109 @@ import {
   ReactFlow,
   useEdgesState,
   useNodesState,
-  type Connection,
   type Edge,
-  type Node,
   type NodeTypes,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
-import { AlertTriangle, ArrowLeft, Save, Sparkles, X } from "lucide-react";
-
+import {
+  Link,
+  useBlocker,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "@tanstack/react-router";
+import {
+  ArrowLeft,
+  Plus,
+  Save,
+  Settings,
+  Sparkles,
+  Undo2,
+  X,
+} from "lucide-react";
 import { css } from "styled-system/css";
-import { button } from "styled-system/recipes";
-
+import { badge, button, input } from "styled-system/recipes";
 import { api } from "../api/client";
 import type { components } from "../api/schema";
-import { WORKFLOWS_KEY, WORKFLOW_NODE_TYPES_KEY, workflowKey } from "../queryKeys";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Field } from "../components/Field";
+import { SlidePanel } from "../components/SlidePanel";
+import {
+  PROVIDERS_KEY,
+  WORKFLOWS_KEY,
+  WORKFLOW_NODE_TYPES_KEY,
+  workflowKey,
+} from "../queryKeys";
+import { useDirtyState } from "../hooks/useDirtyState";
 import { useToast } from "../toast/ToastProvider";
 import { ConfigPanel } from "./workflows/ConfigPanel";
 import { WorkflowNodeComponent } from "./workflows/WorkflowNode";
-import type { NodeTypeInfo, WorkflowNodeData } from "./workflows/types";
+import type { NodeTypeInfo, ProviderOption } from "./workflows/types";
+import {
+  CATEGORY_LABEL,
+  editorSnapshot,
+  placeNewNode,
+  readDefinition,
+  validateWorkflowMetadata,
+  writeDefinition,
+  type ConfigDrafts,
+  type WFNode,
+  type WorkflowGraph,
+  type WorkflowMetadata,
+} from "./workflows/editorState";
 
 type WorkflowRead = components["schemas"]["WorkflowRead"];
-
-/** xyflow Node type with our data */
-type WFNode = Node<WorkflowNodeData>;
-
-// ─────────────────────────────────────────────────────────
-// カスタムノードタイプ登録（コンポーネント外で安定した参照）
-// ─────────────────────────────────────────────────────────
 const NODE_TYPES: NodeTypes = {
   workflowNode: WorkflowNodeComponent as unknown as NodeTypes[string],
 };
-
-// ─────────────────────────────────────────────────────────
-// カテゴリ日本語名
-// ─────────────────────────────────────────────────────────
-const CATEGORY_LABEL: Record<string, string> = {
-  common: "共通",
-  ivr: "IVR",
-  ai_workflow: "AI ワークフロー",
-  special: "特殊",
+const emptyMetadata: WorkflowMetadata = {
+  name: "",
+  number: "",
+  description: "",
+  enabled: true,
+  default_tts_provider_id: null,
 };
 
-// ─────────────────────────────────────────────────────────
-// バックエンドノード ↔ xyflow ノード変換ユーティリティ
-// ─────────────────────────────────────────────────────────
-
-function backendNodeToXyflow(
-  backendNode: Record<string, unknown>,
-  nodeTypeInfo: NodeTypeInfo,
-): WFNode {
-  const pos = (backendNode.position as { x: number; y: number } | undefined) ?? { x: 0, y: 0 };
-  const config = (backendNode.config as Record<string, unknown>) ?? {};
-  return {
-    id: String(backendNode.id),
-    type: "workflowNode",
-    position: { x: pos.x, y: pos.y },
-    data: {
-      nodeType: nodeTypeInfo.type,
-      label: nodeTypeInfo.label,
-      config,
-      configSchema: nodeTypeInfo.config_schema,
-      outputHandles: nodeTypeInfo.output_handles,
-      dynamicHandles: nodeTypeInfo.dynamic_handles,
-    },
-  };
-}
-
-function xyflowNodeToBackend(node: WFNode): Record<string, unknown> {
-  return {
-    id: node.id,
-    type: node.data.nodeType,
-    config: node.data.config,
-    position: { x: node.position.x, y: node.position.y },
-  };
-}
-
-function backendEdgeToXyflow(edge: Record<string, unknown>): Edge {
-  return {
-    id: String(edge.id),
-    source: String(edge.source),
-    target: String(edge.target),
-    sourceHandle: (edge.sourceHandle as string | null) ?? null,
-    targetHandle: (edge.targetHandle as string | null) ?? null,
-    label: (edge.label as string | undefined) ?? undefined,
-  };
-}
-
-function xyflowEdgeToBackend(edge: Edge): Record<string, unknown> {
-  return {
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    sourceHandle: edge.sourceHandle ?? null,
-    targetHandle: edge.targetHandle ?? null,
-  };
-}
-
-/** 位置情報がないノードを縦並びでレイアウトする（AI 生成時のフォールバック）。 */
-function autoLayout(nodes: WFNode[]): WFNode[] {
-  const COL_W = 240;
-  const COL_H = 120;
-  const COLS = 3;
-  return nodes.map((node, idx) => ({
-    ...node,
-    position: {
-      x: (idx % COLS) * COL_W + 100,
-      y: Math.floor(idx / COLS) * COL_H + 100,
-    },
-  }));
-}
-
-// ─────────────────────────────────────────────────────────
-// メインコンポーネント
-// ─────────────────────────────────────────────────────────
-
 export function WorkflowEditorPage() {
-  const { workflowId: wfIdStr } = useParams({ strict: false }) as { workflowId: string };
+  const { workflowId: wfIdStr } = useParams({ strict: false }) as {
+    workflowId: string;
+  };
   const workflowId = Number(wfIdStr);
   const toast = useToast();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const selectedNodeId = new URLSearchParams(location.searchStr).get("node");
+  const flowRef = useRef<ReactFlowInstance<WFNode, Edge> | null>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const initializedId = useRef<number | null>(null);
+  const [nodes, setNodes, onNodesChange] = useNodesState<WFNode>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [metadata, setMetadata] = useState<WorkflowMetadata>(emptyMetadata);
+  const [baseline, setBaseline] = useState("");
+  const [initializationError, setInitializationError] = useState("");
+  const [drafts, setDrafts] = useState<ConfigDrafts>({});
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(Boolean(selectedNodeId));
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  const [metadataDraft, setMetadataDraft] =
+    useState<WorkflowMetadata>(emptyMetadata);
+  const [metadataErrors, setMetadataErrors] = useState<
+    Partial<Record<"name" | "number", string>>
+  >({});
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [preview, setPreview] = useState<
+    (WorkflowGraph & { warnings: string[] }) | null
+  >(null);
+  const [undo, setUndo] = useState<
+    (WorkflowGraph & { drafts: ConfigDrafts; applied: string }) | null
+  >(null);
+  const [undoConfirm, setUndoConfirm] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
-  // ─── データ取得 ───────────────────────────────────────
   const nodeTypesQuery = useQuery({
     queryKey: WORKFLOW_NODE_TYPES_KEY,
     queryFn: async () => {
       const { data, error } = await api.GET("/api/workflows/node-types");
-      if (error) throw new Error("ノードタイプ取得失敗");
-      return (data as unknown as NodeTypeInfo[]) ?? [];
+      if (error || !data?.length)
+        throw new Error(
+          "ノード一覧を読み込めませんでした。読み込みが完了するまで保存できません。",
+        );
+      return data as unknown as NodeTypeInfo[];
     },
     staleTime: Infinity,
   });
-
   const workflowQuery = useQuery({
     queryKey: workflowKey(workflowId),
     queryFn: async () => {
-      const { data, error } = await api.GET("/api/workflows/{workflow_id}", {
-        params: { path: { workflow_id: workflowId } },
-      });
-      if (error) throw new Error("ワークフロー取得失敗");
-      return data as WorkflowRead;
+      const { data, error, response } = await api.GET(
+        "/api/workflows/{workflow_id}",
+        { params: { path: { workflow_id: workflowId } } },
+      );
+      if (error || !data)
+        throw new Error(
+          response.status === 404
+            ? "ワークフローが見つかりません。"
+            : "ワークフローを読み込めませんでした。",
+        );
+      return data;
     },
   });
-
-  const nodeTypeMap = useMemo(() => {
-    const map = new Map<string, NodeTypeInfo>();
-    for (const nt of nodeTypesQuery.data ?? []) map.set(nt.type, nt);
-    return map;
-  }, [nodeTypesQuery.data]);
-
-  // ─── xyflow 状態 ─────────────────────────────────────
-  const [nodes, setNodes, onNodesChange] = useNodesState<WFNode>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const initialized = useRef(false);
-
-  // workflowId が変わったら初期化フラグをリセットし、遷移先のワークフロー定義を
-  // 取り込み直す（別ワークフローへ移動しても前の graph が残らないように）。
-  // この effect は初期化 effect より前に宣言しているため同一コミットで先に走る。
-  useEffect(() => {
-    initialized.current = false;
-  }, [workflowId]);
-
-  useEffect(() => {
-    if (!workflowQuery.data || !nodeTypesQuery.data || initialized.current) return;
-    const def = workflowQuery.data.definition as {
-      nodes: Record<string, unknown>[];
-      edges: Record<string, unknown>[];
-    };
-    const initialNodes: WFNode[] = [];
-    for (const bn of def.nodes ?? []) {
-      const nt = nodeTypeMap.get(String(bn.type));
-      if (!nt) continue;
-      initialNodes.push(backendNodeToXyflow(bn, nt));
-    }
-    const initialEdges = (def.edges ?? []).map(backendEdgeToXyflow);
-    setNodes(initialNodes);
-    setEdges(initialEdges);
-    initialized.current = true;
-  }, [workflowQuery.data, nodeTypesQuery.data, nodeTypeMap, setNodes, setEdges]);
-
-  // ─── エッジ接続ハンドラ ───────────────────────────────
-  const onConnect = useCallback(
-    (connection: Connection) => {
-      setEdges((eds) => addEdge(connection, eds));
+  const providersQuery = useQuery({
+    queryKey: PROVIDERS_KEY,
+    queryFn: async () => {
+      const { data, error } = await api.GET("/api/providers");
+      if (error) throw new Error("プロバイダーを読み込めませんでした。");
+      return (data ?? []) as ProviderOption[];
     },
-    [setEdges],
-  );
+    enabled: metadataOpen,
+  });
 
-  // ─── ノード選択 ──────────────────────────────────────
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const selectedNode = useMemo(
-    () => (selectedNodeId ? (nodes as WFNode[]).find((n) => n.id === selectedNodeId) : null),
-    [selectedNodeId, nodes],
-  );
-
-  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    setSelectedNodeId(node.id);
-  }, []);
-
-  const onPaneClick = useCallback(() => {
-    setSelectedNodeId(null);
-  }, []);
-
-  // ─── パレット: ノード追加 ─────────────────────────────
-  function addNode(nodeTypeInfo: NodeTypeInfo) {
-    const defaultConfig: Record<string, unknown> = {};
-    for (const field of nodeTypeInfo.config_schema) {
-      if (!field.required && field.default !== undefined) {
-        defaultConfig[field.key] = field.default;
-      }
+  useEffect(() => {
+    if (
+      initializedId.current === workflowId ||
+      !workflowQuery.data ||
+      !nodeTypesQuery.data
+    )
+      return;
+    setInitializationError("");
+    try {
+      const graph = readDefinition(
+        workflowQuery.data.definition,
+        nodeTypesQuery.data,
+      );
+      const next: WorkflowMetadata = {
+        name: workflowQuery.data.name,
+        number: workflowQuery.data.number,
+        description: workflowQuery.data.description ?? "",
+        enabled: workflowQuery.data.enabled,
+        default_tts_provider_id:
+          workflowQuery.data.default_tts_provider_id ?? null,
+      };
+      setNodes(graph.nodes);
+      setEdges(graph.edges);
+      setMetadata(next);
+      setDrafts({});
+      setUndo(null);
+      setSaveError("");
+      setBaseline(editorSnapshot(next, graph));
+      initializedId.current = workflowId;
+    } catch (error) {
+      setInitializationError(
+        error instanceof Error ? error.message : "定義を読み込めませんでした。",
+      );
     }
-    const newId = `${nodeTypeInfo.type}_${Date.now()}`;
-    const existingCount = nodes.length;
-    const newNode: WFNode = {
-      id: newId,
-      type: "workflowNode",
-      position: {
-        x: 100 + (existingCount % 4) * 240,
-        y: 100 + Math.floor(existingCount / 4) * 140,
+  }, [workflowId, workflowQuery.data, nodeTypesQuery.data, setNodes, setEdges]);
+
+  const invalidDrafts = Object.entries(drafts).filter(
+    ([, draft]) => draft.error,
+  );
+  const currentSnapshot = editorSnapshot(metadata, { nodes, edges });
+  const dirty =
+    initializedId.current === workflowId &&
+    (currentSnapshot !== baseline || invalidDrafts.length > 0);
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId);
+  const selectNode = useCallback(
+    (id: string | null, open = true) => {
+      void navigate({
+        to: "/workflows/$workflowId",
+        params: { workflowId: String(workflowId) },
+        search: { node: id ?? undefined } as never,
+        replace: true,
+      });
+      setSettingsOpen(Boolean(id) && open);
+      setPaletteOpen(false);
+    },
+    [navigate, workflowId],
+  );
+
+  function focusNode(id: string) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        void flowRef.current?.fitView({
+          nodes: [{ id }],
+          padding: 0.8,
+          maxZoom: 1,
+          duration: 200,
+        });
+      });
+    });
+  }
+  function addNode(info: NodeTypeInfo) {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const position =
+      rect && flowRef.current
+        ? flowRef.current.screenToFlowPosition({
+            x: rect.left + rect.width / 2 - 90,
+            y: rect.top + rect.height / 2 - 60,
+          })
+        : { x: 100, y: 100 };
+    const config = Object.fromEntries(
+      info.config_schema
+        .filter((field) => field.default !== undefined)
+        .map((field) => [field.key, field.default]),
+    );
+    const graph = readDefinition(
+      {
+        nodes: [
+          {
+            id: `${info.type}_${crypto.randomUUID()}`,
+            type: info.type,
+            config,
+            position: placeNewNode(position, nodes),
+          },
+        ],
+        edges: [],
       },
-      data: {
-        nodeType: nodeTypeInfo.type,
-        label: nodeTypeInfo.label,
-        config: defaultConfig,
-        configSchema: nodeTypeInfo.config_schema,
-        outputHandles: nodeTypeInfo.output_handles,
-        dynamicHandles: nodeTypeInfo.dynamic_handles,
-      },
-    };
-    setNodes((nds) => [...(nds as WFNode[]), newNode]);
-    setSelectedNodeId(newId);
+      [info],
+    );
+    const node = graph.nodes[0];
+    setNodes((previous) => [...previous, node]);
+    selectNode(node.id, false);
+    setSettingsOpen(false);
+    focusNode(node.id);
+    toast.success(
+      `${info.label}を追加しました。「ノード設定」から編集できます`,
+    );
+  }
+  function deleteSelectedNode() {
+    if (!selectedNodeId) return;
+    setNodes((previous) =>
+      previous.filter((node) => node.id !== selectedNodeId),
+    );
+    setEdges((previous) =>
+      previous.filter(
+        (edge) =>
+          edge.source !== selectedNodeId && edge.target !== selectedNodeId,
+      ),
+    );
+    setDrafts((previous) =>
+      Object.fromEntries(
+        Object.entries(previous).filter(
+          ([key]) => !key.startsWith(`${selectedNodeId}:`),
+        ),
+      ),
+    );
+    selectNode(null);
+  }
+  function updateConfig(key: string, value: unknown) {
+    setNodes((previous) =>
+      previous.map((node) =>
+        node.id === selectedNodeId
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                config: { ...node.data.config, [key]: value },
+              },
+            }
+          : node,
+      ),
+    );
   }
 
-  // ─── 設定変更 ────────────────────────────────────────
-  const onConfigChange = useCallback(
-    (key: string, value: unknown) => {
-      if (!selectedNodeId) return;
-      setNodes((nds) =>
-        (nds as WFNode[]).map((n) => {
-          if (n.id !== selectedNodeId) return n;
-          const updated: WFNode = {
-            ...n,
-            data: { ...n.data, config: { ...n.data.config, [key]: value } },
-          };
-          return updated;
-        }),
-      );
-    },
-    [selectedNodeId, setNodes],
-  );
-
-  // ─── ノード削除 ──────────────────────────────────────
-  const deleteSelectedNode = useCallback(() => {
-    if (!selectedNodeId) return;
-    setNodes((nds) => (nds as WFNode[]).filter((n) => n.id !== selectedNodeId));
-    setEdges((eds) =>
-      (eds as Edge[]).filter((e) => e.source !== selectedNodeId && e.target !== selectedNodeId),
-    );
-    setSelectedNodeId(null);
-  }, [selectedNodeId, setNodes, setEdges]);
-
-  // ─── 保存 ────────────────────────────────────────────
-  const wf = workflowQuery.data;
-
   const saveMutation = useMutation({
-    mutationFn: async () => {
-      if (!wf) throw new Error("ワークフローが未ロードです");
-      const definition = {
-        nodes: (nodes as WFNode[]).map(xyflowNodeToBackend),
-        edges: (edges as Edge[]).map(xyflowEdgeToBackend),
+    mutationFn: async (snapshot: string) => {
+      if (
+        !nodeTypesQuery.data ||
+        initializationError ||
+        initializedId.current !== workflowId ||
+        invalidDrafts.length
+      )
+        throw new Error("未完了の入力または読み込みエラーを確認してください。");
+      const body = JSON.parse(snapshot) as WorkflowMetadata & {
+        definition: ReturnType<typeof writeDefinition>;
       };
-      const { data, error, response } = await api.PUT("/api/workflows/{workflow_id}", {
-        params: { path: { workflow_id: workflowId } },
-        body: {
-          name: wf.name,
-          number: wf.number,
-          description: wf.description,
-          enabled: wf.enabled,
-          default_tts_provider_id: wf.default_tts_provider_id ?? undefined,
-          definition,
-        },
-      });
+      const { data, error, response } = await api.PUT(
+        "/api/workflows/{workflow_id}",
+        { params: { path: { workflow_id: workflowId } }, body },
+      );
+      if (response.status === 409)
+        throw new Error(
+          "この内線番号は既に使用されています。「基本情報」で別の番号に変更してください。",
+        );
       if (response.status === 422) {
-        const detail = (error as { detail?: unknown } | undefined)?.detail;
-        // FastAPI/pydantic の 422 detail は {msg,loc,...} の配列。人が読める msg を並べる。
-        let msg: string;
-        if (typeof detail === "string") {
-          msg = detail;
-        } else if (Array.isArray(detail)) {
-          msg = detail
-            .map((d) => (d && typeof d === "object" && "msg" in d ? String((d as { msg: unknown }).msg) : String(d)))
-            .join(" / ");
-        } else {
-          msg = JSON.stringify(detail);
-        }
-        throw new Error(`定義が不正です: ${msg}`);
+        const detail = (error as { detail?: unknown })?.detail;
+        const description =
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((item) => item.msg).join(" / ")
+              : "ノードの設定と接続を確認してください。";
+        throw new Error(`保存できませんでした: ${description}`);
       }
-      if (error || !data) throw new Error("保存に失敗しました");
+      if (error || !data)
+        throw new Error(
+          "保存に失敗しました。変更内容は保持されています。再試行してください。",
+        );
       return data as WorkflowRead;
     },
-    onSuccess: (saved) => {
+    onSuccess: (saved, snapshot) => {
+      setBaseline(snapshot);
+      setSaveError("");
+      setUndo(null);
       queryClient.setQueryData(workflowKey(workflowId), saved);
-      queryClient.invalidateQueries({ queryKey: WORKFLOWS_KEY });
-      const warns = saved.warnings ?? [];
-      if (warns.length > 0) {
-        toast.warn(`保存しました（警告 ${warns.length} 件）`);
-      } else {
-        toast.success("ワークフローを保存しました");
-      }
+      void queryClient.invalidateQueries({ queryKey: WORKFLOWS_KEY });
+      toast.success("ワークフローを保存しました");
     },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "保存に失敗しました");
+    onError: (error) => {
+      setSaveError(error.message);
+      toast.error(error.message);
     },
   });
 
-  // ─── AI 生成 ─────────────────────────────────────────
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [showAiInput, setShowAiInput] = useState(false);
+  useDirtyState(dirty, saveMutation.isPending);
+  const blocker = useBlocker({
+    shouldBlockFn: ({ current, next }) =>
+      (dirty || saveMutation.isPending) && current.pathname !== next.pathname,
+    enableBeforeUnload: dirty || saveMutation.isPending,
+    withResolver: true,
+  });
 
   const generateMutation = useMutation({
     mutationFn: async (prompt: string) => {
       const { data, error } = await api.POST("/api/workflows/generate", {
         body: { prompt },
       });
-      if (error) throw new Error("AI 生成に失敗しました");
-      return data;
-    },
-    onSuccess: (result) => {
-      if (!result) return;
-      const def = result.definition as {
-        nodes: Record<string, unknown>[];
-        edges: Record<string, unknown>[];
+      if (error || !data)
+        throw new Error(
+          "AI 生成に失敗しました。現在のフローは保持されています。",
+        );
+      return {
+        ...readDefinition(data.definition, nodeTypesQuery.data ?? [], true),
+        warnings: data.warnings ?? [],
       };
-      const newNodes: WFNode[] = [];
-      for (const bn of def.nodes ?? []) {
-        const nt = nodeTypeMap.get(String(bn.type));
-        if (!nt) continue;
-        newNodes.push(backendNodeToXyflow(bn, nt));
-      }
-      const hasPositions = newNodes.some((n) => n.position.x !== 0 || n.position.y !== 0);
-      const finalNodes = hasPositions ? newNodes : autoLayout(newNodes);
-      setNodes(finalNodes);
-      setEdges((def.edges ?? []).map(backendEdgeToXyflow));
-      setShowAiInput(false);
-      setAiPrompt("");
-      const warnCount = (result.warnings ?? []).length;
-      if (warnCount > 0) {
-        toast.warn(`生成しました（警告 ${warnCount} 件）`);
-      } else {
-        toast.success("AI でフローを生成しました");
-      }
     },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "AI 生成に失敗しました");
-    },
+    onSuccess: (result) => setPreview(result),
+    onError: (error) => toast.error(error.message),
   });
+  function applyPreview() {
+    if (!preview) return;
+    setUndo({
+      nodes,
+      edges,
+      drafts,
+      applied: editorSnapshot(metadata, preview),
+    });
+    setNodes(preview.nodes);
+    setEdges(preview.edges);
+    setDrafts({});
+    setAiOpen(false);
+    setPreview(null);
+    setAiPrompt("");
+    selectNode(null);
+    requestAnimationFrame(() => {
+      void flowRef.current?.fitView({ padding: 0.2, duration: 200 });
+    });
+    toast.success("生成案を適用しました。保存するまで元に戻せます");
+  }
+  function restoreBeforeAI() {
+    if (!undo) return;
+    setNodes(undo.nodes);
+    setEdges(undo.edges);
+    setDrafts(undo.drafts);
+    setUndo(null);
+    setUndoConfirm(false);
+    selectNode(null);
+    requestAnimationFrame(() => {
+      void flowRef.current?.fitView({ padding: 0.2 });
+    });
+  }
 
-  // ─── カテゴリ別パレット ──────────────────────────────
-  const nodeTypesByCategory = useMemo(() => {
-    const map = new Map<string, NodeTypeInfo[]>();
-    for (const nt of nodeTypesQuery.data ?? []) {
-      const list = map.get(nt.category) ?? [];
-      list.push(nt);
-      map.set(nt.category, list);
-    }
-    return map;
+  const categories = useMemo(() => {
+    const result = new Map<string, NodeTypeInfo[]>();
+    for (const info of nodeTypesQuery.data ?? [])
+      result.set(info.category, [...(result.get(info.category) ?? []), info]);
+    return result;
   }, [nodeTypesQuery.data]);
-
-  const savedWarnings = workflowQuery.data?.warnings ?? [];
-
-  if (workflowQuery.isLoading || nodeTypesQuery.isLoading) {
+  const loadError =
+    workflowQuery.error?.message ||
+    nodeTypesQuery.error?.message ||
+    initializationError;
+  if (loadError)
     return (
-      <div
-        className={css({
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100%",
-          color: "text.muted",
-        })}
-      >
-        読み込み中…
-      </div>
+      <section className={css({ display: "grid", gap: "4" })}>
+        <h1 className={css({ fontSize: "xl", fontWeight: "600" })}>
+          ワークフロー
+        </h1>
+        <p role="alert" className={css({ color: "danger.text" })}>
+          {loadError}
+        </p>
+        <div className={css({ display: "flex", gap: "2", flexWrap: "wrap" })}>
+          <button
+            type="button"
+            className={button({ variant: "primary" })}
+            onClick={() => {
+              void workflowQuery.refetch();
+              void nodeTypesQuery.refetch();
+            }}
+          >
+            再試行
+          </button>
+          <Link to="/workflows" className={button({ variant: "secondary" })}>
+            一覧へ戻る
+          </Link>
+        </div>
+      </section>
     );
-  }
-
-  if (!wf) {
-    return (
-      <div className={css({ p: "6", color: "danger.text" })}>
-        ワークフローが見つかりません
-      </div>
-    );
-  }
-
-  const typedSelectedNode = selectedNode as WFNode | null | undefined;
+  if (
+    !workflowQuery.data ||
+    !nodeTypesQuery.data ||
+    initializedId.current !== workflowId
+  )
+    return <p role="status">ワークフローを読み込み中…</p>;
 
   return (
     <div
-      style={{
+      className={css({
         display: "flex",
         flexDirection: "column",
-        margin: "-24px",
-        // AppShell ヘッダ高さトークン（panda.config: sizes.header = 56px）と一致させる。
-        height: "calc(100vh - 56px)",
-        overflow: "hidden",
-      }}
+        gap: "3",
+        minWidth: 0,
+      })}
     >
-      {/* ─── ツールバー ─── */}
-      <div
-        style={{
+      <header
+        className={css({
           display: "flex",
+          gap: "3",
+          flexWrap: "wrap",
           alignItems: "center",
-          gap: 12,
-          padding: "0 16px",
-          height: 52,
-          background: "#ffffff",
-          borderBottom: "1px solid #e2e8f0",
-          flexShrink: 0,
-          zIndex: 10,
-        }}
+        })}
       >
-        <a
-          href="/workflows"
-          onClick={(e) => {
-            e.preventDefault();
-            window.history.back();
-          }}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 13,
-            color: "#64748b",
-            textDecoration: "none",
-          }}
+        <Link
+          to="/workflows"
+          className={button({ variant: "ghost", size: "sm" })}
         >
           <ArrowLeft size={16} />
           一覧へ
-        </a>
-
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <span style={{ fontWeight: 600, fontSize: 14, color: "#1e293b" }}>{wf.name}</span>
-          <span style={{ marginLeft: 8, fontSize: 13, color: "#64748b" }}>#{wf.number}</span>
-          {savedWarnings.length > 0 && (
-            <span
-              title={savedWarnings.join("\n")}
-              style={{
-                marginLeft: 8,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                fontSize: 12,
-                color: "#d97706",
-              }}
-            >
-              <AlertTriangle size={14} />
-              警告 {savedWarnings.length} 件
-            </span>
-          )}
-        </div>
-
-        {showAiInput ? (
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              style={{
-                height: 36,
-                padding: "0 12px",
-                fontSize: 13,
-                border: "1px solid #e2e8f0",
-                borderRadius: 6,
-                outline: "none",
-                width: 280,
-              }}
-              placeholder="「受付後にメニューを表示するフロー」など"
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && aiPrompt.trim())
-                  generateMutation.mutate(aiPrompt.trim());
-              }}
-              autoFocus
-            />
-            <button
-              type="button"
-              className={button({ variant: "primary", size: "sm" })}
-              disabled={!aiPrompt.trim() || generateMutation.isPending}
-              onClick={() => generateMutation.mutate(aiPrompt.trim())}
-            >
-              {generateMutation.isPending ? "生成中…" : "生成"}
-            </button>
-            <button
-              type="button"
-              className={button({ variant: "ghost", size: "sm" })}
-              onClick={() => setShowAiInput(false)}
-            >
-              <X size={16} />
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            className={button({ variant: "secondary", size: "sm" })}
-            onClick={() => setShowAiInput(true)}
+        </Link>
+        <div className={css({ flex: "1 1 200px", minWidth: 0 })}>
+          <h1
+            className={css({
+              fontSize: "xl",
+              fontWeight: "600",
+              overflowWrap: "anywhere",
+            })}
           >
-            <Sparkles size={16} />
-            AI 生成
-          </button>
-        )}
-
+            {metadata.name}
+          </h1>
+          <p className={css({ fontSize: "sm", color: "text.muted", mt: "1" })}>
+            内線番号 {metadata.number} · {metadata.enabled ? "有効" : "無効"}
+          </p>
+        </div>
+        <span
+          role="status"
+          className={badge({ tone: dirty ? "warn" : "neutral" })}
+        >
+          {dirty ? "未保存の変更" : "保存済み"}
+        </span>
         <button
           type="button"
           className={button({ variant: "primary" })}
-          onClick={() => saveMutation.mutate()}
-          disabled={saveMutation.isPending}
-          style={{ height: 36, display: "inline-flex", alignItems: "center", gap: 6 }}
+          disabled={
+            !dirty || saveMutation.isPending || invalidDrafts.length > 0
+          }
+          onClick={() => saveMutation.mutate(currentSnapshot)}
         >
           <Save size={16} />
           {saveMutation.isPending ? "保存中…" : "保存"}
         </button>
-      </div>
-
-      {/* ─── ボディ（パレット + キャンバス + 設定パネル）─── */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        {/* ─── ノードパレット ─── */}
-        <aside
-          style={{
-            width: 200,
-            borderRight: "1px solid #e2e8f0",
-            background: "#f8fafc",
-            overflowY: "auto",
-            flexShrink: 0,
+      </header>
+      <div
+        role="toolbar"
+        aria-label="ワークフローの編集"
+        className={css({ display: "flex", flexWrap: "wrap", gap: "2" })}
+      >
+        <button
+          type="button"
+          className={button({ variant: "secondary", size: "sm" })}
+          aria-expanded={paletteOpen}
+          aria-controls="workflow-palette"
+          onClick={() => {
+            setPaletteOpen(!paletteOpen);
+            setSettingsOpen(false);
           }}
         >
-          <div
-            style={{
-              padding: "10px 12px 6px",
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              color: "#64748b",
-              borderBottom: "1px solid #e2e8f0",
+          <Plus size={16} />
+          ノードを追加
+        </button>
+        <button
+          type="button"
+          className={button({ variant: "secondary", size: "sm" })}
+          onClick={() => {
+            setMetadataDraft({ ...metadata });
+            setMetadataErrors({});
+            setMetadataOpen(true);
+          }}
+        >
+          <Settings size={16} />
+          基本情報
+        </button>
+        <button
+          type="button"
+          className={button({ variant: "secondary", size: "sm" })}
+          onClick={() => setAiOpen(true)}
+        >
+          <Sparkles size={16} />
+          AI で生成
+        </button>
+        {undo && (
+          <button
+            type="button"
+            className={button({ variant: "secondary", size: "sm" })}
+            onClick={() =>
+              currentSnapshot !== undo.applied || invalidDrafts.length
+                ? setUndoConfirm(true)
+                : restoreBeforeAI()
+            }
+          >
+            <Undo2 size={16} />
+            生成前に戻す
+          </button>
+        )}
+        {selectedNode && (
+          <button
+            type="button"
+            className={button({ variant: "secondary", size: "sm" })}
+            aria-expanded={settingsOpen}
+            aria-controls="workflow-node-settings"
+            onClick={() => {
+              setSettingsOpen(!settingsOpen);
+              setPaletteOpen(false);
             }}
           >
-            ノードパレット
-          </div>
-          {Array.from(nodeTypesByCategory.entries()).map(([cat, items]) => (
-            <div key={cat}>
-              <div
-                style={{
-                  padding: "8px 12px 4px",
-                  fontSize: 10,
-                  fontWeight: 700,
-                  letterSpacing: "0.05em",
-                  textTransform: "uppercase",
-                  color: "#94a3b8",
-                }}
-              >
-                {CATEGORY_LABEL[cat] ?? cat}
-              </div>
-              {items.map((nt) => (
-                <PaletteButton key={nt.type} label={nt.label} onClick={() => addNode(nt)} />
-              ))}
-            </div>
+            ノード設定
+          </button>
+        )}
+      </div>
+      {saveError && (
+        <p
+          role="alert"
+          className={css({ color: "danger.text", fontSize: "sm" })}
+        >
+          {saveError}
+        </p>
+      )}
+      {invalidDrafts.length > 0 && (
+        <p
+          role="alert"
+          className={css({ color: "danger.text", fontSize: "sm" })}
+        >
+          保存するにはノード設定の入力エラー {invalidDrafts.length}{" "}
+          件を修正してください。
+          {invalidDrafts.map(([key]) => (
+            <button
+              key={key}
+              type="button"
+              className={css({ textDecoration: "underline", ml: "2" })}
+              onClick={() => selectNode(key.slice(0, key.lastIndexOf(":")))}
+            >
+              該当ノードを開く
+            </button>
           ))}
-        </aside>
-
-        {/* ─── xyflow キャンバス ─── */}
-        <div style={{ flex: 1, position: "relative" }}>
-          <ReactFlow
-            nodes={nodes as WFNode[]}
-            edges={edges as Edge[]}
+        </p>
+      )}
+      {(workflowQuery.data.warnings ?? []).length > 0 && (
+        <details className={css({ color: "warn.text", fontSize: "sm" })}>
+          <summary className={css({ cursor: "pointer" })}>
+            保存済みの警告 {workflowQuery.data.warnings?.length} 件
+          </summary>
+          <ul className={css({ pl: "5", listStyleType: "disc" })}>
+            {workflowQuery.data.warnings?.map((warning, index) => (
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <div
+        className={css({
+          display: "flex",
+          position: "relative",
+          height: "max(420px, calc(100dvh - 260px))",
+          minWidth: 0,
+          borderWidth: "1px",
+          borderColor: "border",
+          borderRadius: "lg",
+          overflow: "hidden",
+          bg: "white",
+        })}
+      >
+        {paletteOpen && (
+          <aside
+            id="workflow-palette"
+            aria-label="追加するノード"
+            className={css({
+              width: "220px",
+              maxWidth: "100%",
+              flexShrink: 0,
+              bg: "gray.50",
+              borderRightWidth: "1px",
+              borderColor: "border",
+              overflowY: "auto",
+              zIndex: 10,
+              "@media (max-width: 1100px)": {
+                position: "absolute",
+                inset: "0 auto 0 0",
+                width: "min(300px, 100%)",
+              },
+            })}
+          >
+            <div
+              className={css({
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                p: "3",
+              })}
+            >
+              <h2 className={css({ fontWeight: "600" })}>ノードを追加</h2>
+              <button
+                type="button"
+                aria-label="ノード一覧を閉じる"
+                className={button({ variant: "ghost", size: "sm" })}
+                onClick={() => setPaletteOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {Array.from(categories).map(([category, items]) => (
+              <section key={category} className={css({ px: "3", pb: "4" })}>
+                <h3
+                  className={css({
+                    color: "text.muted",
+                    fontWeight: "600",
+                    fontSize: "sm",
+                    mb: "2",
+                  })}
+                >
+                  {CATEGORY_LABEL[category] ?? category}
+                </h3>
+                <div className={css({ display: "grid", gap: "1" })}>
+                  {items.map((info) => (
+                    <button
+                      key={info.type}
+                      type="button"
+                      className={button({ variant: "secondary", size: "sm" })}
+                      onClick={() => addNode(info)}
+                    >
+                      {info.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </aside>
+        )}
+        <div
+          ref={canvasRef}
+          onKeyDownCapture={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            const target = event.target as HTMLElement;
+            if (!target.classList.contains("react-flow__node")) return;
+            const id = target.dataset.id;
+            if (id) {
+              event.preventDefault();
+              event.stopPropagation();
+              selectNode(id);
+            }
+          }}
+          className={css({ flex: 1, minWidth: 0, position: "relative" })}
+        >
+          <ReactFlow<WFNode, Edge>
+            nodes={nodes.map((node) => ({
+              ...node,
+              selected: node.id === selectedNodeId,
+              data: { ...node.data, onOpen: () => selectNode(node.id) },
+            }))}
+            edges={edges}
             nodeTypes={NODE_TYPES}
-            onNodesChange={onNodesChange}
+            onInit={(instance) => {
+              flowRef.current = instance;
+            }}
+            onNodesChange={(changes) => {
+              onNodesChange(changes);
+              const removedIds = changes
+                .filter((change) => change.type === "remove")
+                .map((change) => change.id);
+              if (removedIds.length) {
+                setDrafts((previous) =>
+                  Object.fromEntries(
+                    Object.entries(previous).filter(
+                      ([key]) =>
+                        !removedIds.some((id) => key.startsWith(`${id}:`)),
+                    ),
+                  ),
+                );
+                if (selectedNodeId && removedIds.includes(selectedNodeId))
+                  selectNode(null);
+              }
+              const selection = changes.find(
+                (change) => change.type === "select" && change.selected,
+              );
+              if (selection?.type === "select") selectNode(selection.id);
+            }}
             onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onNodeClick={onNodeClick}
-            onPaneClick={onPaneClick}
-            // macOS の delete キーは KeyboardEvent.key === "Backspace" のため両方許可する
+            onConnect={(connection) =>
+              setEdges((previous) => addEdge(connection, previous))
+            }
+            onNodeClick={(_, node) => selectNode(node.id)}
+            onPaneClick={() => selectNode(null)}
             deleteKeyCode={["Backspace", "Delete"]}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
-            minZoom={0.3}
+            fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
+            minZoom={0.2}
             maxZoom={2}
           >
             <Background />
             <Controls />
-            <MiniMap nodeStrokeWidth={3} />
+            <MiniMap
+              className={css({
+                "@media (max-width: 600px)": { display: "none" },
+              })}
+            />
           </ReactFlow>
         </div>
-
-        {/* ─── 設定パネル ─── */}
-        {typedSelectedNode && (
+        {settingsOpen && selectedNode && (
           <aside
-            style={{
-              width: 300,
-              borderLeft: "1px solid #e2e8f0",
-              background: "#ffffff",
-              overflowY: "auto",
+            id="workflow-node-settings"
+            aria-label="ノード設定"
+            className={css({
+              width: "320px",
+              maxWidth: "100%",
+              minWidth: 0,
+              borderLeftWidth: "1px",
+              borderColor: "border",
+              bg: "white",
               flexShrink: 0,
-              padding: 16,
-              display: "flex",
-              flexDirection: "column",
-            }}
+              p: "4",
+              overflowY: "auto",
+              zIndex: 10,
+              "@media (max-width: 1100px)": {
+                position: "absolute",
+                inset: "0 0 0 auto",
+                width: "min(360px, 100%)",
+              },
+            })}
           >
+            <div
+              className={css({
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                mb: "3",
+              })}
+            >
+              <h2 className={css({ fontWeight: "600" })}>ノード設定</h2>
+              <button
+                type="button"
+                aria-label="ノード設定を閉じる"
+                className={button({ variant: "ghost", size: "sm" })}
+                onClick={() => setSettingsOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
             <ConfigPanel
-              nodeId={typedSelectedNode.id}
-              nodeLabel={typedSelectedNode.data.label}
-              config={typedSelectedNode.data.config}
-              schema={typedSelectedNode.data.configSchema}
-              onChange={onConfigChange}
+              nodeId={selectedNode.id}
+              nodeLabel={selectedNode.data.label}
+              config={selectedNode.data.config}
+              schema={selectedNode.data.configSchema}
+              onChange={updateConfig}
               onDelete={deleteSelectedNode}
               currentWorkflowId={workflowId}
+              drafts={drafts}
+              onDraftChange={(key, draft) =>
+                setDrafts((previous) => ({ ...previous, [key]: draft }))
+              }
             />
           </aside>
         )}
       </div>
+      <label
+        className={css({
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "2",
+          fontSize: "sm",
+          color: "text.muted",
+        })}
+      >
+        ノードを選んで設定
+        <select
+          className={input()}
+          style={{ width: "auto", maxWidth: "100%" }}
+          value={selectedNodeId ?? ""}
+          onChange={(event) => {
+            const id = event.target.value;
+            selectNode(id || null);
+            if (id) focusNode(id);
+          }}
+        >
+          <option value="">ノードを選択</option>
+          {nodes.map((node, index) => (
+            <option key={node.id} value={node.id}>
+              {index + 1}. {node.data.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <SlidePanel
+        open={metadataOpen}
+        title="ワークフローの基本情報"
+        dirty={JSON.stringify(metadataDraft) !== JSON.stringify(metadata)}
+        onClose={() => setMetadataOpen(false)}
+        footer={
+          <>
+            <button
+              type="button"
+              className={button({ variant: "secondary" })}
+              onClick={() => setMetadataOpen(false)}
+            >
+              キャンセル
+            </button>
+            <button
+              type="submit"
+              form="workflow-metadata"
+              className={button({ variant: "primary" })}
+            >
+              変更を反映
+            </button>
+          </>
+        }
+      >
+        <form
+          id="workflow-metadata"
+          className={css({ display: "grid", gap: "4" })}
+          onSubmit={(event) => {
+            event.preventDefault();
+            const errors = validateWorkflowMetadata(metadataDraft);
+            setMetadataErrors(errors);
+            if (Object.keys(errors).length) return;
+            setMetadata({
+              ...metadataDraft,
+              name: metadataDraft.name.trim(),
+              number: metadataDraft.number.trim(),
+            });
+            setMetadataOpen(false);
+          }}
+        >
+          <p className={css({ color: "text.muted", fontSize: "sm" })}>
+            変更を反映したあと、エディタの「保存」で確定します。
+          </p>
+          <Field label="名前" required error={metadataErrors.name}>
+            <input
+              className={input()}
+              value={metadataDraft.name}
+              maxLength={100}
+              onChange={(event) =>
+                setMetadataDraft({ ...metadataDraft, name: event.target.value })
+              }
+            />
+          </Field>
+          <Field
+            label="内線番号"
+            required
+            error={metadataErrors.number}
+            help="2〜6桁の数字"
+          >
+            <input
+              className={input()}
+              inputMode="numeric"
+              maxLength={6}
+              value={metadataDraft.number}
+              onChange={(event) =>
+                setMetadataDraft({
+                  ...metadataDraft,
+                  number: event.target.value,
+                })
+              }
+            />
+          </Field>
+          <Field label="説明">
+            <textarea
+              className={input()}
+              rows={3}
+              value={metadataDraft.description}
+              onChange={(event) =>
+                setMetadataDraft({
+                  ...metadataDraft,
+                  description: event.target.value,
+                })
+              }
+            />
+          </Field>
+          <label
+            className={css({ display: "flex", gap: "2", alignItems: "center" })}
+          >
+            <input
+              type="checkbox"
+              checked={metadataDraft.enabled}
+              onChange={(event) =>
+                setMetadataDraft({
+                  ...metadataDraft,
+                  enabled: event.target.checked,
+                })
+              }
+            />
+            このワークフローを有効にする
+          </label>
+          <Field label="既定の音声合成プロバイダー">
+            <select
+              className={input()}
+              disabled={providersQuery.isLoading || providersQuery.isError}
+              value={metadataDraft.default_tts_provider_id ?? ""}
+              onChange={(event) =>
+                setMetadataDraft({
+                  ...metadataDraft,
+                  default_tts_provider_id: event.target.value
+                    ? Number(event.target.value)
+                    : null,
+                })
+              }
+            >
+              <option value="">指定なし</option>
+              {providersQuery.data
+                ?.filter((provider) => provider.type === "tts")
+                .map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+            </select>
+          </Field>
+          {providersQuery.isError && (
+            <p role="alert">
+              {providersQuery.error.message}{" "}
+              <button
+                type="button"
+                onClick={() => void providersQuery.refetch()}
+                className={css({ textDecoration: "underline" })}
+              >
+                再試行
+              </button>
+            </p>
+          )}
+        </form>
+      </SlidePanel>
+      <SlidePanel
+        open={aiOpen}
+        title="AI でフローを生成"
+        dirty={Boolean(aiPrompt || preview)}
+        busy={generateMutation.isPending}
+        onClose={() => {
+          setAiOpen(false);
+          setAiPrompt("");
+          setPreview(null);
+        }}
+        footer={
+          preview ? (
+            <>
+              <button
+                type="button"
+                className={button({ variant: "secondary" })}
+                onClick={() => setPreview(null)}
+              >
+                指示を修正
+              </button>
+              <button
+                type="button"
+                className={button({ variant: "primary" })}
+                onClick={applyPreview}
+              >
+                この生成案に置き換える
+              </button>
+            </>
+          ) : (
+            <button
+              type="submit"
+              form="workflow-generate"
+              disabled={!aiPrompt.trim() || generateMutation.isPending}
+              className={button({ variant: "primary" })}
+            >
+              {generateMutation.isPending ? "生成中…" : "生成案を確認"}
+            </button>
+          )
+        }
+      >
+        {preview ? (
+          <div className={css({ display: "grid", gap: "4" })}>
+            <p>
+              現在の {nodes.length} ノード・{edges.length} 接続を、生成案の{" "}
+              {preview.nodes.length} ノード・{preview.edges.length}{" "}
+              接続に置き換えます。現在の未保存の編集も置き換わります。適用後、保存するまでは「生成前に戻す」で復元できます。
+            </p>
+            <div aria-label="生成案のプレビュー" style={{ height: 320 }}>
+              <ReactFlow
+                nodes={preview.nodes}
+                edges={preview.edges}
+                nodeTypes={NODE_TYPES}
+                nodesDraggable={false}
+                nodesConnectable={false}
+                elementsSelectable={false}
+                minZoom={0.1}
+                maxZoom={1}
+                fitView
+                fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
+              >
+                <Background />
+                <Controls showInteractive={false} />
+              </ReactFlow>
+            </div>
+            <ol
+              className={css({
+                pl: "5",
+                listStyleType: "decimal",
+                fontSize: "sm",
+              })}
+            >
+              {preview.nodes.map((node) => (
+                <li key={node.id}>{node.data.label}</li>
+              ))}
+            </ol>
+            {preview.warnings.length > 0 && (
+              <div role="status" className={css({ color: "warn.text" })}>
+                <h3>生成案の警告</h3>
+                <ul>
+                  {preview.warnings.map((warning, index) => (
+                    <li key={index}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ) : (
+          <form
+            id="workflow-generate"
+            className={css({ display: "grid", gap: "4" })}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (aiPrompt.trim() && !generateMutation.isPending)
+                generateMutation.mutate(aiPrompt.trim());
+            }}
+          >
+            <p className={css({ color: "text.muted", fontSize: "sm" })}>
+              生成案を確認してから、現在のフローに適用します。
+            </p>
+            <Field label="作りたい応対フロー" required>
+              <textarea
+                className={input()}
+                rows={6}
+                value={aiPrompt}
+                disabled={generateMutation.isPending}
+                placeholder="例: 受付後にメニューを案内し、問い合わせの種類で担当者につなぐ"
+                onChange={(event) => setAiPrompt(event.target.value)}
+              />
+            </Field>
+            {generateMutation.isError && (
+              <p role="alert" className={css({ color: "danger.text" })}>
+                {generateMutation.error.message}
+              </p>
+            )}
+          </form>
+        )}
+      </SlidePanel>
+      <ConfirmDialog
+        open={blocker.status === "blocked"}
+        title="未保存の変更を破棄しますか？"
+        message="フローや基本情報に未保存の変更があります。編集を続ける場合はキャンセルしてください。"
+        confirmLabel="破棄して移動"
+        destructive
+        busy={saveMutation.isPending}
+        onConfirm={() => blocker.proceed?.()}
+        onCancel={() => blocker.reset?.()}
+      />
+      <ConfirmDialog
+        open={undoConfirm}
+        title="生成前のフローに戻しますか？"
+        message="生成案の適用後に行ったノードの編集も元に戻ります。"
+        confirmLabel="生成前に戻す"
+        destructive
+        onConfirm={restoreBeforeAI}
+        onCancel={() => setUndoConfirm(false)}
+      />
     </div>
-  );
-}
-
-/** パレットの個別ボタン（ホバーを state で管理しないようインライン onMouseEnter で対応）。 */
-function PaletteButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        display: "block",
-        width: "100%",
-        textAlign: "left",
-        padding: "6px 12px",
-        fontSize: 13,
-        color: "#334155",
-        background: "transparent",
-        border: "none",
-        cursor: "pointer",
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLButtonElement).style.background = "#e2e8f0";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLButtonElement).style.background = "transparent";
-      }}
-    >
-      {label}
-    </button>
   );
 }

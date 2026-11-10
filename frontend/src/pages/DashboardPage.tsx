@@ -83,6 +83,8 @@ export function DashboardPage() {
         className={css({
           display: "grid",
           gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          "@media (max-width: 1100px)": { gridTemplateColumns: "repeat(2, minmax(0, 1fr))" },
+          "@media (max-width: 540px)": { gridTemplateColumns: "1fr" },
           gap: "4",
           mb: "6",
         })}
@@ -136,6 +138,8 @@ export function DashboardPage() {
         rows={cdrRows.slice(0, 10)}
         rowKey={(row) => row.id}
         loading={cdrQuery.isLoading}
+        error={cdrQuery.error}
+        onRetry={() => void cdrQuery.refetch()}
         emptyMessage="通話履歴がまだありません。"
       />
     </PageLayout>

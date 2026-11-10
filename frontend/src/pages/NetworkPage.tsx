@@ -16,7 +16,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Server, Globe, Network } from "lucide-react";
 
 import { css, cx } from "styled-system/css";
@@ -24,6 +24,8 @@ import { button, input, panel } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import { NETWORK_CONFIG_KEY } from "../queryKeys";
+import { acceptSavedForm, mergeServerForm, FormValidationError, apiError } from "./settings/formState";
+import { UnsavedChangesGuard } from "../components/UnsavedChangesGuard";
 import { PageLayout } from "../components/PageLayout";
 import { useToast } from "../toast/ToastProvider";
 import {
@@ -41,13 +43,7 @@ import {
 
 async function applyNetworkConfig(): Promise<void> {
   const { error, response } = await api.POST("/api/network/apply");
-  if (response.status === 502) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(
-      (body as { detail?: string }).detail ?? "netd への適用に失敗しました（502）"
-    );
-  }
-  if (error) throw new Error("netd への適用に失敗しました");
+  if (!response.ok || error) throw apiError(error, "ネットワーク設定の適用に失敗しました。接続とネットワークサービスの稼働状況を確認してください。");
 }
 
 // ---------------------------------------------------------------------------
@@ -122,44 +118,69 @@ export function NetworkPage() {
     wan_interface: "",
   });
 
-  // サーバーデータがロード済みになったらフォームを初期化する
+  const lanBaseline = useRef<LanDhcpForm>();
+  const natBaseline = useRef<NatForm>();
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
   useEffect(() => {
-    if (cfg) {
-      setLanForm(configToLanDhcpForm(cfg));
-      setNatForm(configToNatForm(cfg));
-    }
+    if (!cfg) return;
+    const nextLan = configToLanDhcpForm(cfg), nextNat = configToNatForm(cfg);
+    const oldLan = lanBaseline.current, oldNat = natBaseline.current;
+    setLanForm((current) => mergeServerForm(current, oldLan, nextLan));
+    setNatForm((current) => mergeServerForm(current, oldNat, nextNat));
+    lanBaseline.current = nextLan;
+    natBaseline.current = nextNat;
   }, [cfg]);
+  const showSaveError = (err: unknown) => {
+    setFieldErrors(err instanceof FormValidationError ? err.fieldErrors : {});
+    const message = err instanceof Error ? err.message : "保存に失敗しました";
+    setSaveError(message);
+    toast.error(message);
+  };
 
   // LAN/DHCP 保存
   const saveLanMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (submitted: LanDhcpForm) => {
       if (!cfg) throw new Error("設定データがロードされていません");
+      const errors: Record<string, string> = {};
+      for (const [key, min, max] of [["lan_prefix", 0, 32], ["dhcp_lease_hours", 1, 720]] as const) {
+        const number = Number(submitted[key]);
+        if (!submitted[key].trim() || !Number.isInteger(number) || number < min || number > max) errors[key] = `${min}〜${max} の整数で入力してください`;
+      }
+      for (const key of ["lan_ip", "dhcp_range_start", "dhcp_range_end"] as const) {
+        const parts = submitted[key].split(".");
+        if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) errors[key] = "IPv4 アドレスを入力してください（例: 172.20.0.1）";
+      }
+      if (!submitted.lan_interface.trim()) errors.lan_interface = "LAN インタフェースを入力してください";
+      if (Object.keys(errors).length) throw new FormValidationError(errors);
       const payload: NetworkConfigUpdate = {
-        lan_interface: lanForm.lan_interface,
-        lan_ip: lanForm.lan_ip,
-        lan_prefix: parseInt(lanForm.lan_prefix, 10),
-        dhcp_range_start: lanForm.dhcp_range_start,
-        dhcp_range_end: lanForm.dhcp_range_end,
-        dhcp_lease_hours: parseInt(lanForm.dhcp_lease_hours, 10),
-        provisioning_base_url: lanForm.provisioning_base_url,
+        lan_interface: submitted.lan_interface,
+        lan_ip: submitted.lan_ip,
+        lan_prefix: Number(submitted.lan_prefix),
+        dhcp_range_start: submitted.dhcp_range_start,
+        dhcp_range_end: submitted.dhcp_range_end,
+        dhcp_lease_hours: Number(submitted.dhcp_lease_hours),
+        provisioning_base_url: submitted.provisioning_base_url,
         nat_enabled: cfg.nat_enabled,
         wan_interface: cfg.wan_interface,
         tailscale_enabled: cfg.tailscale_enabled,
       };
       return updateNetworkConfig(payload);
     },
-    onSuccess: (data) => {
+    onSuccess: (data, submitted) => {
+      const next = configToLanDhcpForm(data), previous = lanBaseline.current;
+      setLanForm((current) => acceptSavedForm(current, previous, next, submitted, Object.keys(submitted)));
+      lanBaseline.current = next;
+      setFieldErrors({}); setSaveError(null);
       queryClient.setQueryData(NETWORK_CONFIG_KEY, data);
       toast.success("LAN / DHCP 設定を保存しました");
     },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "保存に失敗しました");
-    },
+    onError: showSaveError,
   });
 
   // NAT 保存
   const saveNatMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (submitted: NatForm) => {
       if (!cfg) throw new Error("設定データがロードされていません");
       const payload: NetworkConfigUpdate = {
         lan_interface: cfg.lan_interface,
@@ -169,19 +190,21 @@ export function NetworkPage() {
         dhcp_range_end: cfg.dhcp_range_end,
         dhcp_lease_hours: cfg.dhcp_lease_hours,
         provisioning_base_url: cfg.provisioning_base_url,
-        nat_enabled: natForm.nat_enabled,
-        wan_interface: natForm.wan_interface,
+        nat_enabled: submitted.nat_enabled,
+        wan_interface: submitted.wan_interface,
         tailscale_enabled: cfg.tailscale_enabled,
       };
       return updateNetworkConfig(payload);
     },
-    onSuccess: (data) => {
+    onSuccess: (data, submitted) => {
+      const next = configToNatForm(data), previous = natBaseline.current;
+      setNatForm((current) => acceptSavedForm(current, previous, next, submitted, Object.keys(submitted)));
+      natBaseline.current = next;
+      setFieldErrors({}); setSaveError(null);
       queryClient.setQueryData(NETWORK_CONFIG_KEY, data);
       toast.success("NAT 設定を保存しました");
     },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "NAT 設定の保存に失敗しました");
-    },
+    onError: showSaveError,
   });
 
   // 設定の適用
@@ -217,6 +240,8 @@ export function NetworkPage() {
     <PageLayout title={PAGE_TITLE} description={PAGE_DESCRIPTION}>
       <div className={css({ display: "flex", flexDirection: "column", gap: "6" })}>
 
+        <UnsavedChangesGuard dirty={Boolean(cfg && (JSON.stringify(lanForm) !== JSON.stringify(lanBaseline.current) || JSON.stringify(natForm) !== JSON.stringify(natBaseline.current)))} busy={saveLanMutation.isPending || saveNatMutation.isPending} />
+        {saveError && <p role="alert" className={css({ color: "danger.text", fontSize: "sm" })}>{saveError}</p>}
         {/* ─── LAN / DHCP セクション ─── */}
         <SectionCard
           icon={<Server size={18} />}
@@ -225,20 +250,21 @@ export function NetworkPage() {
         >
           <form
             id="lan-dhcp-form"
+            noValidate
             onSubmit={(e) => {
               e.preventDefault();
-              saveLanMutation.mutate();
+              saveLanMutation.mutate({ ...lanForm });
             }}
             className={css({ display: "flex", flexDirection: "column", gap: "4" })}
           >
             <div
               className={css({
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
                 gap: "4",
               })}
             >
-              <Field label="LAN インタフェース">
+              <Field label="LAN インタフェース" error={fieldErrors.lan_interface}>
                 <input
                   className={input()}
                   value={lanForm.lan_interface}
@@ -246,7 +272,7 @@ export function NetworkPage() {
                   placeholder="enp3s0"
                 />
               </Field>
-              <Field label="LAN IP アドレス">
+              <Field label="LAN IP アドレス" error={fieldErrors.lan_ip}>
                 <input
                   className={input()}
                   value={lanForm.lan_ip}
@@ -254,10 +280,12 @@ export function NetworkPage() {
                   placeholder="172.20.0.1"
                 />
               </Field>
-              <Field label="CIDR プレフィックス長">
+              <Field label="CIDR プレフィックス長" error={fieldErrors.lan_prefix}>
                 <input
                   className={input()}
                   type="number"
+                  required
+                  step={1}
                   min={0}
                   max={32}
                   value={lanForm.lan_prefix}
@@ -265,10 +293,12 @@ export function NetworkPage() {
                   placeholder="16"
                 />
               </Field>
-              <Field label="DHCP リース時間（時間）">
+              <Field label="DHCP リース時間（時間）" error={fieldErrors.dhcp_lease_hours}>
                 <input
                   className={input()}
                   type="number"
+                  required
+                  step={1}
                   min={1}
                   max={720}
                   value={lanForm.dhcp_lease_hours}
@@ -278,7 +308,7 @@ export function NetworkPage() {
                   placeholder="12"
                 />
               </Field>
-              <Field label="DHCP 開始アドレス">
+              <Field label="DHCP 開始アドレス" error={fieldErrors.dhcp_range_start}>
                 <input
                   className={input()}
                   value={lanForm.dhcp_range_start}
@@ -286,7 +316,7 @@ export function NetworkPage() {
                   placeholder="172.20.1.1"
                 />
               </Field>
-              <Field label="DHCP 終了アドレス">
+              <Field label="DHCP 終了アドレス" error={fieldErrors.dhcp_range_end}>
                 <input
                   className={input()}
                   value={lanForm.dhcp_range_end}
@@ -310,7 +340,7 @@ export function NetworkPage() {
                 type="submit"
                 className={button({ variant: "primary" })}
                 style={{ height: "36px" }}
-                disabled={saveLanMutation.isPending}
+                disabled={saveLanMutation.isPending || saveNatMutation.isPending}
               >
                 {saveLanMutation.isPending ? "保存中…" : "LAN / DHCP を保存"}
               </button>
@@ -328,7 +358,7 @@ export function NetworkPage() {
             id="nat-form"
             onSubmit={(e) => {
               e.preventDefault();
-              saveNatMutation.mutate();
+              saveNatMutation.mutate({ ...natForm });
             }}
             className={css({ display: "flex", flexDirection: "column", gap: "4" })}
           >
@@ -349,7 +379,7 @@ export function NetworkPage() {
               NAT（マスカレード）を有効にする
             </label>
 
-            <Field label="WAN インタフェース（NAT 有効時に必要）">
+            <Field label="WAN インタフェース（NAT 有効時に必要）" error={fieldErrors.wan_interface}>
               <input
                 className={input()}
                 value={natForm.wan_interface}
@@ -364,7 +394,7 @@ export function NetworkPage() {
                 type="submit"
                 className={button({ variant: "primary" })}
                 style={{ height: "36px" }}
-                disabled={saveNatMutation.isPending}
+                disabled={saveLanMutation.isPending || saveNatMutation.isPending}
               >
                 {saveNatMutation.isPending ? "保存中…" : "NAT を保存"}
               </button>
@@ -381,6 +411,7 @@ export function NetworkPage() {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
+              flexWrap: "wrap",
               gap: "4",
             }),
           )}

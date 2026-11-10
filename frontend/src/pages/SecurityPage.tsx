@@ -8,6 +8,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { ShieldCheck, ShieldOff, Copy, Check, AlertTriangle } from "lucide-react";
 
@@ -16,6 +17,7 @@ import { button, input, panel } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import { AUTH_ME_KEY } from "../queryKeys";
+import { UnsavedChangesGuard } from "../components/UnsavedChangesGuard";
 import { PageLayout } from "../components/PageLayout";
 import { useToast } from "../toast/ToastProvider";
 import { generateQrMatrix } from "./security/qr";
@@ -71,7 +73,7 @@ async function totpDisable(code: string): Promise<void> {
   if (response.status === 400 || response.status === 401) {
     throw new Error("認証コードが正しくありません");
   }
-  if (error) throw new Error("2FA の無効化に失敗しました");
+  if (!response.ok || error) throw new Error("2FA の無効化に失敗しました");
 }
 
 // ─────────────────────────────────────────────────────────
@@ -80,9 +82,11 @@ async function totpDisable(code: string): Promise<void> {
 
 export function SecurityPage() {
   const toast = useToast();
+  const router = useRouter();
   const queryClient = useQueryClient();
 
-  const meQuery = useQuery({ queryKey: AUTH_ME_KEY, queryFn: fetchMe });
+  const [sessionEnded, setSessionEnded] = useState(false);
+  const meQuery = useQuery({ queryKey: AUTH_ME_KEY, queryFn: fetchMe, enabled: !sessionEnded });
   const totpEnabled = meQuery.data?.totp_enabled ?? false;
 
   const [enrollState, setEnrollState] = useState<TotpEnrollState>(initialState());
@@ -117,7 +121,10 @@ export function SecurityPage() {
   const disableMutation = useMutation({
     mutationFn: () => totpDisable(disableCode),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: AUTH_ME_KEY });
+      setSessionEnded(true);
+      queryClient.clear();
+      sessionStorage.setItem("millicall.authNotice", "2FA を無効にしました。安全のため、すべてのセッションを終了しました。もう一度ログインしてください。");
+      void router.navigate({ to: "/login" });
       setShowDisable(false);
       setDisableCode("");
       setEnrollState(initialState());
@@ -126,13 +133,16 @@ export function SecurityPage() {
     onError: (err) => toast.error(err instanceof Error ? err.message : "無効化に失敗しました"),
   });
 
+  if (sessionEnded) return <PageLayout title="セキュリティ設定"><p role="status">2FA を無効にしました。セッションを終了したため、ログイン画面へ移動します。</p></PageLayout>;
+
   return (
     <PageLayout title="セキュリティ設定" description="2 段階認証（2FA / TOTP）の設定">
+      <UnsavedChangesGuard dirty={enrollState.step === "enrolling" || enrollState.step === "recovery"} busy={setupMutation.isPending || verifyMutation.isPending} />
       <div className={css({ display: "flex", flexDirection: "column", gap: "6" })}>
         {/* ─── 現在の状態 ─── */}
         <div className={cx(panel(), css({ p: "5", display: "flex", flexDirection: "column", gap: "4" }))}>
           <div className={css({ display: "flex", alignItems: "center", gap: "3" })}>
-            {totpEnabled ? (
+            {meQuery.isError || meQuery.isPending ? <AlertTriangle size={24} className={css({ color: "text.muted" })} /> : totpEnabled ? (
               <ShieldCheck size={24} className={css({ color: "success.text" })} />
             ) : (
               <ShieldOff size={24} className={css({ color: "text.subtle" })} />
@@ -142,6 +152,8 @@ export function SecurityPage() {
               <p className={css({ fontSize: "sm", color: "text.muted" })}>
                 {meQuery.isLoading
                   ? "読み込み中…"
+                  : meQuery.isError
+                  ? "2FA の状態を確認できません。接続を確認して再試行してください。"
                   : totpEnabled
                   ? "有効です。ログイン時に認証コードが必要です。"
                   : "無効です。認証アプリで 2FA を設定できます。"}
@@ -149,18 +161,24 @@ export function SecurityPage() {
             </div>
           </div>
 
+          {meQuery.isError && <button type="button" className={button({ variant: "secondary" })} disabled={meQuery.isFetching} onClick={() => meQuery.refetch()}>再試行</button>}
+          {setupMutation.isError && <p id="security-setup-error" role="alert" className={css({ color: "danger.text", fontSize: "sm" })}>{setupMutation.error.message}</p>}
           {/* 操作ボタン: idle 状態のときのみ表示 */}
-          {enrollState.step === "idle" && (
+          {enrollState.step === "idle" && meQuery.isSuccess && (
             <div className={css({ display: "flex", flexDirection: "column", gap: "3" })}>
               {totpEnabled ? (
                 <>
                   {/* 再セットアップ / 無効化には現行コードが必要 */}
                   <div>
-                    <label className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+                    <label htmlFor="security-reauth" className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
                       現在の認証コード（再設定 / 無効化に必要）
                     </label>
                     <input
                       className={input()}
+                      id="security-reauth"
+                      autoComplete="one-time-code"
+                      aria-invalid={setupMutation.isError}
+                      aria-describedby={setupMutation.isError ? "security-setup-error" : undefined}
                       value={reauthCode}
                       onChange={(e) => setReauthCode(e.target.value)}
                       inputMode="numeric"
@@ -222,6 +240,7 @@ export function SecurityPage() {
               setVerifyCode("");
             }}
             verifying={verifyMutation.isPending}
+            error={verifyMutation.error?.message}
           />
         )}
 
@@ -243,7 +262,12 @@ export function SecurityPage() {
             <p className={css({ fontSize: "sm", color: "text.muted" })}>
               無効化すると、既存のセッションはすべてログアウトされます。現行の認証コードで本人確認します。
             </p>
+            <label htmlFor="security-disable-code" className={css({ fontSize: "sm", color: "text.muted" })}>本人確認用の認証コード または リカバリコード</label>
             <input
+              id="security-disable-code"
+              autoComplete="one-time-code"
+              aria-invalid={disableMutation.isError}
+              aria-describedby={disableMutation.isError ? "security-disable-error" : undefined}
               className={input()}
               value={disableCode}
               onChange={(e) => setDisableCode(e.target.value)}
@@ -251,6 +275,7 @@ export function SecurityPage() {
               maxLength={32}
               placeholder="6 桁のコード または リカバリコード"
             />
+            {disableMutation.isError && <p id="security-disable-error" role="alert" className={css({ color: "danger.text", fontSize: "sm" })}>{disableMutation.error.message}</p>}
             <div className={css({ display: "flex", gap: "2", justifyContent: "flex-end" })}>
               <button
                 type="button"
@@ -293,6 +318,7 @@ function EnrollingCard({
   onVerify,
   onCancel,
   verifying,
+  error,
 }: {
   secret: string;
   provisioningUri: string;
@@ -301,6 +327,7 @@ function EnrollingCard({
   onVerify: () => void;
   onCancel: () => void;
   verifying: boolean;
+  error?: string;
 }) {
   const matrix = generateQrMatrix(provisioningUri);
 
@@ -331,11 +358,15 @@ function EnrollingCard({
         <h3 className={css({ fontWeight: "600", fontSize: "md", mb: "2" })}>2. コードを確認</h3>
         <div className={css({ display: "flex", gap: "2", alignItems: "flex-end", flexWrap: "wrap" })}>
           <div>
-            <label className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+            <label htmlFor="security-verify-code" className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
               認証コード（6 桁）
             </label>
             <input
               className={input()}
+              id="security-verify-code"
+              autoComplete="one-time-code"
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "security-verify-error" : undefined}
               value={verifyCode}
               onChange={(e) => onVerifyCodeChange(e.target.value)}
               inputMode="numeric"
@@ -343,6 +374,7 @@ function EnrollingCard({
               placeholder="000000"
               autoFocus
             />
+            {error && <p id="security-verify-error" role="alert" className={css({ color: "danger.text", fontSize: "sm" })}>{error}</p>}
           </div>
           <button
             type="button"
