@@ -480,11 +480,23 @@ class Device(Base):
     provisioned: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_false()
     )
-    # ワンタイムプロビジョニングトークン。使用後に NULL 化する。NEVER log。
+    # 端末固有 cfg の配信ゲート。"standard"（LAN + 登録済み端末 + IP 一致 + active/enabled）/
+    # "strict"（加えてパス形式トークン必須）。issue #85。
+    provision_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="standard", server_default="standard"
+    )
+    # 厳格モードのプロビジョニングトークンの SHA-256 hex（平文は保存しない）。
+    # 管理者が明示的に発行・破棄する。取得のたびに消費はしない。NEVER log。
     provision_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    # 端末固有 cfg の最終取得記録（取得確認用）。
+    last_config_fetch_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_config_fetch_user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_config_fetch_used_token: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
