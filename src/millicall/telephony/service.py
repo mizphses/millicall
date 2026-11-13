@@ -7,6 +7,7 @@ from collections.abc import Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from millicall.audio_assets import FAX_RECEIVE_NOTICE_ID, builtin_audio_path
 from millicall.config import Settings
 from millicall.crypto import SecretBox
 from millicall.models import AiAgent, FaxReceiver, NetworkConfig, Workflow
@@ -64,7 +65,8 @@ def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfi
         sip_trusted_cidrs=settings.sip_trusted_cidrs,
         sip_reject_anonymous=settings.sip_reject_anonymous,
         fax_dir=settings.fax_dir,
-        fax_announce_path=settings.tts_cache_dir / "builtin" / "fax_receive_notice.wav",
+        # #123 の組み込み音声（core 起動時に tts_cache_dir/builtin へ同期される）。
+        fax_announce_path=builtin_audio_path(FAX_RECEIVE_NOTICE_ID, settings.tts_cache_dir),
     )
 
 
