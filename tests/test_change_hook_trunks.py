@@ -157,3 +157,120 @@ async def test_trunk_delete_stops_profile(tmp_path) -> None:
     assert stop_idx is not None, f"external_hgw stop が送信されていない: {received}"
     assert not restart_sent, f"削除トランクに restart が送られている: {received}"
     assert reload_idx < stop_idx
+
+
+# ---------------------------------------------------------------------------
+# issue #113: 未ロードのプロファイルへの restart は `Invalid Profile` を返す（-ERR ではない）。
+# その場合は start にフォールバックし、start 応答も失敗判定する。
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedESL:
+    """コマンドを記録し、コマンドごとに応答を差し替えられる fake ESL クライアント。"""
+
+    def __init__(self, sink: list[str], replies: dict[str, str]) -> None:
+        self._sink = sink
+        self._replies = replies
+
+    async def connect(self) -> None:
+        return None
+
+    async def reloadxml(self) -> str:
+        self._sink.append("reloadxml")
+        return "+OK [Success]"
+
+    async def api(self, cmd: str) -> str:
+        self._sink.append(cmd)
+        return self._replies.get(cmd, "+OK")
+
+    async def close(self) -> None:
+        return None
+
+
+async def _notify_trunk_with_replies(app, replies: dict[str, str]) -> tuple[str | None, list[str]]:
+    from millicall.models import Trunk
+    from millicall.telephony.service import TelephonyChangeListener
+
+    sm = app.state.sessionmaker
+    async with sm() as session:
+        session.add(
+            Trunk(
+                name="hgw",
+                display_name="HGW",
+                host="192.168.1.1",
+                username="0312345678",
+                password="pw",
+            )
+        )
+        await session.commit()
+
+    sink: list[str] = []
+    listener = TelephonyChangeListener(
+        app.state.change_listener._writer,
+        lambda: _ScriptedESL(sink, replies),
+        esl_timeout=2.0,
+    )
+    async with sm() as session:
+        result = await listener.notify(session, sync_gateway="hgw")
+    return result, sink
+
+
+@pytest.mark.asyncio
+async def test_new_trunk_invalid_profile_falls_back_to_start(app) -> None:
+    """restart が `Invalid Profile` を返したら start を送り、成功なら None を返す。"""
+    result, sink = await _notify_trunk_with_replies(
+        app,
+        {
+            "sofia profile external_hgw restart": "Invalid Profile [external_hgw]",
+            "sofia profile external_hgw start": (
+                "Reload XML [Success]\nexternal_hgw started successfully\n"
+            ),
+        },
+    )
+    assert result is None
+    restart_idx = sink.index("sofia profile external_hgw restart")
+    start_idx = sink.index("sofia profile external_hgw start")
+    assert restart_idx < start_idx
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "start_reply",
+    ["Invalid Profile [external_hgw]", "-ERR command failed", "Failure starting external_hgw"],
+)
+async def test_new_trunk_start_failure_returns_error(app, start_reply: str) -> None:
+    """start も失敗した場合は反映失敗メッセージを返す。"""
+    result, sink = await _notify_trunk_with_replies(
+        app,
+        {
+            "sofia profile external_hgw restart": "Invalid Profile [external_hgw]",
+            "sofia profile external_hgw start": start_reply,
+        },
+    )
+    assert "sofia profile external_hgw start" in sink
+    assert result is not None
+    assert "反映できませんでした" in result
+
+
+@pytest.mark.asyncio
+async def test_existing_trunk_restart_success_does_not_send_start(app) -> None:
+    """既存トランクで restart が成功した場合は start を送らない。"""
+    result, sink = await _notify_trunk_with_replies(
+        app,
+        {"sofia profile external_hgw restart": "Reload XML [Success]\nrestarting: external_hgw"},
+    )
+    assert result is None
+    assert "sofia profile external_hgw restart" in sink
+    assert "sofia profile external_hgw start" not in sink
+
+
+@pytest.mark.asyncio
+async def test_restart_failure_text_returns_error(app) -> None:
+    """restart 応答が -ERR 以外の失敗テキスト（Failure）でも失敗として扱う。"""
+    result, sink = await _notify_trunk_with_replies(
+        app,
+        {"sofia profile external_hgw restart": "Failure restarting external_hgw"},
+    )
+    assert "sofia profile external_hgw start" not in sink
+    assert result is not None
+    assert "反映できませんでした" in result
