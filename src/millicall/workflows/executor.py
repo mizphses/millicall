@@ -23,6 +23,7 @@ minimal built-ins (start / end / hangup) plus built-in *navigation* for goto.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -38,6 +39,8 @@ if TYPE_CHECKING:
 # node's side effects and return the output-handle name to follow (or None for
 # single-output nodes, which default to the "out" handle).
 Handler = Callable[[Any, ChannelContext], Awaitable["str | None"]]
+
+logger = logging.getLogger("millicall.workflows.executor")
 
 DEFAULT_STEP_LIMIT = 500
 
@@ -240,14 +243,25 @@ class WorkflowExecutor:
                 f"{result!r} which is not in its output handles {handles}"
             )
 
-        for edge in self._edges_by_source.get(node.id, []):
-            if edge.sourceHandle == handle:
-                target = self._node_map.get(edge.target)
-                if target is None:
-                    raise WorkflowExecutionError(
-                        f"edge {edge.id!r} targets unknown node {edge.target!r}"
-                    )
-                return target
+        matches = [e for e in self._edges_by_source.get(node.id, []) if e.sourceHandle == handle]
+        if len(matches) > 1:
+            # validate_graph rejects this at save time; keep running on the first edge.
+            logger.warning(
+                "workflow node %r (%s) has %d edges from handle %r (%s); following the first",
+                node.id,
+                node.type,
+                len(matches),
+                handle,
+                [e.id for e in matches],
+            )
+        if matches:
+            edge = matches[0]
+            target = self._node_map.get(edge.target)
+            if target is None:
+                raise WorkflowExecutionError(
+                    f"edge {edge.id!r} targets unknown node {edge.target!r}"
+                )
+            return target
 
         # No edge wired for this (valid) handle -> terminate the run normally
         # rather than dropping the live call.

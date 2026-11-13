@@ -297,6 +297,66 @@ def test_valid_graph_has_no_errors() -> None:
     assert result.warnings == []
 
 
+def test_duplicate_edges_from_same_handle_is_error() -> None:
+    # 1 -> 2 -> 3 に加えて 1 -> 3 を同じ out ハンドルから張ったケース
+    defn = _defn(
+        [
+            {"id": "s", "type": "start"},
+            {"id": "p", "type": "play_audio", "config": {"tts_text": "hi"}},
+            {"id": "e", "type": "end"},
+        ],
+        [
+            {"id": "e1", "source": "s", "target": "p", "sourceHandle": "out"},
+            {"id": "e2", "source": "p", "target": "e", "sourceHandle": "out"},
+            {"id": "e3", "source": "s", "target": "e", "sourceHandle": "out"},
+        ],
+    )
+    result = validate_graph(defn)
+    assert result.errors == [
+        "node 's' (start) has multiple edges from sourceHandle 'out': ['e1', 'e3']"
+    ]
+
+
+def test_same_source_different_handles_is_not_error() -> None:
+    defn = _defn(
+        [
+            {"id": "s", "type": "start"},
+            {
+                "id": "c",
+                "type": "condition",
+                "config": {"variable": "x", "operator": "eq", "value": "1"},
+            },
+            {"id": "t", "type": "end"},
+            {"id": "f", "type": "end"},
+        ],
+        [
+            {"id": "e1", "source": "s", "target": "c", "sourceHandle": "out"},
+            {"id": "e2", "source": "c", "target": "t", "sourceHandle": "true"},
+            {"id": "e3", "source": "c", "target": "f", "sourceHandle": "false"},
+        ],
+    )
+    result = validate_graph(defn)
+    assert result.errors == []
+
+
+def test_distinct_sources_into_same_target_is_not_error() -> None:
+    defn = _defn(
+        [
+            {"id": "s", "type": "start"},
+            {"id": "p", "type": "play_audio", "config": {"tts_text": "hi"}},
+            {"id": "q", "type": "play_audio", "config": {"tts_text": "yo"}},
+            {"id": "e", "type": "end"},
+        ],
+        [
+            {"id": "e1", "source": "s", "target": "p", "sourceHandle": "out"},
+            {"id": "e2", "source": "p", "target": "e", "sourceHandle": "out"},
+            {"id": "e3", "source": "q", "target": "e", "sourceHandle": "out"},
+        ],
+    )
+    result = validate_graph(defn)
+    assert result.errors == []
+
+
 def test_start_missing_is_error() -> None:
     defn = _defn([{"id": "e", "type": "end"}], [])
     result = validate_graph(defn)

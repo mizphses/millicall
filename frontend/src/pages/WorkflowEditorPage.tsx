@@ -1,7 +1,6 @@
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  addEdge,
   Background,
   Controls,
   MiniMap,
@@ -49,7 +48,9 @@ import { WorkflowNodeComponent } from "./workflows/WorkflowNode";
 import type { NodeTypeInfo, ProviderOption } from "./workflows/types";
 import {
   CATEGORY_LABEL,
+  connectEdge,
   editorSnapshot,
+  isValidWorkflowConnection,
   placeNewNode,
   readDefinition,
   validateWorkflowMetadata,
@@ -317,7 +318,14 @@ export function WorkflowEditorPage() {
           typeof detail === "string"
             ? detail
             : Array.isArray(detail)
-              ? detail.map((item) => item.msg).join(" / ")
+              ? detail
+                  .map((item: unknown) =>
+                    typeof item === "string"
+                      ? item
+                      : String((item as { msg?: unknown })?.msg ?? ""),
+                  )
+                  .filter(Boolean)
+                  .join(" / ")
               : "ノードの設定と接続を確認してください。";
         throw new Error(`保存できませんでした: ${description}`);
       }
@@ -733,8 +741,9 @@ export function WorkflowEditorPage() {
             }}
             onEdgesChange={onEdgesChange}
             onConnect={(connection) =>
-              setEdges((previous) => addEdge(connection, previous))
+              setEdges((previous) => connectEdge(previous, connection))
             }
+            isValidConnection={isValidWorkflowConnection}
             onNodeClick={(_, node) => selectNode(node.id)}
             onPaneClick={() => selectNode(null)}
             deleteKeyCode={["Backspace", "Delete"]}
