@@ -128,7 +128,9 @@ def test_panasonic_config_contains_extension_number() -> None:
     ext = _MockExtension(number="2001")
     nc = _MockNetworkConfig()
     settings = _MockSettings()
-    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
+    content = render_panasonic_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
 
     assert "2001" in content
 
@@ -140,7 +142,9 @@ def test_panasonic_config_contains_sip_password() -> None:
     ext = _MockExtension(sip_password="MyS3cretPass")
     nc = _MockNetworkConfig()
     settings = _MockSettings()
-    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
+    content = render_panasonic_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
 
     assert "MyS3cretPass" in content
 
@@ -152,7 +156,9 @@ def test_panasonic_config_contains_lan_ip() -> None:
     ext = _MockExtension()
     nc = _MockNetworkConfig(lan_ip="10.10.0.1")
     settings = _MockSettings()
-    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
+    content = render_panasonic_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
 
     assert "10.10.0.1" in content
 
@@ -169,7 +175,9 @@ def test_panasonic_config_svcdomain_uses_lan_ip_not_sip_domain() -> None:
     ext = _MockExtension()
     nc = _MockNetworkConfig(lan_ip="172.20.0.1")
     settings = _MockSettings(sip_domain="192.168.1.2")
-    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
+    content = render_panasonic_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
 
     assert 'SIP_SVCDOMAIN_1="172.20.0.1"' in content
     assert "192.168.1.2" not in content
@@ -183,7 +191,9 @@ def test_panasonic_config_display_name_with_special_chars() -> None:
     nc = _MockNetworkConfig()
     settings = _MockSettings()
     # 例外が発生しないこと、および設定ファイルが文字列であることを確認
-    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
+    content = render_panasonic_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
     assert isinstance(content, str)
     # エスケープされたダブルクォートが含まれること
     assert '\\"' in content
@@ -196,7 +206,9 @@ def test_panasonic_config_display_name_with_newline() -> None:
     ext = _MockExtension(display_name="Alice\nBob")
     nc = _MockNetworkConfig()
     settings = _MockSettings()
-    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
+    content = render_panasonic_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
     # 改行は除去されていること（設定値内に改行がないこと）
     assert "Alice\nBob" not in content
 
@@ -208,7 +220,9 @@ def test_panasonic_config_uses_crlf() -> None:
     ext = _MockExtension()
     nc = _MockNetworkConfig()
     settings = _MockSettings()
-    content = render_panasonic_config(extension=ext, network_config=nc, settings=settings)
+    content = render_panasonic_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
 
     assert "\r\n" in content
 
@@ -347,7 +361,9 @@ def test_yealink_config_contains_account_password() -> None:
     ext = _MockExtension(sip_password="YlnkPass123")
     nc = _MockNetworkConfig()
     settings = _MockSettings()
-    content = render_yealink_config(extension=ext, network_config=nc, settings=settings)
+    content = render_yealink_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
 
     assert "account.1.password" in content
     assert "YlnkPass123" in content
@@ -360,7 +376,9 @@ def test_yealink_config_contains_sip_server_address() -> None:
     ext = _MockExtension()
     nc = _MockNetworkConfig(lan_ip="10.20.0.1")
     settings = _MockSettings()
-    content = render_yealink_config(extension=ext, network_config=nc, settings=settings)
+    content = render_yealink_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
 
     assert "account.1.sip_server.1.address" in content
     assert "10.20.0.1" in content
@@ -373,7 +391,9 @@ def test_yealink_config_display_name_sanitized() -> None:
     ext = _MockExtension(display_name="Alice\r\nBob")
     nc = _MockNetworkConfig()
     settings = _MockSettings()
-    content = render_yealink_config(extension=ext, network_config=nc, settings=settings)
+    content = render_yealink_config(
+        extension=ext, sip_password=ext.sip_password, network_config=nc, settings=settings
+    )
 
     assert "Alice\r\nBob" not in content
 

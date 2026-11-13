@@ -26,8 +26,9 @@ from millicall.calls.router import router as calls_router
 from millicall.cdr.router import router as cdr_router
 from millicall.config import Settings, get_settings
 from millicall.contacts.router import router as contacts_router
+from millicall.crypto import SecretBox
 from millicall.db import create_db_engine
-from millicall.db_migrations import upgrade_to_head
+from millicall.db_migrations import sqlite_path, upgrade_to_head
 from millicall.extensions.router import router as extensions_router
 from millicall.mcp_server.ephemeral import EphemeralAgentStore
 from millicall.mcp_server.integration import mcp_session_context, mount_mcp
@@ -45,6 +46,7 @@ from millicall.ring_groups.router import router as ring_groups_router
 from millicall.scim.router import api_router as scim_api_router
 from millicall.scim.router import scim_router
 from millicall.secrets_store import load_or_create_secrets
+from millicall.sip_credentials import SipCredentialError
 from millicall.system.router import router as system_router
 from millicall.telephony.esl import ESLClient
 from millicall.telephony.events import CdrRecorder, EslEventListener
@@ -165,16 +167,19 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
             "cookie_secure=False — HTTPS外でセッションCookieが平文送信されます（LAN内運用前提）"
         )
 
+    # secrets はマイグレーションより先に確定させる。0027（SIP 認証情報の暗号化）が
+    # master_key を必要とするため、upgrade_to_head へ鍵を渡す。
+    # 暗号化済みデータがある DB に secrets.json が無い場合は鍵を新規作成せず起動を止める。
+    app.state.secrets = load_or_create_secrets(
+        settings.data_dir, db_path=sqlite_path(settings.database_url)
+    )
     # upgrade_to_head は同期関数のため asyncio.to_thread で実行してイベントループをブロックしない
-    await asyncio.to_thread(upgrade_to_head, settings.database_url)
-    app.state.secrets = load_or_create_secrets(settings.data_dir)
+    await asyncio.to_thread(upgrade_to_head, settings.database_url, app.state.secrets.master_key)
 
     # MCP OAuth プロバイダ（mount_mcp で create_app 時に生成済み）へ、認可パラメータ
     # 署名用の SecretBox を注入する。secrets はここで初めて確定するため lifespan で行う。
     _mcp_provider = getattr(app.state, "mcp_oauth_provider", None)
     if _mcp_provider is not None:
-        from millicall.crypto import SecretBox
-
         _mcp_provider.set_signer(SecretBox(app.state.secrets.master_key))
 
     engine = create_db_engine(settings.database_url)
@@ -187,8 +192,6 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
 
     # 管理画面から編集可能な設定のマージ層（env デフォルト + app_settings 上書き）。
     # 以降の起動処理・各ルーターは settings_service.effective() 経由で実効設定を読む。
-    from millicall.crypto import SecretBox
-
     app.state.settings_service = SettingsService(
         app.state.sessionmaker, settings, SecretBox(app.state.secrets.master_key)
     )
@@ -198,7 +201,10 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
     esl_factory = build_esl_factory(settings, app.state.secrets)
     app.state.esl_factory = esl_factory
     listener = TelephonyChangeListener(
-        writer, esl_factory, esl_timeout=settings.esl_timeout_seconds
+        writer,
+        esl_factory,
+        esl_timeout=settings.esl_timeout_seconds,
+        secret_box=SecretBox(app.state.secrets.master_key),
     )
     app.state.change_listener = listener
 
@@ -216,6 +222,9 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
     # テンプレート変更が反映されずキャッシュ済み dialplan が古いまま残る。
     # FreeSWITCH 未起動（初回同時起動）なら notify 内で警告ログのみ出して継続する。
     async with app.state.sessionmaker() as session:
+        # 鍵整合性チェックを兼ねる: 有効な内線・トランクを全件復号し、復号できないものは
+        # 設定から除外して ERROR ログに出す（listener.sip_credential_status → /healthz）。
+        # 不一致でも起動は止めない（管理画面・復旧 CLI を使えるようにする）。
         await listener.notify(session)
 
     recorder = CdrRecorder(app.state.sessionmaker)
@@ -409,8 +418,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _no_llm_handler(_request, exc: NoLlmProviderError):
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
+    @app.exception_handler(SipCredentialError)
+    async def _sip_credential_handler(_request, exc: SipCredentialError):
+        # 詳細（対象の内線/トランク）はログのみに出し、レスポンスは汎用文言にする。
+        logger.error("%s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "SIP 認証情報を復号できません（master_key 不一致の可能性）。"
+                "サーバーログを確認してください"
+            },
+        )
+
     @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
+    async def healthz() -> dict[str, str | int]:
+        # 200 は維持する（compose の healthcheck で core を落とすと復旧操作もできなくなる）。
+        # 番号はログのみに出し、未認証で読める healthz には件数だけを返す。
+        listener = getattr(app.state, "change_listener", None)
+        sip_status = getattr(listener, "sip_credential_status", None)
+        if sip_status is not None and not sip_status.ok:
+            return {
+                "status": "degraded",
+                "sip_credentials": "undecryptable",
+                "undecryptable_extensions": len(sip_status.undecryptable_extensions),
+                "undecryptable_trunks": len(sip_status.undecryptable_trunks),
+            }
         return {"status": "ok"}
 
     register_media_ws(app)

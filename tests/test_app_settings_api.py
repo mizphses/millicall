@@ -7,6 +7,7 @@ FreeSWITCH 設定再生成トリガを確認する。
 from sqlalchemy import select
 
 from millicall.models import AppSetting, AuditLog
+from tests.sip_helpers import encrypt_for_test
 
 
 async def test_get_settings_requires_auth(client):
@@ -128,7 +129,7 @@ async def test_put_outbound_policy_regenerates_fs_config(auth_client, app):
                 display_name="HGW",
                 host="192.168.1.1",
                 username="0312345678",
-                password="pw",
+                password_encrypted=encrypt_for_test("pw", app=app),
                 caller_id="0398765432",
             )
         )

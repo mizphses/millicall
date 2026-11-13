@@ -8,9 +8,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.config import Settings
-from millicall.models import AiAgent, Extension, NetworkConfig, Trunk, Workflow
+from millicall.crypto import SecretBox
+from millicall.models import AiAgent, NetworkConfig, Workflow
 from millicall.numberplan import load_ring_groups_with_members
 from millicall.secrets_store import Secrets
+from millicall.sip_credentials import (
+    SipCredentialStatus,
+    load_enabled_sip_credentials,
+    log_sip_credential_status,
+)
 from millicall.telephony.esl import ESLClient, ESLError
 from millicall.telephony.fsconfig import (
     AiAgentConfig,
@@ -72,10 +78,16 @@ class TelephonyChangeListener:
         writer: FreeswitchConfigWriter,
         esl_factory: Callable[[], ESLClient],
         esl_timeout: float = 5.0,
+        *,
+        secret_box: SecretBox,
     ) -> None:
         self._writer = writer
         self._esl_factory = esl_factory
         self._esl_timeout = esl_timeout
+        # SIP 認証情報（DB では暗号化保存）を設定生成の直前にだけ復号するための鍵。
+        self._box = secret_box
+        # 直近の regenerate で復号できず設定から除外した項目（/healthz が参照する）。
+        self.sip_credential_status = SipCredentialStatus()
         # 前回 regenerate 時の internal 実効バインド（sip-ip と domain）を保持する。
         # reloadxml では sofia プロファイルの sip-ip / bind は再バインドされないため、
         # この値が前回と変化した場合、または初回（None）の場合にのみ
@@ -83,31 +95,26 @@ class TelephonyChangeListener:
         # 「まだ一度も restart していない＝初回」を意味する。
         self._last_internal_bind: tuple[str | None, str | None] | None = None
 
-    async def _load_configs(self, session: AsyncSession) -> list[ExtensionConfig]:
-        result = await session.scalars(
-            select(Extension).where(Extension.enabled.is_(True)).order_by(Extension.number)
-        )
-        return [
+    async def _load_credentials(
+        self, session: AsyncSession
+    ) -> tuple[list[ExtensionConfig], list[TrunkConfig], SipCredentialStatus]:
+        creds = await load_enabled_sip_credentials(session, self._box)
+        extensions = [
             ExtensionConfig(
                 number=e.number,
                 display_name=e.display_name,
-                sip_password=e.sip_password,
+                sip_password=password,
                 calling_permission=e.calling_permission,
             )
-            for e in result
+            for e, password in creds.extensions
         ]
-
-    async def _load_trunks(self, session: AsyncSession) -> list[TrunkConfig]:
-        result = await session.scalars(
-            select(Trunk).where(Trunk.enabled.is_(True)).order_by(Trunk.name)
-        )
-        return [
+        trunks = [
             TrunkConfig(
                 name=t.name,
                 display_name=t.display_name,
                 host=t.host,
                 username=t.username,
-                password=t.password,
+                password=password,
                 did_number=t.did_number,
                 caller_id=t.caller_id,
                 inbound_extension=t.inbound_extension,
@@ -115,8 +122,13 @@ class TelephonyChangeListener:
                 trunk_type=t.trunk_type,
                 inbound_cidrs=[c for c in t.inbound_cidrs.split(",") if c],
             )
-            for t in result
+            for t, password in creds.trunks
         ]
+        return extensions, trunks, creds.status
+
+    async def _load_trunks(self, session: AsyncSession) -> list[TrunkConfig]:
+        # 設定に書き出すトランク（復号できないものは除外済み）。
+        return (await self._load_credentials(session))[1]
 
     async def _load_ring_groups(self, session: AsyncSession) -> list[RingGroupConfig]:
         groups = await load_ring_groups_with_members(session)
@@ -179,9 +191,11 @@ class TelephonyChangeListener:
         """
         self._writer.update_outbound_policy(international_allow_prefixes, sip_reject_anonymous)
 
-    async def _configuration(self, session: AsyncSession) -> tuple:
-        configs = await self._load_configs(session)
-        trunks = await self._load_trunks(session)
+    async def _configuration(self, session: AsyncSession) -> tuple[tuple, SipCredentialStatus]:
+        # 復号できない内線・トランクは設定から除外する（その端末/トランクは登録できない
+        # = fail-closed）。削除・無効化・発信権限・トランク変更は常に FreeSWITCH に反映し、
+        # DB と FreeSWITCH をずらさない。除外は ERROR ログと /healthz（degraded）で示す。
+        configs, trunks, status = await self._load_credentials(session)
         ring_groups = await self._load_ring_groups(session)
         ai_agents = await self._load_ai_agents(session)
         workflows = await self._load_workflows(session)
@@ -190,14 +204,19 @@ class TelephonyChangeListener:
         # 未適用時は None を渡して従来動作（sip_bind_ip / sip_domain）を維持する。
         child_lan_ip = await self._load_child_lan_ip(session)
         self._writer.set_internal_network(child_lan_ip, child_lan_ip)
-        return configs, trunks, ring_groups, ai_agents, workflows
+        return (configs, trunks, ring_groups, ai_agents, workflows), status
 
     async def validate(self, session: AsyncSession) -> None:
         """Preflight pending DB changes without touching FreeSWITCH or its files."""
-        self._writer.render_all(*await self._configuration(session))
+        # 事前検証は副作用なし: /healthz 用の除外状態やログは regenerate でのみ更新する。
+        config, _status = await self._configuration(session)
+        self._writer.render_all(*config)
 
     async def regenerate(self, session: AsyncSession) -> None:
-        self._writer.write_all(*await self._configuration(session))
+        config, status = await self._configuration(session)
+        self.sip_credential_status = status
+        log_sip_credential_status(status)
+        self._writer.write_all(*config)
 
     def _current_internal_bind(self) -> tuple[str | None, str | None]:
         """今回生成に使う internal の実効バインド（sip-ip, domain）を返す。

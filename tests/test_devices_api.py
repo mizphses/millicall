@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 from millicall.models import Device, Extension, NetworkConfig
 from millicall.network.client import NetdError
+from tests.sip_helpers import encrypt_for_test
 
 # ---------------------------------------------------------------------------
 # フェイク NetdClient
@@ -124,7 +125,11 @@ async def test_list_devices_includes_extension_info(app, auth_client_with_teleph
     """デバイス一覧に Extension の番号・表示名が含まれる。"""
     sm = app.state.sessionmaker
     async with sm() as session:
-        ext = Extension(number="5001", display_name="Test User", sip_password="testpass1234")
+        ext = Extension(
+            number="5001",
+            display_name="Test User",
+            sip_password_encrypted=encrypt_for_test("testpass1234", app=app),
+        )
         session.add(ext)
         await session.commit()
         await session.refresh(ext)
@@ -294,7 +299,11 @@ async def test_quick_provision_uses_existing_extension(app, auth_client_with_tel
     """既存の内線番号を指定すると既存 Extension が使われる（重複作成なし）。"""
     sm = app.state.sessionmaker
     async with sm() as session:
-        ext = Extension(number="8001", display_name="Existing", sip_password="existpass12345")
+        ext = Extension(
+            number="8001",
+            display_name="Existing",
+            sip_password_encrypted=encrypt_for_test("existpass12345", app=app),
+        )
         session.add(ext)
         await session.commit()
 

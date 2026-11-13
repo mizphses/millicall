@@ -120,7 +120,10 @@ class Extension(Base):
     number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     # 強ランダム自動生成のみ。ユーザー/API から指定不可。
-    sip_password: Mapped[str] = mapped_column(String(64), nullable=False)
+    # SecretBox で暗号化した Fernet トークンを保存する（平文列は 0027 で廃止）。
+    # 復号は millicall.sip_credentials 経由で、設定生成・端末 cfg 描画・credentials API の
+    # 直前にのみ行う。
+    sip_password_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )
@@ -132,6 +135,15 @@ class Extension(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+    def __repr__(self) -> str:
+        """SIP パスワード（暗号文）を除外したrepr。"""
+        attrs = [
+            f"{k}={v!r}"
+            for k, v in self.__dict__.items()
+            if not k.startswith("_") and k != "sip_password_encrypted"
+        ]
+        return f"<{self.__class__.__name__}({', '.join(attrs)})>"
 
 
 class Trunk(Base):
@@ -148,8 +160,12 @@ class Trunk(Base):
         String(10), nullable=False, default="hgw", server_default="hgw"
     )
     username: Mapped[str] = mapped_column(String(50), nullable=False)  # 認証ID = 内線番号
-    # HGW 側で決まるユーザー入力値。平文保存(暗号化は Phase 6)。API レスポンスには出さない。
-    password: Mapped[str] = mapped_column(String(128), nullable=False)
+    # HGW/プロバイダ側で決まるユーザー入力値。SecretBox で暗号化して保存する
+    # （平文列は 0027 で廃止）。空文字 = 未設定（鍵喪失からの復旧後など、再入力が必要）。
+    # API レスポンスには出さない（has_password のみ）。
+    password_encrypted: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     did_number: Mapped[str] = mapped_column(
         String(30), nullable=False, default="", server_default=""
     )
@@ -183,11 +199,11 @@ class Trunk(Base):
     )
 
     def __repr__(self) -> str:
-        """Custom repr that excludes the password field."""
+        """Custom repr that excludes the password_encrypted field."""
         attrs = [
             f"{k}={v!r}"
             for k, v in self.__dict__.items()
-            if not k.startswith("_") and k != "password"
+            if not k.startswith("_") and k != "password_encrypted"
         ]
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
 

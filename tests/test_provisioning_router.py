@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from millicall.models import Device, Extension, NetworkConfig
 from millicall.provisioning.service import hash_provision_token
+from tests.sip_helpers import encrypt_for_test
 
 # 厳格モードのテスト用トークン（パス形式トークンの許容形式 16〜128 文字に合わせる）
 _TOKEN = "validtoken-0123456789abcdef"
@@ -49,7 +50,7 @@ async def _insert_extension(app, number: str = "1001", display_name: str = "Alic
         ext = Extension(
             number=number,
             display_name=display_name,
-            sip_password="test_sip_pass_1234",
+            sip_password_encrypted=encrypt_for_test("test_sip_pass_1234", app=app),
         )
         session.add(ext)
         await session.commit()
@@ -746,3 +747,48 @@ async def test_disabled_extension_credentials_not_provisioned(app):
         await session.commit()
     async with _make_client(app) as client:
         assert (await client.get("/provisioning/Yealink/AABBCCDDEEFF.cfg")).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# SIP パスワードの暗号化保存（issue #87）
+# ---------------------------------------------------------------------------
+
+
+async def test_device_cfg_contains_decrypted_password(app) -> None:
+    """DB の暗号文を復号した平文が端末 cfg に出る（暗号文は出ない）。"""
+    await _insert_network_config(app)
+    ext_id = await _insert_extension(app)
+    await _insert_device(app, extension_id=ext_id)
+
+    async with _make_client(app) as c:
+        pana = await c.get("/provisioning/Panasonic/ConfigAABBCCDDEEFF.cfg")
+        yea = await c.get("/provisioning/Yealink/aabbccddeeff.cfg")
+
+    assert pana.status_code == 200 and yea.status_code == 200
+    assert 'SIP_PASS_1="test_sip_pass_1234"' in pana.text
+    assert "account.1.password = test_sip_pass_1234" in yea.text
+    assert "gAAAA" not in pana.text + yea.text
+
+
+async def test_device_cfg_undecryptable_password_returns_503(app) -> None:
+    """鍵不一致で復号できない内線の cfg は空パスワードで返さず 503。"""
+    await _insert_network_config(app)
+    sm = app.state.sessionmaker
+    async with sm() as session:
+        ext = Extension(
+            number="1009",
+            display_name="Wrong key",
+            sip_password_encrypted=encrypt_for_test("other-key-pass"),  # app と別の鍵
+        )
+        session.add(ext)
+        await session.commit()
+        await session.refresh(ext)
+        ext_id = ext.id
+    await _insert_device(app, extension_id=ext_id)
+
+    async with _make_client(app) as c:
+        resp = await c.get("/provisioning/Yealink/aabbccddeeff.cfg")
+
+    assert resp.status_code == 503
+    assert "other-key-pass" not in resp.text
+    assert "account.1.password" not in resp.text

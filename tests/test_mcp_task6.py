@@ -24,6 +24,7 @@ from httpx import ASGITransport, AsyncClient
 from millicall.config import Settings
 from millicall.main import create_app
 from millicall.models import Contact, Extension, Trunk
+from tests.sip_helpers import encrypt_for_test
 from tests.test_mcp_oauth import _form, _redirect_location
 
 
@@ -147,7 +148,14 @@ async def test_dial_signature_verbatim(mcp_app):
 
 async def test_list_extensions_tool_returns_contract_json(mcp_app):
     async with mcp_app.state.sessionmaker() as s:
-        s.add(Extension(number="800", display_name="内線A", sip_password="x", enabled=True))
+        s.add(
+            Extension(
+                number="800",
+                display_name="内線A",
+                sip_password_encrypted=encrypt_for_test("x", app=mcp_app),
+                enabled=True,
+            )
+        )
         await s.commit()
     result = await mcp_app.state.mcp.call_tool("list_extensions", {})
     data = json.loads(_tool_text(result))
@@ -165,7 +173,7 @@ async def test_list_trunks_tool_returns_contract_json(mcp_app):
                 display_name="HGW 1",
                 host="10.0.0.1",
                 username="u",
-                password="secret",
+                password_encrypted=encrypt_for_test("secret", app=mcp_app),
                 did_number="0312345678",
                 caller_id="0312345678",
                 enabled=True,
@@ -345,7 +353,14 @@ async def test_oauth_bearer_tools_call(mcp_app, mcp_client):
     """DCR→login→token→Bearer で tools/call list_extensions が契約 JSON を返す。"""
     await _make_user(mcp_app, username="flow", password="FlowPass1", role="admin")
     async with mcp_app.state.sessionmaker() as s:
-        s.add(Extension(number="900", display_name="内線X", sip_password="z", enabled=True))
+        s.add(
+            Extension(
+                number="900",
+                display_name="内線X",
+                sip_password_encrypted=encrypt_for_test("z", app=mcp_app),
+                enabled=True,
+            )
+        )
         await s.commit()
 
     reg = await mcp_client.post(

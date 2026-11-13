@@ -87,7 +87,11 @@ async def test_esl_rejection_is_reported_as_unapplied(app):
         async def close(self):
             pass
 
-    listener = TelephonyChangeListener(app.state.change_listener._writer, RefusingESL)
+    listener = TelephonyChangeListener(
+        app.state.change_listener._writer,
+        RefusingESL,
+        secret_box=app.state.change_listener._box,
+    )
     async with app.state.sessionmaker() as session:
         warning = await listener.notify(session)
     assert warning is not None

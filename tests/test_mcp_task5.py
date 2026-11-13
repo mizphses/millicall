@@ -19,6 +19,7 @@ from millicall.db import Base
 from millicall.mcp_server.directory import Directory
 from millicall.mcp_server.guide import OUTBOUND_CALLING_GUIDE
 from millicall.models import Contact, Extension, Trunk
+from tests.sip_helpers import encrypt_for_test
 
 
 @pytest_asyncio.fixture
@@ -173,8 +174,22 @@ async def test_list_extensions_empty(directory):
 @pytest.mark.asyncio
 async def test_list_extensions_shape(directory, sessionmaker):
     async with sessionmaker() as s:
-        s.add(Extension(number="800", display_name="内線A", sip_password="x", enabled=True))
-        s.add(Extension(number="801", display_name="内線B", sip_password="y", enabled=False))
+        s.add(
+            Extension(
+                number="800",
+                display_name="内線A",
+                sip_password_encrypted=encrypt_for_test("x"),
+                enabled=True,
+            )
+        )
+        s.add(
+            Extension(
+                number="801",
+                display_name="内線B",
+                sip_password_encrypted=encrypt_for_test("y"),
+                enabled=False,
+            )
+        )
         await s.commit()
     result = await directory.list_extensions()
     assert result["count"] == 2
@@ -207,7 +222,7 @@ async def test_list_trunks_shape(directory, sessionmaker):
                 display_name="HGW 1",
                 host="192.168.0.1",
                 username="u",
-                password="p",
+                password_encrypted=encrypt_for_test("p"),
                 did_number="0312345678",
                 caller_id="0312345678",
                 enabled=True,

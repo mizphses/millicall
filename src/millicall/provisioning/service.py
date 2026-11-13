@@ -23,11 +23,12 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from millicall.gen import generate_sip_password
+from millicall.crypto import SecretBox
 from millicall.models import Device, Extension
 from millicall.net_guard import _check_device_ip, _PinnedTransport
 from millicall.network.client import NetdClient
 from millicall.network.validation import is_valid_hostname, normalize_mac, validate_ipv4
+from millicall.sip_credentials import new_extension_password
 from millicall.telephony.esl import ESLError
 
 logger = logging.getLogger("millicall.provisioning")
@@ -152,6 +153,8 @@ async def quick_provision(
     extension_number: str,
     display_name: str,
     telephony_notify: Callable[[AsyncSession], Awaitable[None]],
+    *,
+    secret_box: SecretBox,
 ) -> Device:
     """デバイスに内線を割り当ててプロビジョニング完了状態にする。
 
@@ -177,6 +180,7 @@ async def quick_provision(
         display_name: 内線の表示名（既存 Extension がある場合は更新しない）。
         telephony_notify: TelephonyChangeListener.notify のような非同期 callable。
                           call signature: ``async (session) -> None``。
+        secret_box: 新規作成する内線の SIP パスワードを暗号化する鍵。
 
     Returns:
         更新済みの Device オブジェクト。
@@ -194,7 +198,7 @@ async def quick_provision(
         ext = Extension(
             number=extension_number,
             display_name=display_name,
-            sip_password=generate_sip_password(),
+            sip_password_encrypted=new_extension_password(secret_box)[1],
             enabled=True,
         )
         session.add(ext)

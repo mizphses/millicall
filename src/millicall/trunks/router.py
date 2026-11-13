@@ -12,15 +12,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.config import Settings
+from millicall.crypto import SecretBox
 from millicall.deps import (
     get_change_listener,
     get_esl_factory,
+    get_secret_box,
     get_session,
     get_settings_dep,
     require_admin,
 )
 from millicall.models import Trunk
 from millicall.numberplan import find_number
+from millicall.sip_credentials import encrypt_sip_password
 from millicall.telephony.esl import ESLError
 from millicall.telephony.hooks import ExtensionChangeListener
 from millicall.trunks.schemas import TrunkCreate, TrunkRead, TrunkUpdate
@@ -150,6 +153,7 @@ async def create_trunk(
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
     settings: Settings = Depends(get_settings_dep),
+    box: SecretBox = Depends(get_secret_box),
 ) -> TrunkRead:
     existing = await session.scalar(select(Trunk).where(Trunk.name == body.name))
     if existing is not None:
@@ -164,7 +168,7 @@ async def create_trunk(
         display_name=body.display_name,
         host=body.host,
         username=body.username,
-        password=body.password,
+        password_encrypted=encrypt_sip_password(box, body.password),
         did_number=body.did_number,
         caller_id=body.caller_id,
         inbound_extension=body.inbound_extension,
@@ -243,6 +247,7 @@ async def update_trunk(
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
     settings: Settings = Depends(get_settings_dep),
+    box: SecretBox = Depends(get_secret_box),
 ) -> TrunkRead:
     trunk = await session.get(Trunk, trunk_id)
     if trunk is None:
@@ -255,7 +260,6 @@ async def update_trunk(
         "display_name",
         "host",
         "username",
-        "password",
         "did_number",
         "caller_id",
         "inbound_extension",
@@ -265,6 +269,15 @@ async def update_trunk(
         val = getattr(body, fld)
         if val is not None:
             setattr(trunk, fld, val)
+    if body.password is not None:
+        trunk.password_encrypted = encrypt_sip_password(box, body.password)
+    # 鍵喪失からの復旧（recover_sip）でパスワードを消したトランクは、再入力するまで有効化しない
+    # （空パスワードで REGISTER させない）。
+    if trunk.enabled and not trunk.password_encrypted:
+        raise HTTPException(
+            status_code=422,
+            detail="パスワードが未設定です。有効化する前にパスワードを再入力してください",
+        )
     # source_port は None（自動採番）への変更もあり得るため、明示送信時のみ更新する。
     # model_fields_set で「未指定」と「null 明示」を区別する。
     if "source_port" in body.model_fields_set:

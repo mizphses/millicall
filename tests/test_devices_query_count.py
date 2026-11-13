@@ -14,6 +14,7 @@ from sqlalchemy import event, select
 
 from millicall.models import Device, Extension
 from millicall.provisioning.service import sync_devices_from_leases
+from tests.sip_helpers import encrypt_for_test
 
 # 1000 件でも IN 句チャンク（SQLite のバインド変数上限対策）数 + 定数に収まる上限。
 _MAX_SELECTS = 10
@@ -97,7 +98,11 @@ async def test_list_select_count_is_not_proportional(app, auth_client_with_telep
     sm = app.state.sessionmaker
     async with sm() as session:
         exts = [
-            Extension(number=f"{2000 + i}", display_name=f"User {i}", sip_password="x" * 16)
+            Extension(
+                number=f"{2000 + i}",
+                display_name=f"User {i}",
+                sip_password_encrypted=encrypt_for_test("x" * 16, app=app),
+            )
             for i in range(n)
         ]
         session.add_all(exts)
@@ -126,7 +131,11 @@ async def test_list_devices_without_extension(app, auth_client_with_telephony) -
     """内線なし端末は extension_* が None（JOIN で端末が落ちない）。id 昇順。"""
     sm = app.state.sessionmaker
     async with sm() as session:
-        ext = Extension(number="3001", display_name="Has Ext", sip_password="x" * 16)
+        ext = Extension(
+            number="3001",
+            display_name="Has Ext",
+            sip_password_encrypted=encrypt_for_test("x" * 16, app=app),
+        )
         session.add(ext)
         await session.flush()
         session.add(Device(mac_address=_mac(1), extension_id=ext.id))
@@ -171,7 +180,11 @@ async def test_sync_duplicate_mac_on_existing_device_last_wins(app) -> None:
     """既存端末に対する重複 MAC リースでも最後のリースが勝つ。extension 紐付けは維持される。"""
     sm = app.state.sessionmaker
     async with sm() as session:
-        ext = Extension(number="4001", display_name="E", sip_password="x" * 16)
+        ext = Extension(
+            number="4001",
+            display_name="E",
+            sip_password_encrypted=encrypt_for_test("x" * 16, app=app),
+        )
         session.add(ext)
         await session.flush()
         session.add(

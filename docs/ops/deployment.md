@@ -93,7 +93,7 @@ millicallctl logs core | grep 初期管理者
 core 起動時に自動実行**されるため手動操作は不要。ただし更新前のバックアップを強く推奨する。
 
 ```bash
-# 1) 念のためバックアップ（data/ と .env を backups/ に tar.gz）
+# 1) 念のためバックアップ（data/ と .env を暗号化して backups/ へ。パスフレーズを聞かれる）
 millicallctl backup
 
 # 2) 更新：compose を最新へ再取得 → イメージ pull → 再起動
@@ -152,15 +152,46 @@ millicallctl version     # 稼働 digest を確認
 
 タグは immutable（`vX.Y.Z`）を推奨。`latest` は移動するためロールバック先には使わない。
 
+> **SIP 認証情報の暗号化（マイグレーション 0027）より前のバージョンへ戻す場合**: 旧バージョンの
+> core は暗号化列を読めず、0027 も知らないため起動できない。pin する前に、新しいイメージのまま
+> DB を 0027 の 1 つ前へ戻す（鍵で復号して平文列に戻る）。または 0027 適用前のバックアップを
+> `millicallctl restore` で戻す。
+>
+> ```bash
+> cd ~/millicall
+> docker compose stop core
+> docker compose run --rm --no-deps core \
+>   uv run --no-dev alembic -x secrets_file=/app/data/secrets.json downgrade -1   # 0027 が head のとき
+> # その後 MILLICALL_VERSION を旧タグへ変更して millicallctl update
+> ```
+
 ## 4. バックアップ / リストア
+
+`data/` には DB に加えて `secrets.json`（master_key）と、平文の SIP パスワードを含む
+FreeSWITCH 設定が入る。そのためバックアップは**必ずパスフレーズで暗号化**する。
+暗号化には `openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -md sha256` を使う。
+無暗号のバックアップは作らない。
 
 `data/` の DB には MCP OAuth の登録とトークンのハッシュ、SAML の消費済み ID も含まれる。
 ハッシュだけなのでバックアップから有効なトークンは取り出せない。古いバックアップに戻すと、
 それ以降に認可した MCP コネクタは再認証が必要になる。
 
 ```bash
-millicallctl backup      # ~/millicall/backups/millicall-<UTC>.tar.gz (data/ と .env)
+# 対話入力（確認のため 2 回。12 文字以上）
+millicallctl backup      # ~/millicall/backups/millicall-<UTC>.tar.gz.enc (data/ と .env)
+
+# cron 等の非対話実行: パスフレーズファイル（1 行目を使う。0600 で置く）か環境変数で渡す
+# （どちらも未設定なら失敗し、無暗号では続行しない）
+MILLICALL_BACKUP_PASSPHRASE_FILE=/root/.millicall-backup-pass millicallctl backup
+MILLICALL_BACKUP_PASSPHRASE='...' millicallctl backup
 ```
+
+- パスフレーズは `openssl` に `-pass file:` または `-pass env:`（別名の変数を openssl の起動にだけ渡す）で
+  渡す。コマンドライン（`ps`）には出ない。`MILLICALL_BACKUP_PASSPHRASE` は読み込んだ直後に unset する。
+- 成果物は 0600、`backups/` は 0700。
+- **パスフレーズを失うと復元できない。** バックアップとは別の場所（パスワードマネージャ等）に保管する。
+- バックアップには master_key も含まれる。パスフレーズが漏れれば SIP 認証情報も読めるため、
+  漏えいの恐れがあれば内線パスワードを再生成する（下記）。
 
 整合性を最優先する場合は停止してから取得:
 
@@ -168,13 +199,73 @@ millicallctl backup      # ~/millicall/backups/millicall-<UTC>.tar.gz (data/ と
 millicallctl down && millicallctl backup && millicallctl up
 ```
 
-リストア:
+リストア（停止中に実行する。稼働中のコンテナがあると拒否する）:
 
 ```bash
 cd ~/millicall
 millicallctl down
-tar xzf backups/millicall-<UTC>.tar.gz
+millicallctl restore backups/millicall-<UTC>.tar.gz.enc   # パスフレーズを聞かれる
 millicallctl up
+millicallctl logs core   # 「SIP 認証情報を復号できません」が出ていないこと
+curl -fsS http://127.0.0.1/healthz   # {"status":"ok"}（degraded なら一部の認証情報を復号できていない）
+```
+
+- 既存の `data/` と `.env` は `data.pre-restore-<UTC>`（0700）/ `.env.pre-restore-<UTC>`（0600）に退避する。
+  旧データの鍵と認証情報を含むので、動作を確認したら削除する（削除コマンドを出力する）。
+- 以前の無暗号バックアップ（`millicall-<UTC>.tar.gz`）もそのまま `restore` できる。
+  ファイル先頭のバイト列で形式を判別する。
+- `data/` と `.env` 以外のパスや `..` を含むアーカイブ、通常ファイルとディレクトリ以外（リンク・デバイス・
+  FIFO 等）を含むアーカイブは拒否する。展開時は所有者・権限を復元しない（`--no-same-owner --no-same-permissions`）。
+
+### 鍵（secrets.json）の保管
+
+`data/secrets.json` の `master_key` は、SIP 認証情報・AI プロバイダ API キー・TOTP シークレット・
+SMTP/電話機管理者パスワード・Tailscale auth key の暗号化に使う。暗号化バックアップに含まれるが、
+バックアップとは別に、パスワードマネージャ等へ `secrets.json` の写しを保管しておくと鍵を失ったときに
+戻せる。DB だけを別環境へ移す場合も、同じ `secrets.json` を一緒に置く。
+
+### SIP 認証情報の再生成と復旧
+
+core コンテナ内で実行する。どちらも既定は dry-run で対象の一覧だけを表示し、`--yes` を付けると実行する。
+新しいパスワードは表示しない。管理画面の内線「接続情報」（監査記録あり）で確認する。
+
+```bash
+cd ~/millicall
+# 内線 SIP パスワードの再生成（全内線、または --number で指定）
+docker compose exec core uv run --no-dev python -m millicall.tools.rotate_sip_passwords [--number 1001] --yes
+# master_key を失った場合の復旧（復号できない行だけを対象にする）
+docker compose exec core uv run --no-dev python -m millicall.tools.recover_sip --yes
+millicallctl restart     # 起動時に FreeSWITCH 設定を再生成する
+```
+
+`secrets.json` が無く、DB に暗号化済みの値がある場合、core は起動しない（新しい鍵を黙って作らない）。
+ログに `secrets ファイルがありません` が出る。まず `secrets.json` をバックアップや写しから戻す。
+戻せない場合に限り、core を起動せずに `recover_sip --yes` を実行する。新しい鍵が作られるので、その後に起動する。
+
+```bash
+cd ~/millicall
+docker compose run --rm --no-deps core uv run --no-dev python -m millicall.tools.recover_sip --yes
+millicallctl up
+```
+
+`recover_sip` は次を行う。
+
+- **内線**: SIP パスワードを再生成する。各端末で設定の取り直しが必要。プロビジョニング端末は
+  再起動または resync で cfg を再取得させ、ソフトフォンは新しいパスワードを手で設定する。
+- **トランク**: パスワードを空（再入力待ち）にして無効化する。管理画面でパスワードを再入力してから
+  有効化する（パスワード未設定のまま有効化しようとすると 422 になる）。
+
+master_key を失った場合は、master_key で暗号化していた他の設定も読めなくなる。AI プロバイダ
+API キー、TOTP（再登録が必要）、SMTP/電話機管理者パスワード、Tailscale auth key を再設定する。
+まずは `secrets.json` をバックアップや写しから戻せないか確認する。戻せれば再起動だけで復旧する。
+
+### alembic を直接実行する場合
+
+通常は core 起動時に自動でマイグレーションする。手動で `alembic` を実行する場合、0027（SIP 認証情報の
+暗号化）とその downgrade には master_key が要る。鍵そのものではなく `secrets.json` のパスを渡す。
+
+```bash
+uv run --no-dev alembic -x secrets_file=/app/data/secrets.json upgrade head
 ```
 
 ## 5. 対応プロセス構成

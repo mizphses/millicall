@@ -85,5 +85,5 @@ class TrunkRead(BaseModel):
             trunk_type=t.trunk_type,  # type: ignore[arg-type]
             inbound_cidrs=[c for c in t.inbound_cidrs.split(",") if c],
             enabled=t.enabled,
-            has_password=bool(t.password),
+            has_password=bool(t.password_encrypted),
         )

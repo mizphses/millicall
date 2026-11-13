@@ -2,6 +2,8 @@
 
 import pytest
 
+from tests.sip_helpers import encrypt_for_test
+
 
 @pytest.mark.asyncio
 async def test_create_trunk_writes_external_profile(auth_client_with_telephony, app):
@@ -199,7 +201,7 @@ async def _notify_trunk_with_replies(app, replies: dict[str, str]) -> tuple[str 
                 display_name="HGW",
                 host="192.168.1.1",
                 username="0312345678",
-                password="pw",
+                password_encrypted=encrypt_for_test("pw", app=app),
             )
         )
         await session.commit()
@@ -209,6 +211,7 @@ async def _notify_trunk_with_replies(app, replies: dict[str, str]) -> tuple[str 
         app.state.change_listener._writer,
         lambda: _ScriptedESL(sink, replies),
         esl_timeout=2.0,
+        secret_box=app.state.change_listener._box,
     )
     async with sm() as session:
         result = await listener.notify(session, sync_gateway="hgw")

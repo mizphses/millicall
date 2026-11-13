@@ -21,6 +21,7 @@ from millicall.deps import (
     get_change_listener,
     get_esl_factory,
     get_netd_client,
+    get_secret_box,
     get_session,
     get_settings_dep,
     require_admin,
@@ -332,6 +333,7 @@ async def quick_provision_endpoint(
             extension_number=body.extension_number,
             display_name=body.display_name,
             telephony_notify=listener.notify,
+            secret_box=get_secret_box(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

@@ -243,7 +243,10 @@ async def test_csrf_missing_or_mismatch_shows_retry_link(mcp_app, browser):
     await _make_user(mcp_app, username="mm", password="MismatchPass1")
     ticket = _ticket(mcp_app)
     data = await _form(browser, ticket, username="mm", password="MismatchPass1")
-    for token in (None, "", data["csrf_token"][:-1] + "A", "x" * 43):
+    # 末尾 1 文字を必ず別の文字に置き換える（token_urlsafe(32) の末尾は 16 通りしかなく、
+    # 固定の "A" では 1/16 の確率で本物と一致してフレークする）。
+    tampered = data["csrf_token"][:-1] + ("A" if data["csrf_token"][-1] != "A" else "B")
+    for token in (None, "", tampered, "x" * 43):
         sent = {k: v for k, v in data.items() if k != "csrf_token"}
         if token is not None:
             sent["csrf_token"] = token
