@@ -331,6 +331,10 @@ async def test_scim_flood_does_not_delay_login(tmp_path):
 
     レビューでの再現（不正トークン 400 件同時送信で /login が 11 秒待ち、その間
     SQLite 書き込みロックを保持）の回帰テスト。
+
+    壁時計の閾値（CI 負荷で flake する、#125）ではなく構造で検証する: SCIM レーンの
+    Argon2 検証を threading.Event で塞いだまま /login を完了させ、完了時点でも
+    SCIM レーンが満杯のままであること（= /login が SCIM レーンに並んでいない）を確認する。
     """
     from millicall.config import Settings
     from millicall.main import create_app
@@ -345,9 +349,14 @@ async def test_scim_flood_does_not_delay_login(tmp_path):
     )
     application = create_app(settings)
     real_verify = hashing.verify_password
+    lane = hashing._LANES[hashing.SCIM_LANE]
+    release = threading.Event()
 
-    def _verify_50ms(*args):
-        time.sleep(0.05)
+    def _verify_blocking_for_scim(*args):
+        # SCIM の不正トークン("bad...")だけレーン上で解放待ちにする。/login の検証は素通し。
+        if any(isinstance(a, str) and a.startswith("bad") for a in args):
+            release.wait(30)
+            return False
         return real_verify(*args)
 
     async with application.router.lifespan_context(application):
@@ -357,24 +366,35 @@ async def test_scim_flood_does_not_delay_login(tmp_path):
         await _create_local_user(application, "flood1", "Passw0rd1")
         transport = ASGITransport(app=application)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
-            with patch.object(hashing, "verify_password", _verify_50ms):
+            with patch.object(hashing, "verify_password", _verify_blocking_for_scim):
                 flood = [
                     asyncio.ensure_future(
                         c.get("/scim/v2/Users", headers={"Authorization": f"Bearer bad{i}"})
                     )
                     for i in range(200)
                 ]
-                await asyncio.sleep(0.2)  # scim レーンを埋める
-                t0 = time.perf_counter()
-                login = await c.post(
-                    "/api/auth/login", json={"username": "flood1", "password": "Passw0rd1"}
-                )
-                login_elapsed = time.perf_counter() - t0
-                results = await asyncio.gather(*flood)
+                try:
+                    # scim レーンが満杯になるまで待つ（上限超過分は即 503 で返る）
+                    for _ in range(100):
+                        if lane.pending >= lane.max_pending:
+                            break
+                        await asyncio.sleep(0.05)
+                    assert lane.pending == lane.max_pending
+                    login = await asyncio.wait_for(
+                        c.post(
+                            "/api/auth/login",
+                            json={"username": "flood1", "password": "Passw0rd1"},
+                        ),
+                        timeout=30,
+                    )
+                    # /login 完了時点でも SCIM レーンは塞がったまま = 別レーンで処理された
+                    assert not release.is_set()
+                    assert lane.pending == lane.max_pending
+                finally:
+                    release.set()
+                    results = await asyncio.gather(*flood)
 
     assert login.status_code == 200
-    # scim レーンは 1 本 × 50ms × 32 件 ≈ 1.6 秒分詰まっているが、/login は別レーン
-    assert login_elapsed < 1.0
     codes = [r.status_code for r in results]
     assert set(codes) <= {401, 503}
     busy = [r for r in results if r.status_code == 503]
@@ -382,8 +402,6 @@ async def test_scim_flood_does_not_delay_login(tmp_path):
     assert all(r.headers.get("Retry-After") for r in busy)
     # 計算されたのは上限以内（＋解放後の後続分）に限られ、大半は計算せずに断っている
     assert codes.count(401) < len(codes) // 2
-
-
 # ---------------------------------------------------------------------------
 # AI プロバイダ生成（SSRF ガードの DNS 解決）
 # ---------------------------------------------------------------------------
