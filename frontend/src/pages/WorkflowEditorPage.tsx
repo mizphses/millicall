@@ -804,6 +804,7 @@ export function WorkflowEditorPage() {
             <ConfigPanel
               nodeId={selectedNode.id}
               nodeLabel={selectedNode.data.label}
+              nodeType={selectedNode.data.nodeType}
               config={selectedNode.data.config}
               schema={selectedNode.data.configSchema}
               onChange={updateConfig}

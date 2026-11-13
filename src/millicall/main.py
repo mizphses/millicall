@@ -14,6 +14,8 @@ from starlette.responses import Response
 from millicall.ai_agents.router import router as ai_agents_router
 from millicall.app_settings.router import router as app_settings_router
 from millicall.app_settings.service import SettingsService
+from millicall.audio_assets import sync_builtin_audio
+from millicall.audio_assets_router import router as audio_assets_router
 from millicall.audit_router import router as audit_router
 from millicall.auth import hashing as argon2_hashing
 from millicall.auth.csrf import CsrfMiddleware
@@ -230,6 +232,12 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
     recorder = CdrRecorder(app.state.sessionmaker)
 
     settings.tts_cache_dir.mkdir(parents=True, exist_ok=True)
+    # 同梱の組み込み音声（FAX受信案内など）を共有 tts ディレクトリ配下へ同期する。
+    # 失敗しても起動は止めない（再生時にファイルが無いだけで済む）。
+    try:
+        sync_builtin_audio(settings.tts_cache_dir)
+    except Exception:
+        logger.exception("組み込み音声の同期に失敗しました")
     app.state.session_registry = SessionRegistry()
     # 発信オーケストレーション（MCP dial/converse）の応答待ちレジストリ。
     # MediaEventRouter が CHANNEL_ANSWER で解決する。
@@ -400,6 +408,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(providers_router)
     app.include_router(ai_agents_router)
     app.include_router(tts_cache_router)
+    app.include_router(audio_assets_router)
     app.include_router(workflows_router)
     app.include_router(network_router)
     app.include_router(provisioning_router)
