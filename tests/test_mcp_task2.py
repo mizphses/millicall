@@ -179,6 +179,38 @@ async def test_transfer_long_destination():
 
 
 @pytest.mark.asyncio
+async def test_transfer_external_sets_domestic_permission_first():
+    """外線宛 (^0\\d+$) は uuid_transfer 前に calling_permission=domestic を付与 (#115)。"""
+    esl = _FakeEsl()
+    cc = EslCallControl(esl, "u1")
+    await cc.transfer("08056187372")
+    assert esl.cmds == [
+        "uuid_setvar u1 calling_permission domestic",
+        "uuid_transfer u1 08056187372 XML default",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_transfer_internal_does_not_set_permission():
+    """内線宛は calling_permission を設定しない (#115)。"""
+    esl = _FakeEsl()
+    cc = EslCallControl(esl, "u1")
+    await cc.transfer("1001")
+    assert esl.cmds == ["uuid_transfer u1 1001 XML default"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["", "0312 345", "03;hangup", "0\nuuid_kill x", "0" * 65])
+async def test_transfer_invalid_dest_raises_before_any_command(bad):
+    """不正な宛先は ESL コマンドを一切送らずに ValueError (#115)。"""
+    esl = _FakeEsl()
+    cc = EslCallControl(esl, "u1")
+    with pytest.raises(ValueError):
+        await cc.transfer(bad)
+    assert esl.cmds == []
+
+
+@pytest.mark.asyncio
 async def test_transfer_uses_shared_lock():
     """transfer も共有ロック (I6) を尊重する。"""
 

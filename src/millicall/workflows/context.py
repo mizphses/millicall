@@ -79,6 +79,9 @@ class ChannelContext:
 
     # Lifecycle flag: set once the channel has been (or is being) hung up.
     hung_up: bool = False
+    # Set once the channel has been handed off to the dialplan (e.g. a successful
+    # blind transfer). The runner must not hang up a handed-off channel.
+    handed_off: bool = False
 
     # resolve_provider() の per-call キャッシュ（menu リトライ等で同一プロバイダを
     # 毎回 DB から再構築しないため。成功した解決結果のみ保持する）。

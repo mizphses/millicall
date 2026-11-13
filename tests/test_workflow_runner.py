@@ -295,3 +295,102 @@ async def test_workflow_runner_agent_resolver():
     result = await resolver(5)
 
     assert result is agent
+
+
+# --------------------------------------------------------------------------- #
+# テスト: STT 未設定でも TTS があれば primitives を構築する (#115)
+# --------------------------------------------------------------------------- #
+
+
+class _DummyTTS:
+    async def synthesize(self, text: str) -> bytes:
+        return b""
+
+
+def _capture_ctx(monkeypatch) -> list:
+    """WorkflowExecutor を差し替え、runner が組み立てた ChannelContext を捕捉する。"""
+    import millicall.workflows.runner as runner_mod
+
+    captured: list = []
+
+    class _CapturingExecutor:
+        def __init__(self, defn, ctx):
+            captured.append(ctx)
+
+        async def execute(self):
+            return None
+
+    monkeypatch.setattr(runner_mod, "WorkflowExecutor", _CapturingExecutor)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_workflow_runner_builds_primitives_without_stt(monkeypatch, tmp_path):
+    """TTS あり・STT なし → primitives が構築される（TTS 再生が無音にならない）。"""
+    captured = _capture_ctx(monkeypatch)
+    wf = _simple_workflow()
+    runner = _make_runner({(Workflow, 1): wf})
+    settings = _FakeSettings()
+    settings.tts_cache_dir = tmp_path
+    runner._settings = settings
+
+    async def _fake_build(workflow, box):
+        return _DummyTTS(), None
+
+    monkeypatch.setattr(runner, "_build_tts_stt", _fake_build)
+
+    await runner.start("test-uuid-nostt", 1)
+
+    assert len(captured) == 1
+    assert captured[0].primitives is not None
+
+
+@pytest.mark.asyncio
+async def test_workflow_runner_no_primitives_without_tts(monkeypatch, tmp_path):
+    """TTS なし → primitives は None（call_control のみで実行）。"""
+    captured = _capture_ctx(monkeypatch)
+    wf = _simple_workflow()
+    runner = _make_runner({(Workflow, 1): wf})
+    settings = _FakeSettings()
+    settings.tts_cache_dir = tmp_path
+    runner._settings = settings
+
+    async def _fake_build(workflow, box):
+        return None, None
+
+    monkeypatch.setattr(runner, "_build_tts_stt", _fake_build)
+
+    await runner.start("test-uuid-notts", 1)
+
+    assert len(captured) == 1
+    assert captured[0].primitives is None
+
+
+# --------------------------------------------------------------------------- #
+# テスト: transfer で終わるワークフローは切断しない (#115)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_workflow_runner_does_not_hangup_after_transfer():
+    """最後のノードが transfer → uuid_kill を送らず、後片付けのみ行う。"""
+    wf = _simple_workflow(
+        definition={
+            "nodes": [
+                {"id": "s1", "type": "start"},
+                {"id": "t1", "type": "transfer", "config": {"destination": "08056187372"}},
+            ],
+            "edges": [{"id": "e1", "source": "s1", "target": "t1", "sourceHandle": "out"}],
+        }
+    )
+    esl = _FakeEsl()
+    runner = _make_runner({(Workflow, 1): wf}, esl)
+    uuid = "test-uuid-transfer"
+
+    await runner.start(uuid, 1)
+
+    assert f"uuid_transfer {uuid} 08056187372 XML default" in esl.commands
+    assert not any(cmd.startswith("uuid_kill") for cmd in esl.commands)
+    # レジストリ / DtmfCollector の後片付けは行われる
+    assert runner._session_registry.get(uuid) is None
+    assert runner._dtmf_collector._queues.get(uuid) is None
