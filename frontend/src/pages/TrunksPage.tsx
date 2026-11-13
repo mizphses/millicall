@@ -449,6 +449,23 @@ export function TrunksPage() {
             />
           </Field>
 
+          <Field
+            label="OPTIONS キープアライブ間隔（秒、0 で無効）"
+            error={fieldErrors.options_ping_seconds}
+            help="OPTIONS に応答しない事業者（Brastel 050 など）は 0 にしてください"
+          >
+            <input
+              className={input({ invalid: fieldErrors.options_ping_seconds ? true : undefined })}
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={3600}
+              value={form.options_ping_seconds}
+              onChange={(e) => setForm((f) => ({ ...f, options_ping_seconds: e.target.value }))}
+              placeholder="30"
+            />
+          </Field>
+
           {form.trunk_type === "sip" && (
             <Field
               label="着信許可 IP 帯（CIDR・改行区切り）"

@@ -304,3 +304,50 @@ async def test_patch_trunk_clears_source_port_to_auto(admin_client):
     patched = await admin_client.patch(f"/api/trunks/{tid}", json={"source_port": None})
     assert patched.status_code == 200, patched.text
     assert patched.json()["source_port"] is None
+
+
+# --- options_ping_seconds（OPTIONS キープアライブ, issue #119） ---
+
+_BASE = {"name": "hgw", "display_name": "A", "host": "h", "username": "u", "password": "p"}
+
+
+async def test_create_trunk_defaults_options_ping_30(admin_client):
+    resp = await admin_client.post("/api/trunks", json=_BASE)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["options_ping_seconds"] == 30
+    got = await admin_client.get(f"/api/trunks/{resp.json()['id']}")
+    assert got.json()["options_ping_seconds"] == 30
+
+
+async def test_patch_trunk_options_ping_to_zero(admin_client, app):
+    created = await admin_client.post("/api/trunks", json=_BASE)
+    tid = created.json()["id"]
+    ext_path = app.state.settings.fs_config_dir / "sip_profiles" / "external_hgw.xml"
+    assert 'name="ping"' in ext_path.read_text()
+
+    patched = await admin_client.patch(f"/api/trunks/{tid}", json={"options_ping_seconds": 0})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["options_ping_seconds"] == 0
+    got = await admin_client.get(f"/api/trunks/{tid}")
+    assert got.json()["options_ping_seconds"] == 0
+    # PATCH で FS 設定が再生成され、ping param が消えていること
+    assert 'name="ping"' not in ext_path.read_text()
+
+
+async def test_patch_trunk_without_options_ping_keeps_value(admin_client):
+    created = await admin_client.post("/api/trunks", json={**_BASE, "options_ping_seconds": 60})
+    assert created.json()["options_ping_seconds"] == 60
+    tid = created.json()["id"]
+    patched = await admin_client.patch(f"/api/trunks/{tid}", json={"display_name": "B"})
+    assert patched.json()["options_ping_seconds"] == 60
+
+
+async def test_options_ping_out_of_range_422(admin_client):
+    for bad in (-1, 3601):
+        resp = await admin_client.post("/api/trunks", json={**_BASE, "options_ping_seconds": bad})
+        assert resp.status_code == 422, resp.text
+    created = await admin_client.post("/api/trunks", json=_BASE)
+    tid = created.json()["id"]
+    for bad in (-1, 3601):
+        resp = await admin_client.patch(f"/api/trunks/{tid}", json={"options_ping_seconds": bad})
+        assert resp.status_code == 422, resp.text

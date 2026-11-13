@@ -175,6 +175,7 @@ async def create_trunk(
         source_port=body.source_port,
         trunk_type=body.trunk_type,
         inbound_cidrs=inbound_cidrs,
+        options_ping_seconds=body.options_ping_seconds,
         enabled=body.enabled,
     )
     session.add(trunk)
@@ -264,6 +265,7 @@ async def update_trunk(
         "caller_id",
         "inbound_extension",
         "trunk_type",
+        "options_ping_seconds",
         "enabled",
     ):
         val = getattr(body, fld)

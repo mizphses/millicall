@@ -36,6 +36,11 @@ docker compose exec freeswitch fs_cli -x "sofia status gateway hikari"
 
 `NOREG` の場合は HGW の内線登録設定とパスワードを確認してください。
 
+状態が約 60 秒ごとに `REGED` と未登録を往復し、ログに `Ping failed <name> with code 408` が
+出る場合は、相手（Brastel 050 等）が SIP OPTIONS に応答していません。`/trunks` の編集画面で
+「OPTIONS キープアライブ間隔（秒、0 で無効）」を `0` にして保存してください
+（詳細: [インターネット SIP トランク](sip-trunk.md#options-キープアライブpingについて)）。
+
 **2. ルーティング設定を確認**
 
 管理 GUI `/routes` で着信番号に対するルートが設定されているか確認します。

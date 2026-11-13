@@ -20,6 +20,7 @@ const original: TrunkRead = {
   source_port: null,
   trunk_type: "hgw",
   inbound_cidrs: [],
+  options_ping_seconds: 30,
   enabled: true,
   has_password: true,
 };
@@ -37,6 +38,7 @@ function formOf(overrides: Partial<TrunkFormValues>): TrunkFormValues {
     source_port: "",
     trunk_type: "hgw",
     inbound_cidrs: "",
+    options_ping_seconds: "30",
     enabled: true,
     ...overrides,
   };
@@ -80,6 +82,12 @@ describe("buildCreatePayload", () => {
     );
     expect(payload.trunk_type).toBe("sip");
     expect(payload.inbound_cidrs).toEqual(["203.0.113.0/24", "198.51.100.7", "192.0.2.0/24"]);
+  });
+
+  it("options_ping_seconds: 既定 30、0 も送る、空は 30", () => {
+    expect(buildCreatePayload(formOf({ password: "x" })).options_ping_seconds).toBe(30);
+    expect(buildCreatePayload(formOf({ options_ping_seconds: "0", password: "x" })).options_ping_seconds).toBe(0);
+    expect(buildCreatePayload(formOf({ options_ping_seconds: "", password: "x" })).options_ping_seconds).toBe(30);
   });
 
   it("既定は hgw / inbound_cidrs は空配列", () => {
@@ -191,6 +199,11 @@ describe("buildUpdatePayload（編集フォーム → PATCH payload 変換）", 
     expect(unchanged.inbound_cidrs).toBeUndefined();
   });
 
+  it("options_ping_seconds を 0 に変更したら含める / unchanged なら含めない", () => {
+    expect(buildUpdatePayload(formOf({ options_ping_seconds: "0" }), original).options_ping_seconds).toBe(0);
+    expect(buildUpdatePayload(formOf({ options_ping_seconds: "30" }), original).options_ping_seconds).toBeUndefined();
+  });
+
   it("複数フィールドを同時に変更したら全て含める", () => {
     const payload = buildUpdatePayload(
       formOf({ display_name: "別名称", password: "changed", enabled: false }),
@@ -251,6 +264,17 @@ describe("validateForm（編集モード）", () => {
     expect(validateForm(formOf({ source_port: "70000" }), "edit").source_port).toBeTruthy();
     expect(validateForm(formOf({ source_port: "5082" }), "edit").source_port).toBeUndefined();
     expect(validateForm(formOf({ source_port: "" }), "edit").source_port).toBeUndefined();
+  });
+});
+
+describe("validateForm（OPTIONS キープアライブ）", () => {
+  it("範囲外・非整数を弾き、0〜3600 と空は許可", () => {
+    expect(validateForm(formOf({ options_ping_seconds: "-1" }), "edit").options_ping_seconds).toBeTruthy();
+    expect(validateForm(formOf({ options_ping_seconds: "3601" }), "edit").options_ping_seconds).toBeTruthy();
+    expect(validateForm(formOf({ options_ping_seconds: "1.5" }), "edit").options_ping_seconds).toBeTruthy();
+    expect(validateForm(formOf({ options_ping_seconds: "0" }), "edit").options_ping_seconds).toBeUndefined();
+    expect(validateForm(formOf({ options_ping_seconds: "3600" }), "edit").options_ping_seconds).toBeUndefined();
+    expect(validateForm(formOf({ options_ping_seconds: "" }), "edit").options_ping_seconds).toBeUndefined();
   });
 });
 

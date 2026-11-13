@@ -121,6 +121,7 @@ class TelephonyChangeListener:
                 source_port=t.source_port,
                 trunk_type=t.trunk_type,
                 inbound_cidrs=[c for c in t.inbound_cidrs.split(",") if c],
+                options_ping_seconds=t.options_ping_seconds,
             )
             for t, password in creds.trunks
         ]
