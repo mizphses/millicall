@@ -1,3 +1,5 @@
+import { useObjectSelection } from "../hooks/useObjectSelection";
+import { Field } from "../components/Field";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Check, Copy, Eye, EyeOff, KeyRound, Pencil, Trash2 } from "lucide-react";
@@ -100,7 +102,10 @@ export function ExtensionsPage() {
     setCredentialsTarget(ext);
   }
 
+  const selection = useObjectSelection(listQuery.data, openEdit, closePanel);
+
   function openCreate() {
+    selection.clear();
     setEditing(null);
     setForm(emptyForm());
     setFieldErrors({});
@@ -108,6 +113,7 @@ export function ExtensionsPage() {
   }
 
   function openEdit(ext: ExtensionRead) {
+    selection.select(ext.id);
     setEditing(ext);
     setForm(formFromExtension(ext));
     setFieldErrors({});
@@ -116,6 +122,7 @@ export function ExtensionsPage() {
 
   function closePanel() {
     setPanelOpen(false);
+    selection.clear();
   }
 
   const saveMutation = useMutation({
@@ -127,6 +134,7 @@ export function ExtensionsPage() {
       queryClient.invalidateQueries({ queryKey: EXTENSIONS_KEY });
       toast.success(editing ? "内線を更新しました" : "内線を作成しました");
       setPanelOpen(false);
+    selection.clear();
     },
     onError: (err) => {
       if (err instanceof NumberConflictError) {
@@ -161,6 +169,7 @@ export function ExtensionsPage() {
       if (Object.keys(payload).length === 0) {
         toast.show("変更はありません", "neutral");
         setPanelOpen(false);
+    selection.clear();
         return;
       }
     }
@@ -229,10 +238,14 @@ export function ExtensionsPage() {
         rows={listQuery.data ?? []}
         rowKey={(row) => row.id}
         loading={listQuery.isLoading}
+        error={listQuery.error}
+        onRetry={() => void listQuery.refetch()}
+        searchable
         emptyMessage="内線がまだありません。右上の「内線を追加」から登録してください。"
       />
 
       <SlidePanel
+        busy={saveMutation.isPending}
         open={panelOpen}
         title={editing ? "内線を編集" : "内線を追加"}
         onClose={closePanel}
@@ -262,7 +275,7 @@ export function ExtensionsPage() {
           onSubmit={handleSubmit}
           className={css({ display: "flex", flexDirection: "column", gap: "4" })}
         >
-          <Field label="内線番号" error={fieldErrors.number}>
+          <Field required label="内線番号" error={fieldErrors.number}>
             <input
               className={input({ invalid: fieldErrors.number ? true : undefined })}
               value={form.number}
@@ -275,7 +288,7 @@ export function ExtensionsPage() {
             />
           </Field>
 
-          <Field label="表示名" error={fieldErrors.display_name}>
+          <Field required label="表示名" error={fieldErrors.display_name}>
             <input
               className={input({ invalid: fieldErrors.display_name ? true : undefined })}
               value={form.display_name}
@@ -497,26 +510,3 @@ function CopyRow({
 /** フォーム 1 項目（ラベル + 入力 + インラインエラー）。
  * wrap 方式: label > span（テキスト）+ children（input 等）で関連付ける。
  * Task 3-8 が踏襲する標準形。 */
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className={css({ display: "block" })}>
-        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
-          {label}
-        </span>
-        {children}
-      </label>
-      {error ? (
-        <p className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>
-      ) : null}
-    </div>
-  );
-}

@@ -5,8 +5,7 @@
  *   - limit / offset による簡易ページネーション（新しい順）
  */
 
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ScrollText, ChevronLeft, ChevronRight } from "lucide-react";
 
 import { css } from "styled-system/css";
@@ -17,34 +16,34 @@ import { auditKey } from "../queryKeys";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
 import {
-  canNext,
-  canPrev,
   formatTarget,
   formatTimestamp,
-  stepOffset,
   type AuditLogRead,
 } from "./audit/format";
 
+import { HistoryFilters, resultRange, useHistoryFilters } from "./cdr/historyFilters";
+
 const PAGE_SIZE = 50;
 
-async function fetchAudit(limit: number, offset: number): Promise<AuditLogRead[]> {
+async function fetchAudit(limit: number, offset: number, filters: ReturnType<typeof useHistoryFilters>["params"]): Promise<AuditLogRead[]> {
   const { data, error } = await api.GET("/api/audit", {
-    params: { query: { limit, offset } },
+    params: { query: { limit, offset, ...filters } },
   });
   if (error) throw new Error("監査ログの取得に失敗しました");
   return (data ?? []) as AuditLogRead[];
 }
 
 export function AuditPage() {
-  const [offset, setOffset] = useState(0);
+  const { page, setPage, filters, params, apply } = useHistoryFilters();
+  const offset = (page - 1) * PAGE_SIZE;
 
   const query = useQuery({
-    queryKey: auditKey(PAGE_SIZE, offset),
-    queryFn: () => fetchAudit(PAGE_SIZE, offset),
-    placeholderData: keepPreviousData,
+    queryKey: [...auditKey(PAGE_SIZE, offset), params],
+    queryFn: () => fetchAudit(PAGE_SIZE + 1, offset, params),
   });
 
-  const rows = query.data ?? [];
+  const rows = (query.data ?? []).slice(0, PAGE_SIZE);
+  const hasNext = (query.data?.length ?? 0) > PAGE_SIZE;
 
   const columns: Column<AuditLogRead>[] = [
     {
@@ -99,12 +98,13 @@ export function AuditPage() {
   ];
 
   return (
-    <PageLayout title="監査ログ" description="システム操作の記録（新しい順）">
+    <PageLayout title="監査ログ" description="操作対象・実行者・期間からシステム操作の記録を確認します。">
+      <HistoryFilters value={filters} onChange={apply} searchLabel="対象・実行者・操作で検索" />
       <div className={css({ display: "flex", flexDirection: "column", gap: "4" })}>
         <div className={css({ display: "flex", alignItems: "center", gap: "2" })}>
           <ScrollText size={18} className={css({ color: "accent" })} />
-          <span className={css({ fontSize: "sm", color: "text.muted" })}>
-            {offset + 1}–{offset + rows.length} 件目
+          <span aria-live="polite" className={css({ fontSize: "sm", color: "text.muted" })}>
+            {query.isLoading ? "読み込み中…" : query.isError ? "取得できませんでした" : `${resultRange(offset, rows.length)} · ページ ${page}`}
           </span>
         </div>
 
@@ -113,7 +113,10 @@ export function AuditPage() {
           rows={rows}
           rowKey={(l) => l.id}
           loading={query.isLoading}
-          emptyMessage="監査ログがありません"
+          error={query.error ?? undefined}
+          onRetry={() => { void query.refetch(); }}
+          searchable={false}
+          emptyMessage="該当する監査ログがありません。期間や検索条件を変更してください。"
         />
 
         {/* ページネーション */}
@@ -121,9 +124,8 @@ export function AuditPage() {
           <button
             type="button"
             className={button({ variant: "secondary", size: "sm" })}
-            style={{ height: "32px" }}
-            disabled={!canPrev(offset) || query.isFetching}
-            onClick={() => setOffset((o) => stepOffset(o, PAGE_SIZE, -1))}
+            disabled={page === 1 || query.isFetching}
+            onClick={() => setPage(String(Math.max(1, page - 1)))}
           >
             <ChevronLeft size={14} />
             前へ
@@ -131,9 +133,8 @@ export function AuditPage() {
           <button
             type="button"
             className={button({ variant: "secondary", size: "sm" })}
-            style={{ height: "32px" }}
-            disabled={!canNext(rows.length, PAGE_SIZE) || query.isFetching}
-            onClick={() => setOffset((o) => stepOffset(o, PAGE_SIZE, 1))}
+            disabled={!hasNext || query.isFetching}
+            onClick={() => setPage(String(page + 1))}
           >
             次へ
             <ChevronRight size={14} />

@@ -2,6 +2,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from xml.etree import ElementTree
 
 from jinja2 import Environment, PackageLoader
 from markupsafe import Markup
@@ -252,6 +253,9 @@ class FreeswitchConfigWriter:
         # テンプレート内で expression="^(...)$" に展開する前にエスケープが必要。
         # Markup でラップすることで HTML autoescape による二重エスケープを防ぐ。
         self._env.filters["re_escape"] = _re_escape_safe
+        # SIP usernames and DID values may contain letters or +. Return a plain
+        # string so Jinja still XML-escapes it after regex literal escaping.
+        self._env.filters["re_escape_literal"] = lambda value: re.escape(str(value))
 
     def update_outbound_policy(
         self, international_allow_prefixes: list[str], sip_reject_anonymous: bool
@@ -341,6 +345,56 @@ class FreeswitchConfigWriter:
         for f in profiles_dir.glob("external_*.xml"):
             f.unlink()
 
+    def render_all(
+        self,
+        extensions: list[ExtensionConfig],
+        trunks: list["TrunkConfig"] | None = None,
+        ring_groups: list["RingGroupConfig"] | None = None,
+        ai_agents: list["AiAgentConfig"] | None = None,
+        workflows: list["WorkflowConfig"] | None = None,
+    ) -> dict[str, str]:
+        """Render and validate the entire candidate configuration without I/O."""
+        trunks = trunks or []
+        ring_groups = ring_groups or []
+        ai_agents = ai_agents or []
+        workflows = workflows or []
+        for trunk in trunks:
+            if not _SAFE_TRUNK_NAME_RE.fullmatch(trunk.name):
+                raise ValueError("invalid stored trunk name")
+        source_ports = allocate_source_ports(
+            trunks,
+            external_sip_port=self._base["external_sip_port"],
+            internal_sip_port=self._base["sip_port"],
+        )
+        rendered: dict[str, str] = {}
+        for ext in extensions:
+            rendered[f"directory/default/{ext.number}.xml"] = self._render(
+                "user.xml.j2",
+                {"number": ext.number, "display_name": ext.display_name,
+                 "sip_password": ext.sip_password, "calling_permission": ext.calling_permission},
+            )
+        rendered["directory/default.xml"] = self._render("directory_default.xml.j2")
+        rendered["sip_profiles/internal.xml"] = self._render("internal.xml.j2")
+        for trunk in trunks:
+            rendered[f"sip_profiles/external_{trunk.name}.xml"] = self._render(
+                "external_trunk.xml.j2",
+                {"trunk": trunk, "source_port": source_ports[trunk.name]},
+            )
+        outbound_trunk = sorted(trunks, key=lambda t: t.name)[0] if trunks else None
+        rendered["dialplan/default.xml"] = self._render(
+            "dialplan_default.xml.j2",
+            {"outbound_trunk": outbound_trunk, "extensions": extensions,
+             "ring_groups": ring_groups, "ai_agents": ai_agents, "workflows": workflows},
+        )
+        rendered["dialplan/public.xml"] = self._render("public.xml.j2", {"trunks": trunks})
+        rendered["autoload_configs/event_socket.conf.xml"] = self._render("event_socket.xml.j2")
+        rendered["autoload_configs/acl.conf.xml"] = self._render("acl.conf.xml.j2", {"trunks": trunks})
+        for content in rendered.values():
+            # Catch XML-invalid control characters before committing or replacing
+            # any existing files; XML metacharacters are already autoescaped.
+            ElementTree.fromstring(content)
+        return rendered
+
     def write_all(
         self,
         extensions: list[ExtensionConfig],
@@ -349,12 +403,9 @@ class FreeswitchConfigWriter:
         ai_agents: list["AiAgentConfig"] | None = None,
         workflows: list["WorkflowConfig"] | None = None,
     ) -> list[Path]:
-        trunks = trunks or []
-        ring_groups = ring_groups or []
-        ai_agents = ai_agents or []
-        workflows = workflows or []
+        rendered = self.render_all(extensions, trunks, ring_groups, ai_agents, workflows)
+        # Do not clear the active configuration until every template validates.
         (self.output_dir / "directory" / "default").mkdir(parents=True, exist_ok=True)
-        self._clear_user_files()
         (self.output_dir / "sip_profiles").mkdir(parents=True, exist_ok=True)
         # 認証情報入りファイルを置くディレクトリは所有者（root: core/FreeSWITCH とも root 実行）
         # 以外から辿れないようにする。ディレクトリ単位 bind mount の inode は chmod では変わらない。
@@ -365,77 +416,7 @@ class FreeswitchConfigWriter:
             self.output_dir / "sip_profiles",
         ):
             os.chmod(d, _CONFIG_DIR_MODE)
-        # stale 掃除: 旧 external.xml と全 external_*.xml を消してから今回分を書く
+        # stale 掃除: 旧ユーザファイル・旧 external.xml と全 external_*.xml を消してから今回分を書く
+        self._clear_user_files()
         self._clear_external_profiles()
-
-        written: list[Path] = []
-        for ext in extensions:
-            content = self._render(
-                "user.xml.j2",
-                {
-                    "number": ext.number,
-                    "display_name": ext.display_name,
-                    "sip_password": ext.sip_password,
-                    "calling_permission": ext.calling_permission,
-                },
-            )
-            written.append(self._write(f"directory/default/{ext.number}.xml", content))
-
-        written.append(
-            self._write("directory/default.xml", self._render("directory_default.xml.j2"))
-        )
-        written.append(self._write("sip_profiles/internal.xml", self._render("internal.xml.j2")))
-        # トランクごとに external_<name>.xml を書く（1 プロファイル = 1 sip-port）。
-        # trunks が空なら external プロファイルは 1 つも書かない（掃除は上で済）。
-        source_ports = allocate_source_ports(
-            trunks,
-            external_sip_port=self._base["external_sip_port"],
-            internal_sip_port=self._base["sip_port"],
-        )
-        for trunk in trunks:
-            if not _SAFE_TRUNK_NAME_RE.fullmatch(trunk.name):
-                raise ValueError(
-                    f"トランク名 '{trunk.name}' に使用できない文字が含まれています "
-                    f"（[A-Za-z0-9_-] のみ）"
-                )
-            content = self._render(
-                "external_trunk.xml.j2",
-                {"trunk": trunk, "source_port": source_ports[trunk.name]},
-            )
-            written.append(self._write(f"sip_profiles/external_{trunk.name}.xml", content))
-        # _load_trunks は Trunk.name で ORDER BY 済みだが、直接呼び出し時の順序も保証するため
-        # ここでも name でソートして先頭を選ぶ（决定論的なトランク選択）
-        outbound_trunk = sorted(trunks, key=lambda t: t.name)[0] if trunks else None
-        written.append(
-            self._write(
-                "dialplan/default.xml",
-                self._render(
-                    "dialplan_default.xml.j2",
-                    {
-                        "outbound_trunk": outbound_trunk,
-                        "extensions": extensions,
-                        "ring_groups": ring_groups,
-                        "ai_agents": ai_agents,
-                        "workflows": workflows,
-                    },
-                ),
-            )
-        )
-        written.append(
-            self._write("dialplan/public.xml", self._render("public.xml.j2", {"trunks": trunks}))
-        )
-        written.append(
-            self._write(
-                "autoload_configs/event_socket.conf.xml",
-                self._render("event_socket.xml.j2"),
-            )
-        )
-        # SIP多層防御: ACL設定（millicall_trusted, default=deny, RFC1918+loopback許可）。
-        # SIP 種別トランクには trunk_<name>_trusted リスト（プロバイダ IP 帯許可）も併せて出す。
-        written.append(
-            self._write(
-                "autoload_configs/acl.conf.xml",
-                self._render("acl.conf.xml.j2", {"trunks": trunks}),
-            )
-        )
-        return written
+        return [self._write(path, content) for path, content in rendered.items()]

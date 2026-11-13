@@ -13,12 +13,17 @@ export function formatDuration(seconds: number | null | undefined): string {
 }
 
 /**
- * バックエンドの naive datetime 文字列（例: "2026-07-05T10:00:00"）を
+ * バックエンドの UTC naive datetime 文字列（例: "2026-07-05T10:00:00"）を
  * ブラウザロケールの日時表示へ整形する。null/空は "-"。
  */
+export function parseUtcDate(value: string): Date {
+  const naive = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value);
+  return new Date(naive ? `${value}Z` : value);
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return "-";
-  const d = new Date(value);
+  const d = parseUtcDate(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString("ja-JP", {
     year: "numeric",

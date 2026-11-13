@@ -1,8 +1,11 @@
 import asyncio
 import ipaddress
+import logging
 import re
+from xml.etree.ElementTree import ParseError
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from jinja2 import TemplateError
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +29,7 @@ from millicall.telephony.hooks import ExtensionChangeListener
 from millicall.trunks.schemas import TrunkCreate, TrunkRead, TrunkUpdate
 
 router = APIRouter(prefix="/api/trunks", tags=["trunks"], dependencies=[Depends(require_admin)])
+logger = logging.getLogger(__name__)
 
 # sofia status gateway の出力から State 行を抜き出す（例: "State   \tREGED"）
 _STATE_RE = re.compile(r"^\s*State\s+(\S+)", re.MULTILINE)
@@ -116,6 +120,33 @@ async def _validate_inbound_extension(session: AsyncSession, number: str) -> Non
         )
 
 
+async def _validate_pending(session: AsyncSession, listener: ExtensionChangeListener) -> None:
+    """Check the pending transaction's complete configuration before committing."""
+    await session.flush()
+    validate = getattr(listener, "validate", None)
+    if validate is None:
+        return
+    try:
+        await validate(session)
+    except (ValueError, ParseError, TemplateError):
+        await session.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail="電話設定を生成できません。入力内容（使用できない制御文字・ポート重複など）を確認してください。変更は保存されていません。",
+        ) from None
+
+
+async def _apply_saved(session: AsyncSession, listener: ExtensionChangeListener, name: str) -> str | None:
+    """A failed live apply must never masquerade as a failed database save."""
+    try:
+        warning = await listener.notify(session, sync_gateway=name)
+        return warning if isinstance(warning, str) else None
+    except Exception as exc:
+        # Do not include configuration values or credentials in the response/log.
+        logger.error("Saved trunk configuration could not be applied (%s)", type(exc).__name__)
+        return "変更は保存されましたが、電話サービスへの反映に失敗しました。サービスの状態を確認し、設定を再保存して反映してください。"
+
+
 @router.post("", response_model=TrunkRead, status_code=status.HTTP_201_CREATED)
 async def create_trunk(
     body: TrunkCreate,
@@ -148,6 +179,7 @@ async def create_trunk(
     )
     session.add(trunk)
     try:
+        await _validate_pending(session, listener)
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -156,8 +188,9 @@ async def create_trunk(
         ) from None
     await session.refresh(trunk)
     # sync_gateway によりゲートウェイが即ロードされ、REGISTER が直ちに試行される
-    await listener.notify(session, sync_gateway=trunk.name)
-    return TrunkRead.from_orm_trunk(trunk)
+    result = TrunkRead.from_orm_trunk(trunk)
+    result.apply_warning = await _apply_saved(session, listener, trunk.name)
+    return result
 
 
 @router.get("", response_model=list[TrunkRead])
@@ -250,16 +283,19 @@ async def update_trunk(
     if "source_port" in body.model_fields_set:
         await _validate_source_port(session, body.source_port, settings, exclude_trunk_id=trunk_id)
         trunk.source_port = body.source_port
+    await _validate_pending(session, listener)
     await session.commit()
     await session.refresh(trunk)
     # killgw + rescan で設定変更(パスワード等)を反映し REGISTER をやり直す
-    await listener.notify(session, sync_gateway=trunk.name)
-    return TrunkRead.from_orm_trunk(trunk)
+    result = TrunkRead.from_orm_trunk(trunk)
+    result.apply_warning = await _apply_saved(session, listener, trunk.name)
+    return result
 
 
 @router.delete("/{trunk_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_trunk(
     trunk_id: int,
+    response: Response,
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
 ) -> None:
@@ -268,6 +304,8 @@ async def delete_trunk(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     gateway_name = trunk.name
     await session.delete(trunk)
+    await _validate_pending(session, listener)
     await session.commit()
     # killgw で FS 上のゲートウェイも破棄する(XML からは消えているので rescan で復活しない)
-    await listener.notify(session, sync_gateway=gateway_name)
+    if await _apply_saved(session, listener, gateway_name):
+        response.headers["X-Apply-Warning"] = "telephony-apply-failed"

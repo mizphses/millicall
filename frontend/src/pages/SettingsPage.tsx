@@ -18,7 +18,9 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { acceptSavedForm, mergeServerForm, FormValidationError, apiError } from "./settings/formState";
 import {
   AlertTriangle,
   Check,
@@ -41,6 +43,7 @@ import { button, input, panel } from "styled-system/recipes";
 import { api } from "../api/client";
 import { APP_SETTINGS_KEY } from "../queryKeys";
 import { PageLayout } from "../components/PageLayout";
+import { UnsavedChangesGuard } from "../components/UnsavedChangesGuard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../toast/ToastProvider";
 import { ScimRoleMapField } from "./settings/ScimRoleMapField";
@@ -78,10 +81,9 @@ async function fetchSettings(): Promise<SettingsRead> {
 async function updateSettings(payload: SettingsUpdate): Promise<SettingsRead> {
   const { data, error, response } = await api.PUT("/api/settings", { body: payload });
   if (response.status === 400) {
-    const body = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(body.detail ?? "設定値が不正です");
+    throw apiError(error, "設定値が不正です");
   }
-  if (error || !data) throw new Error("設定の保存に失敗しました");
+  if (error || !data) throw apiError(error, "設定の保存に失敗しました");
   return data as SettingsRead;
 }
 
@@ -91,8 +93,7 @@ async function fetchIdpMetadata(url: string): Promise<IdpMetadataResponse> {
     body: { url },
   });
   if (response.status === 400) {
-    const body = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(body.detail ?? "IdP メタデータの取得に失敗しました");
+    throw apiError(error, "IdP メタデータの取得に失敗しました");
   }
   if (error || !data) throw new Error("IdP メタデータの取得に失敗しました");
   return data as IdpMetadataResponse;
@@ -121,6 +122,8 @@ type FieldDef = {
   float?: boolean;
   /** 空欄を null として送る（mcp_default_agent_id 用）。 */
   nullable?: boolean;
+  min?: number;
+  max?: number;
 };
 
 type SectionDef = {
@@ -314,6 +317,15 @@ const SECTIONS: SectionDef[] = [
 // ---------------------------------------------------------------------------
 
 /** フォーム状態: boolean はそのまま、それ以外（number 含む）は入力文字列で保持する。 */
+const numberBounds: Record<string, { min: number; max?: number }> = {
+  smtp_port: { min: 1, max: 65535 }, smtp_timeout: { min: 1 },
+  totp_ticket_max_age: { min: 1 }, login_max_attempts: { min: 1 },
+  login_username_max_attempts: { min: 1 }, login_lockout_seconds: { min: 1 },
+  session_max_age: { min: 1 }, playback_timeout_sec: { min: 0 },
+  vad_mode: { min: 0, max: 3 }, vad_min_rms: { min: 0 },
+  saml_allowed_clock_skew_seconds: { min: 0 },
+};
+for (const section of SECTIONS) for (const field of section.fields) Object.assign(field, numberBounds[field.key]);
 type FormState = Record<string, string | boolean>;
 
 function settingsToForm(data: SettingsRead): FormState {
@@ -345,18 +357,20 @@ function sectionToValues(section: SectionDef, form: FormState): Record<string, u
       if (typeof raw === "string" && raw !== "") values[field.key] = raw;
     } else if (field.type === "scim_role_map") {
       // rows JSON → map（グループ名重複は Error → toast で通知）
-      values[field.key] = rowsJsonToRoleMap(raw);
+      try { values[field.key] = rowsJsonToRoleMap(raw); } catch (error) { throw new FormValidationError({ [field.key]: error instanceof Error ? error.message : "割り当てを確認してください" }); }
     } else if (field.type === "boolean") {
       values[field.key] = Boolean(raw);
     } else if (field.type === "number") {
       const text = String(raw).trim();
       if (text === "") {
         if (field.nullable) values[field.key] = null;
-        // nullable でない数値の空欄は「変更しない」扱い
+        else throw new FormValidationError({ [field.key]: `${field.label} を入力してください` });
         continue;
       }
-      const num = field.float ? Number.parseFloat(text) : Number.parseInt(text, 10);
-      if (Number.isNaN(num)) throw new Error(`${field.label} は数値で入力してください`);
+      const num = Number(text);
+      if (!Number.isFinite(num) || (!field.float && !Number.isInteger(num))) throw new FormValidationError({ [field.key]: `${field.label} は${field.float ? "数値" : "整数"}で入力してください` });
+      if (field.key === "playback_timeout_sec" && num <= 0) throw new FormValidationError({ [field.key]: "0 より大きい値を入力してください" });
+      if ((field.min !== undefined && num < field.min) || (field.max !== undefined && num > field.max)) throw new FormValidationError({ [field.key]: `${field.min} ${field.max === undefined ? "以上" : `〜 ${field.max}`}の範囲で入力してください` });
       values[field.key] = num;
     } else {
       values[field.key] = String(raw);
@@ -369,7 +383,7 @@ function sectionToValues(section: SectionDef, form: FormState): Record<string, u
 // ページコンポーネント
 // ---------------------------------------------------------------------------
 
-export function SettingsPage() {
+export function SettingsPage({ section: sectionMode }: { section?: "sso" } = {}) {
   const toast = useToast();
   const queryClient = useQueryClient();
 
@@ -380,36 +394,58 @@ export function SettingsPage() {
   const data = settingsQuery.data;
 
   const [form, setForm] = useState<FormState>({});
-
-  // サーバーデータのロード完了時にフォームを初期化する
+  const baseline = useRef<FormState>();
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const title = sectionMode === "sso" ? "SSO / プロビジョニング" : "設定";
   useEffect(() => {
-    if (data) setForm(settingsToForm(data));
+    if (!data) return;
+    const next = settingsToForm(data);
+    const previous = baseline.current;
+    setForm((current) => mergeServerForm(current, previous, next));
+    baseline.current = next;
   }, [data]);
 
   const saveMutation = useMutation({
-    mutationFn: (payload: SettingsUpdate) => updateSettings(payload),
-    onSuccess: (updated) => {
+    mutationFn: ({ payload }: { payload: SettingsUpdate; submitted: FormState }) => updateSettings(payload),
+    onSuccess: (updated, { payload, submitted }) => {
+      const next = settingsToForm(updated);
+      const previous = baseline.current;
+      setForm((current) => acceptSavedForm(current, previous, next, submitted, [...Object.keys(payload.values ?? {}), ...(payload.reset ?? [])]));
+      baseline.current = next;
       queryClient.setQueryData(APP_SETTINGS_KEY, updated);
+      setFieldErrors({});
+      setSaveError(null);
       toast.success("設定を保存しました");
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : "保存に失敗しました"),
+    onError: (err) => {
+      if (err instanceof FormValidationError) {
+        setFieldErrors(err.fieldErrors);
+        requestAnimationFrame(() => document.getElementById(`setting-${Object.keys(err.fieldErrors)[0]}`)?.focus());
+      }
+      const message = err instanceof Error ? err.message : "保存に失敗しました";
+      setSaveError(message);
+      toast.error(message);
+    },
   });
-
   const saveSection = (section: SectionDef) => {
+    setFieldErrors({});
+    setSaveError(null);
     try {
-      saveMutation.mutate({ values: sectionToValues(section, form) });
+      saveMutation.mutate({ payload: { values: sectionToValues(section, form) }, submitted: { ...form } });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "入力値が不正です");
+      if (err instanceof FormValidationError) {
+        setFieldErrors(err.fieldErrors);
+        requestAnimationFrame(() => document.getElementById(`setting-${Object.keys(err.fieldErrors)[0]}`)?.focus());
+      }
+      setSaveError(err instanceof Error ? err.message : "入力値が不正です");
     }
   };
-
-  const resetKey = (key: string) => {
-    saveMutation.mutate({ reset: [key] });
-  };
+  const resetKey = (key: string) => saveMutation.mutate({ payload: { reset: [key] }, submitted: { ...form } });
 
   if (settingsQuery.isLoading) {
     return (
-      <PageLayout title="設定" description="システム全体の運用設定">
+      <PageLayout title={title} description="システム全体の運用設定">
         <p className={css({ color: "text.muted", py: "6" })}>読み込み中…</p>
       </PageLayout>
     );
@@ -417,7 +453,7 @@ export function SettingsPage() {
 
   if (settingsQuery.isError || !data) {
     return (
-      <PageLayout title="設定" description="システム全体の運用設定">
+      <PageLayout title={title} description="システム全体の運用設定">
         <p className={css({ color: "danger.text", py: "6" })}>
           設定の取得に失敗しました（管理者権限が必要です）。ページを再読み込みしてください。
         </p>
@@ -429,11 +465,14 @@ export function SettingsPage() {
 
   return (
     <PageLayout
-      title="設定"
-      description="システム全体の運用設定（.env の値を上書きします。ここで変更した値は再起動なしで反映されます）"
+      title={title}
+      description={sectionMode === "sso" ? "SAML ログインと SCIM によるユーザー同期を設定します" : "システム全体の運用設定。セクションごとに保存できます。"}
     >
       <div className={css({ display: "flex", flexDirection: "column", gap: "6" })}>
-        {SECTIONS.map((section) => (
+        <UnsavedChangesGuard dirty={Boolean(baseline.current && Object.keys(form).some((key) => form[key] !== baseline.current?.[key]))} busy={saveMutation.isPending} />
+        {!sectionMode && <p><Link to="/sso" className={css({ color: "accent.text", textDecoration: "underline" })}>SSO / プロビジョニングの設定を開く</Link></p>}
+        {saveError && <p role="alert" className={css({ color: "danger.text", fontSize: "sm" })}>{saveError}</p>}
+        {SECTIONS.filter((item) => sectionMode === "sso" ? item.id === "sso" : item.id !== "sso").map((section) => (
           <SectionCard
             key={section.id}
             icon={section.icon}
@@ -449,6 +488,7 @@ export function SettingsPage() {
             ) : null}
             <form
               id={`settings-${section.id}-form`}
+              noValidate
               onSubmit={(e) => {
                 e.preventDefault();
                 saveSection(section);
@@ -492,10 +532,12 @@ export function SettingsPage() {
                     onChange={(v) => setForm((f) => ({ ...f, [field.key]: v }))}
                     onReset={() => resetKey(field.key)}
                     resetDisabled={saveMutation.isPending}
+                    error={fieldErrors[field.key]}
                   />
                 ))}
               </div>
-              <div className={css({ display: "flex", justifyContent: "flex-end" })}>
+              <div className={css({ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "3", flexWrap: "wrap" })}>
+                {section.fields.some((field) => form[field.key] !== baseline.current?.[field.key]) && <span className={css({ fontSize: "sm", color: "text.muted" })}>未保存の変更があります</span>}
                 <button
                   type="submit"
                   className={button({ variant: "primary" })}
@@ -559,224 +601,27 @@ function SectionCard({
   );
 }
 
-/** 1 フィールド: ラベル + 上書きバッジ + 入力 + ヘルプ + 既定に戻す。 */
-function SettingField({
-  field,
-  value,
-  isOverridden,
-  secretSet,
-  onChange,
-  onReset,
-  resetDisabled,
-}: {
-  field: FieldDef;
-  value: string | boolean;
-  isOverridden: boolean;
-  secretSet: boolean;
-  onChange: (v: string | boolean) => void;
-  onReset: () => void;
-  resetDisabled: boolean;
+/** Label, input, help and inline error always share a stable association. */
+function SettingField({ field, value, isOverridden, secretSet, onChange, onReset, resetDisabled, error }: {
+  field: FieldDef; value: string | boolean; isOverridden: boolean; secretSet: boolean;
+  onChange: (v: string | boolean) => void; onReset: () => void; resetDisabled: boolean; error?: string;
 }) {
-  // ラベル行: ラベル + 上書きドット +（上書き中のみ）既定に戻すリンクを 1 行に収める。
-  // ラベルは省略記号で切り、バッジ・リンクは flexShrink:0 + nowrap で潰れ・折り返しを防ぐ。
-  const labelRow = (
-    <span
-      className={css({
-        display: "flex",
-        alignItems: "center",
-        gap: "2",
-        fontSize: "sm",
-        color: "text.muted",
-        mb: "1",
-        minWidth: "0",
-      })}
-    >
-      <span
-        className={css({
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        })}
-        title={field.label}
-      >
-        {field.label}
-      </span>
-      {isOverridden ? (
-        <>
-          <span
-            className={css({
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "1",
-              flexShrink: 0,
-              whiteSpace: "nowrap",
-              color: "accent",
-            })}
-            title=".env の値を DB で上書き中"
-          >
-            <span
-              aria-hidden="true"
-              className={css({
-                width: "6px",
-                height: "6px",
-                borderRadius: "50%",
-                bg: "accent",
-              })}
-            />
-            上書き中
-          </span>
-          <button
-            type="button"
-            onClick={onReset}
-            disabled={resetDisabled}
-            title=".env の既定値に戻す"
-            className={css({
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "1",
-              ml: "auto",
-              flexShrink: 0,
-              whiteSpace: "nowrap",
-              fontSize: "sm",
-              color: "text.muted",
-              cursor: "pointer",
-              _hover: { color: "accent" },
-              _disabled: { opacity: 0.5, cursor: "not-allowed" },
-            })}
-          >
-            <RotateCcw size={12} />
-            既定に戻す
-          </button>
-        </>
-      ) : null}
-    </span>
-  );
-
-  if (field.type === "boolean") {
-    return (
-      <div>
-        {labelRow}
-        <label
-          className={css({
-            display: "flex",
-            alignItems: "center",
-            gap: "2",
-            fontSize: "md",
-            cursor: "pointer",
-          })}
-        >
-          <input
-            type="checkbox"
-            checked={Boolean(value)}
-            onChange={(e) => onChange(e.target.checked)}
-          />
-          有効
-        </label>
-        {field.help ? <FieldHelp text={field.help} /> : null}
-      </div>
-    );
-  }
-
-  if (field.type === "secret") {
-    return (
-      <div>
-        {labelRow}
-        <div
-          className={css({
-            display: "flex",
-            alignItems: "center",
-            gap: "2",
-            fontSize: "sm",
-            color: secretSet ? "text.muted" : "text.subtle",
-            mb: "1",
-          })}
-        >
-          <Shield size={14} />
-          <span>
-            {secretSet ? "設定済み（新しい値を入力すると上書きされます）" : "未設定"}
-          </span>
-        </div>
-        <input
-          className={cx(input(), css({ width: "100%" }))}
-          type="password"
-          value={String(value)}
-          onChange={(e) => onChange(e.target.value)}
-          autoComplete="new-password"
-          placeholder={field.placeholder}
-        />
-        <FieldHelp text="入力した値は暗号化して保存されます。保存後は表示できません。空欄のまま保存すると既存の値を保持します。" />
-      </div>
-    );
-  }
-
-  if (field.type === "scim_role_map") {
-    return (
-      <div className={css({ gridColumn: "1 / -1" })}>
-        {labelRow}
-        <ScimRoleMapField value={String(value)} onChange={(v) => onChange(v)} />
-        {field.help ? <FieldHelp text={field.help} /> : null}
-      </div>
-    );
-  }
-
-  if (field.type === "textarea") {
-    return (
-      <div className={css({ gridColumn: "1 / -1" })}>
-        {labelRow}
-        <textarea
-          className={cx(
-            input(),
-            css({
-              width: "100%",
-              minH: "textareaMin",
-              resize: "vertical",
-              fontFamily: "monospace",
-            }),
-          )}
-          value={String(value)}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={field.placeholder}
-          spellCheck={false}
-        />
-        {field.help ? <FieldHelp text={field.help} /> : null}
-      </div>
-    );
-  }
-
-  if (field.type === "select") {
-    return (
-      <div>
-        {labelRow}
-        <select
-          className={cx(input(), css({ width: "100%" }))}
-          value={String(value)}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          {(field.options ?? []).map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-        {field.help ? <FieldHelp text={field.help} /> : null}
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      {labelRow}
-      <input
-        className={cx(input(), css({ width: "100%" }))}
-        type={field.type === "number" ? "number" : "text"}
-        step={field.float ? "0.1" : undefined}
-        value={String(value)}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={field.placeholder}
-      />
-      {field.help ? <FieldHelp text={field.help} /> : null}
+  const id = `setting-${field.key}`;
+  const help = field.type === "secret" ? "入力した値は暗号化して保存されます。空欄のまま保存すると現在の値を保持します。" : field.help;
+  const attrs = { id, "aria-invalid": Boolean(error), "aria-describedby": [help && `${id}-help`, error && `${id}-error`].filter(Boolean).join(" ") || undefined };
+  return <div className={css({ minW: 0, gridColumn: field.type === "textarea" || field.type === "scim_role_map" ? "1 / -1" : undefined })}>
+    <div className={css({ display: "flex", alignItems: "start", flexWrap: "wrap", gap: "2", mb: "2" })}>
+      <label htmlFor={field.type === "scim_role_map" ? undefined : id} id={`${id}-label`} className={css({ fontSize: "sm", color: "text.muted", overflowWrap: "anywhere" })}>{field.label}</label>
+      {isOverridden && <><span className={css({ fontSize: "sm", color: "accent.text" })}>変更済み</span><button type="button" aria-label={`${field.label}を既定に戻す`} className={cx(button({ variant: "ghost", size: "sm" }), css({ ml: "auto" }))} disabled={resetDisabled} onClick={onReset}><RotateCcw size={14} />既定に戻す</button></>}
     </div>
-  );
+    {field.type === "boolean" ? <div className={css({ display: "flex", alignItems: "center", gap: "2" })}><input {...attrs} type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} /><span aria-hidden="true">{value ? "有効" : "無効"}</span></div>
+      : field.type === "scim_role_map" ? <div role="group" aria-labelledby={`${id}-label`}><ScimRoleMapField value={String(value)} onChange={onChange} /></div>
+      : field.type === "textarea" ? <textarea {...attrs} className={cx(input(), css({ minH: "textareaMin", resize: "vertical", fontFamily: "mono" }))} value={String(value)} onChange={(e) => onChange(e.target.value)} placeholder={field.placeholder} spellCheck={false} />
+      : field.type === "select" ? <select {...attrs} className={input()} value={String(value)} onChange={(e) => onChange(e.target.value)}>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+      : <>{field.type === "secret" && <p className={css({ display: "flex", alignItems: "center", gap: "1", fontSize: "sm", color: "text.muted", mb: "1" })}><Shield size={14} />{secretSet ? "設定済み（入力すると置き換えます）" : "未設定"}</p>}<input {...attrs} className={input()} type={field.type === "secret" ? "password" : field.type === "number" ? "number" : "text"} min={field.min} max={field.max} step={field.float ? "any" : field.type === "number" ? 1 : undefined} required={field.type === "number" && !field.nullable} value={String(value)} onChange={(e) => onChange(e.target.value)} placeholder={field.placeholder} autoComplete={field.type === "secret" ? "new-password" : undefined} /></>}
+    {help && <p id={`${id}-help`} className={css({ fontSize: "sm", color: "text.muted", mt: "1" })}>{help}</p>}
+    {error && <p id={`${id}-error`} role="alert" className={css({ fontSize: "sm", color: "danger.text", mt: "1" })}>{error}</p>}
+  </div>;
 }
 
 /** フィールドの補足説明。 */
@@ -845,12 +690,13 @@ function SamlSetupHelpers({
       })}
     >
       <div>
-        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+        <label htmlFor="idp-metadata-url" className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
           IdP フェデレーションメタデータ URL から自動入力
-        </span>
-        <div className={css({ display: "flex", gap: "2" })}>
+        </label>
+        <div className={css({ display: "flex", flexWrap: "wrap", gap: "2" })}>
           <input
             className={cx(input(), css({ flex: "1" }))}
+            id="idp-metadata-url"
             type="url"
             value={metadataUrl}
             onChange={(e) => setMetadataUrl(e.target.value)}
@@ -877,6 +723,7 @@ function SamlSetupHelpers({
         <FieldHelp text="Entra ID 等のメタデータ URL を貼ると、IdP Entity ID・IdP SSO URL・IdP X.509 証明書を取得してフォームに反映します（この時点では保存されません）。" />
       </div>
       <div>
+        <p className={css({ fontSize: "sm", mb: "3" })}><a href="/saml/metadata" target="_blank" rel="noreferrer" className={css({ color: "accent.text", textDecoration: "underline" })}>SP メタデータを開く（別タブ）</a></p>
         <button
           type="button"
           className={button({ variant: "secondary" })}
@@ -919,6 +766,7 @@ function ScimProvisioningBlock({ scimEnabled }: { scimEnabled: boolean }) {
     mutationFn: rotateScimToken,
     onSuccess: (t) => {
       setToken(t);
+      setConfirmOpen(false);
       toast.success("SCIM トークンを発行しました");
     },
     onError: (err) =>
@@ -991,10 +839,7 @@ function ScimProvisioningBlock({ scimEnabled }: { scimEnabled: boolean }) {
         confirmLabel="発行する"
         destructive
         busy={rotateMutation.isPending}
-        onConfirm={() => {
-          setConfirmOpen(false);
-          rotateMutation.mutate();
-        }}
+        onConfirm={() => rotateMutation.mutate()}
         onCancel={() => setConfirmOpen(false)}
       />
     </div>

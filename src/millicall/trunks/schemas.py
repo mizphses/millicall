@@ -67,6 +67,8 @@ class TrunkRead(BaseModel):
     inbound_cidrs: list[str]
     enabled: bool
     has_password: bool
+    # Mutation responses distinguish persistence from live telephony application.
+    apply_warning: str | None = None
 
     @classmethod
     def from_orm_trunk(cls, t: Trunk) -> "TrunkRead":

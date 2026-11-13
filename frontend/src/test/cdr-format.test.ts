@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatDuration, formatDateTime, formatLatency } from "../pages/cdr/format";
+import { formatDuration, formatDateTime, formatLatency, parseUtcDate } from "../pages/cdr/format";
 
 describe("formatDuration（秒 → mm:ss）", () => {
   it("60 秒未満はゼロ埋めの秒", () => {
@@ -31,6 +31,10 @@ describe("formatDuration（秒 → mm:ss）", () => {
 });
 
 describe("formatDateTime（ISO → ロケール日時）", () => {
+  it("UTC naive timestamps agree with explicit UTC for local date filtering", () => {
+    expect(parseUtcDate("2026-11-09T16:00:00").toISOString()).toBe("2026-11-09T16:00:00.000Z");
+    expect(formatDateTime("2026-11-09T16:00:00")).toBe(formatDateTime("2026-11-09T16:00:00Z"));
+  });
   it("null / 空文字は '-'", () => {
     expect(formatDateTime(null)).toBe("-");
     expect(formatDateTime(undefined)).toBe("-");
