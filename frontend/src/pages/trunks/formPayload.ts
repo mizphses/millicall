@@ -33,6 +33,11 @@ export interface TrunkFormValues {
    * payload 変換時に配列へ split する。空 = ACL を掛けない。
    */
   inbound_cidrs: string;
+  /**
+   * OPTIONS キープアライブ間隔（秒）。0 = 無効。
+   * 数値文字列で保持し、payload 変換時に number へ写す。
+   */
+  options_ping_seconds: string;
   enabled: boolean;
 }
 
@@ -58,6 +63,7 @@ export function emptyForm(): TrunkFormValues {
     source_port: "",
     trunk_type: "hgw",
     inbound_cidrs: "",
+    options_ping_seconds: "30",
     enabled: true,
   };
 }
@@ -76,6 +82,7 @@ export function formFromTrunk(trunk: TrunkRead): TrunkFormValues {
     source_port: trunk.source_port != null ? String(trunk.source_port) : "",
     trunk_type: trunk.trunk_type,
     inbound_cidrs: trunk.inbound_cidrs.join("\n"),
+    options_ping_seconds: String(trunk.options_ping_seconds),
     enabled: trunk.enabled,
   };
 }
@@ -95,8 +102,16 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
     source_port: parseSourcePort(form.source_port),
     trunk_type: form.trunk_type,
     inbound_cidrs: parseCidrs(form.inbound_cidrs),
+    options_ping_seconds: parseOptionsPing(form.options_ping_seconds),
     enabled: form.enabled,
   };
+}
+
+/** OPTIONS キープアライブ間隔の文字列を number に変換する。空 = 既定 30。 */
+function parseOptionsPing(raw: string): number {
+  const trimmed = raw.trim();
+  if (trimmed === "") return 30;
+  return Number(trimmed);
 }
 
 /** フォームの送信元ポート文字列を number | null に変換する。空 = null（自動採番）。 */
@@ -175,6 +190,11 @@ export function buildUpdatePayload(
     payload.inbound_cidrs = cidrs;
   }
 
+  const optionsPing = parseOptionsPing(form.options_ping_seconds);
+  if (optionsPing !== original.options_ping_seconds) {
+    payload.options_ping_seconds = optionsPing;
+  }
+
   if (form.enabled !== original.enabled) {
     payload.enabled = form.enabled;
   }
@@ -239,6 +259,15 @@ export function validateForm(
     const n = Number(sourcePort);
     if (!Number.isInteger(n) || n < 1024 || n > 65535) {
       errors.source_port = "送信元ポートは 1024〜65535 の整数で入力してください";
+    }
+  }
+
+  // OPTIONS キープアライブ: 空は許可（既定 30）。入力があれば 0〜3600 の整数。
+  const optionsPing = form.options_ping_seconds.trim();
+  if (optionsPing !== "") {
+    const n = Number(optionsPing);
+    if (!Number.isInteger(n) || n < 0 || n > 3600) {
+      errors.options_ping_seconds = "OPTIONS キープアライブ間隔は 0〜3600 の整数で入力してください";
     }
   }
 

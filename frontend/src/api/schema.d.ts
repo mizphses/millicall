@@ -2802,6 +2802,11 @@ export interface components {
             inbound_extension: string;
             /** Name */
             name: string;
+            /**
+             * Options Ping Seconds
+             * @default 30
+             */
+            options_ping_seconds: number;
             /** Password */
             password: string;
             /** Source Port */
@@ -2839,6 +2844,8 @@ export interface components {
             inbound_extension: string;
             /** Name */
             name: string;
+            /** Options Ping Seconds */
+            options_ping_seconds: number;
             /** Source Port */
             source_port: number | null;
             /**
@@ -2879,6 +2886,8 @@ export interface components {
             inbound_cidrs?: string[] | null;
             /** Inbound Extension */
             inbound_extension?: string | null;
+            /** Options Ping Seconds */
+            options_ping_seconds?: number | null;
             /** Password */
             password?: string | null;
             /** Source Port */

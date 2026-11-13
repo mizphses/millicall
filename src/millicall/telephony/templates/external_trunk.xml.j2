@@ -27,7 +27,9 @@
       <param name="expire-seconds"     value="3600"/>
       <param name="retry-seconds"      value="30"/>
       <param name="caller-id-in-from"  value="true"/>
-      <param name="ping"               value="30"/>
+{%- if trunk.options_ping_seconds %}
+      <param name="ping"               value="{{ trunk.options_ping_seconds }}"/>
+{%- endif %}
       <param name="context"            value="public"/>
     </gateway>
   </gateways>

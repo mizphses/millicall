@@ -86,6 +86,8 @@ class TrunkConfig:
     trunk_type: str = "hgw"
     # SIP 種別の着信許可 CIDR リスト。空 = ACL を掛けない（ポート開放）。
     inbound_cidrs: list[str] = field(default_factory=list)
+    # gateway の OPTIONS キープアライブ間隔（秒）。0 = ping param を出さない（無効）。
+    options_ping_seconds: int = 30
 
 
 def allocate_source_ports(

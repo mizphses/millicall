@@ -26,6 +26,8 @@ class TrunkCreate(BaseModel):
     trunk_type: TrunkType = "hgw"
     # SIP 種別の着信許可 CIDR リスト（プロバイダ IP 帯）。空 = ACL を掛けない。
     inbound_cidrs: list[str] = Field(default_factory=list)
+    # OPTIONS キープアライブ間隔（秒）。0 = 無効（OPTIONS に応答しない事業者向け）。
+    options_ping_seconds: int = Field(default=30, ge=0, le=3600)
     enabled: bool = True
 
 
@@ -46,6 +48,8 @@ class TrunkUpdate(BaseModel):
     # None = 変更しない。
     trunk_type: TrunkType | None = None
     inbound_cidrs: list[str] | None = None
+    # None = 変更しない / 0 = OPTIONS キープアライブ無効。
+    options_ping_seconds: int | None = Field(default=None, ge=0, le=3600)
     enabled: bool | None = None
 
 
@@ -65,6 +69,8 @@ class TrunkRead(BaseModel):
     trunk_type: TrunkType
     # SIP 種別の着信許可 CIDR リスト（保存はカンマ区切り文字列）。
     inbound_cidrs: list[str]
+    # OPTIONS キープアライブ間隔（秒）。0 = 無効。
+    options_ping_seconds: int
     enabled: bool
     has_password: bool
     # Mutation responses distinguish persistence from live telephony application.
@@ -84,6 +90,7 @@ class TrunkRead(BaseModel):
             source_port=t.source_port,
             trunk_type=t.trunk_type,  # type: ignore[arg-type]
             inbound_cidrs=[c for c in t.inbound_cidrs.split(",") if c],
+            options_ping_seconds=t.options_ping_seconds,
             enabled=t.enabled,
             has_password=bool(t.password_encrypted),
         )

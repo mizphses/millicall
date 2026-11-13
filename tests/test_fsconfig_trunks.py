@@ -31,6 +31,7 @@ def _trunk(name: str, **kw) -> TrunkConfig:
         source_port=kw.get("source_port"),
         trunk_type=kw.get("trunk_type", "hgw"),
         inbound_cidrs=kw.get("inbound_cidrs", []),
+        options_ping_seconds=kw.get("options_ping_seconds", 30),
     )
 
 
@@ -266,3 +267,39 @@ def test_build_reload_commands_rejects_unsafe_changed_name():
     # stop 経路でも名前を検証する
     with pytest.raises(ValueError):
         build_reload_commands([], changed="a; rm -rf /")
+
+
+# --- OPTIONS キープアライブ（gateway の ping param, issue #119） ---
+
+
+def _gateway_params(ext: str) -> dict[str, str]:
+    root = ET.fromstring(ext)
+    gw = root.find("gateways/gateway")
+    assert gw is not None
+    return {p.get("name"): p.get("value") for p in gw.findall("param")}
+
+
+def test_gateway_ping_defaults_to_30(tmp_path):
+    w = _writer(tmp_path)
+    w.write_all([], trunks=[_trunk("hgw")])
+    ext = (tmp_path / "sip_profiles" / "external_hgw.xml").read_text()
+    assert 'name="ping"               value="30"' in ext
+    assert _gateway_params(ext)["ping"] == "30"
+
+
+def test_gateway_ping_zero_omits_param(tmp_path):
+    """0 は ping param 自体を出さない（OPTIONS に応答しない事業者向け）。"""
+    w = _writer(tmp_path)
+    w.write_all([], trunks=[_trunk("brastel", trunk_type="sip", options_ping_seconds=0)])
+    ext = (tmp_path / "sip_profiles" / "external_brastel.xml").read_text()
+    assert 'name="ping"' not in ext
+    params = _gateway_params(ext)
+    assert "ping" not in params
+    assert params["register"] == "true"
+
+
+def test_gateway_ping_custom_value(tmp_path):
+    w = _writer(tmp_path)
+    w.write_all([], trunks=[_trunk("hgw", options_ping_seconds=60)])
+    ext = (tmp_path / "sip_profiles" / "external_hgw.xml").read_text()
+    assert _gateway_params(ext)["ping"] == "60"

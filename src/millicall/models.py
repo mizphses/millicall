@@ -191,6 +191,13 @@ class Trunk(Base):
     inbound_cidrs: Mapped[str] = mapped_column(
         String(255), nullable=False, default="", server_default=""
     )
+    # gateway の OPTIONS キープアライブ間隔（秒。sofia gateway の ping param）。0 = 無効。
+    # NTT HGW は OPTIONS に 405 を返し（成功扱い）既定 30 で問題ないが、OPTIONS に
+    # 応答しない事業者（Brastel 050 等）は 408 で gateway が DOWN → 再 REGISTER と
+    # 登録がフラップするため 0 にする（issue #119）。
+    options_ping_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30, server_default="30"
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )

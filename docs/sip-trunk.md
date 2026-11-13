@@ -32,6 +32,7 @@ HGW 種別は HGW の癖に合わせた設定（DTMF 無効化・Session-Timers�
    | 発信者番号 | 発信時に通知する番号 |
    | 着信先内線番号 | 受電させる内線 / AI / ワークフロー番号 |
    | 着信許可 IP 帯（CIDR） | プロバイダの SIP サーバ IP 帯（1 行 1 件） |
+   | OPTIONS キープアライブ間隔（秒、0 で無効） | **`0`**（Brastel は OPTIONS に応答しないため。後述） |
 
 3. 「保存」すると対象トランクのプロファイルが再起動され、直ちに REGISTER が試行されます。
 4. 一覧の状態バッジが「登録済み」になれば成功です。API では:
@@ -66,10 +67,32 @@ MILLICALL_SIP_EXTERNAL_IP=stun:stun.freeswitch.org
 HGW 傘下（NAT 内）で使う場合は、HGW 側で当該トランクの送信元 SIP ポート（既定 `5080` から +2 ずつ
 自動採番／`/trunks` で明示指定可）に対する UDP ポート転送が必要になることがあります。
 
+## OPTIONS キープアライブ（ping）について
+
+各トランクの gateway は既定で 30 秒ごとに SIP OPTIONS を送り、相手の生存を確認します
+（FreeSWITCH の gateway param `ping`）。NTT HGW は OPTIONS に `405` を返し、これは応答あり
+（成功）として扱われるため既定の `30` のままで問題ありません。
+
+一方、Brastel 050 など **OPTIONS に応答しない事業者** では毎回 `408` タイムアウトとなり、
+FreeSWITCH が gateway を DOWN 扱いにして unregister → 再 REGISTER を繰り返します。
+その結果、REGISTER 自体は成功しているのに約 60 秒周期で「登録済み」と「未登録」を往復します。
+FreeSWITCH のログには次のような行が繰り返し出ます。
+
+```
+[WARNING] sofia.c Unregister brastel01
+[WARNING] sofia.c Ping failed brastel01 with code 408 - count 1/0/1, state DOWN
+[WARNING] sofia_reg.c brastel01 Failed Registration [0], setting retry to 30 seconds.
+```
+
+この場合はトランク編集画面の「OPTIONS キープアライブ間隔（秒、0 で無効）」を **`0`** にして
+保存してください。`0` のときは `ping` param 自体を出力しません（OPTIONS を送らない）。
+値は 0〜3600 秒で指定でき、API では `options_ping_seconds` です。
+
 ## トラブルシュート
 
 | 症状 | 確認・対処 |
 |---|---|
+| 登録が約 60 秒ごとに「登録済み」⇔「未登録」を往復する | ログに `Ping failed ... 408` が出ていれば OPTIONS 非応答の事業者。OPTIONS キープアライブ間隔を `0` にする（上記参照） |
 | `UNREGED` / `FAIL_WAIT` / 未登録 | ユーザー名・パスワード・ホスト名を確認。`sofia status gateway <name>` の失敗理由（401/403 等）を確認 |
 | 登録は成功するが着信しない | 着信許可 CIDR にプロバイダの SIP サーバ IP 帯が含まれているか確認。DID 番号のルーティングを確認 |
 | 片方向しか音声が聞こえない | NAT 越えの問題。`MILLICALL_SIP_EXTERNAL_IP` と HGW のポート転送を確認 |
