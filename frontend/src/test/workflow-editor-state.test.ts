@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { Edge } from "@xyflow/react";
 import {
+  connectEdge,
   editorSnapshot,
+  isValidWorkflowConnection,
   placeNewNode,
   readDefinition,
   rowsFromValue,
@@ -181,5 +184,53 @@ describe("new node placement", () => {
         readDefinition(definition, [type]).nodes,
       ),
     ).toEqual({ x: 800, y: 200 });
+  });
+});
+
+describe("connectEdge", () => {
+  // 1 -> 2 -> 3 が配線済み、条件ノード c は true/false 両方配線済み
+  const base: Edge[] = [
+    { id: "e12", source: "1", target: "2", sourceHandle: "out" },
+    { id: "e23", source: "2", target: "3", sourceHandle: "out" },
+    { id: "ct", source: "c", target: "2", sourceHandle: "true" },
+    { id: "cf", source: "c", target: "3", sourceHandle: "false" },
+  ];
+  const connection = (
+    source: string,
+    sourceHandle: string | null,
+    target: string,
+  ) => ({ source, sourceHandle, target, targetHandle: null });
+
+  it("replaces the existing edge from the same source handle", () => {
+    const next = connectEdge(base, connection("1", "out", "3"));
+    const fromOne = next.filter((edge) => edge.source === "1");
+    expect(fromOne).toHaveLength(1);
+    expect(fromOne[0]).toMatchObject({ target: "3", sourceHandle: "out" });
+    expect(next.map((edge) => edge.id)).not.toContain("e12");
+  });
+
+  it("keeps edges from other handles and other nodes", () => {
+    const next = connectEdge(base, connection("c", "true", "3"));
+    expect(next.map((edge) => edge.id)).toEqual(
+      expect.arrayContaining(["e12", "e23", "cf"]),
+    );
+    expect(next.map((edge) => edge.id)).not.toContain("ct");
+    expect(
+      next.filter((edge) => edge.source === "c" && edge.sourceHandle === "true"),
+    ).toEqual([expect.objectContaining({ target: "3" })]);
+    expect(next).toHaveLength(4);
+  });
+
+  it("treats a missing sourceHandle the same as null", () => {
+    const legacy: Edge[] = [{ id: "x", source: "1", target: "2" }];
+    const next = connectEdge(legacy, connection("1", null, "3"));
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatchObject({ source: "1", target: "3" });
+  });
+
+  it("rejects self-loops", () => {
+    expect(connectEdge(base, connection("2", "out", "2"))).toBe(base);
+    expect(isValidWorkflowConnection({ source: "2", target: "2" })).toBe(false);
+    expect(isValidWorkflowConnection({ source: "1", target: "2" })).toBe(true);
   });
 });

@@ -137,6 +137,31 @@ async def test_linear_flow_completes(ctx: ChannelContext) -> None:
     assert visited == ["a"]
 
 
+@pytest.mark.asyncio
+async def test_duplicate_edges_from_same_handle_follow_first_and_warn(
+    ctx: ChannelContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    """validate_graph で弾かれる形だが、実行器は落とさず最初のエッジを辿り警告する。"""
+
+    async def fake_set_var(node, c):
+        return None
+
+    defn = make_def(
+        [
+            {"id": "s", "type": "start"},
+            {"id": "a", "type": "set_variable", "config": {"variable": "x", "value": "1"}},
+            {"id": "e", "type": "end"},
+        ],
+        [edge("e1", "s", "out", "a"), edge("e2", "s", "out", "e"), edge("e3", "a", "out", "e")],
+    )
+    with caplog.at_level("WARNING", logger="millicall.workflows.executor"):
+        result = await WorkflowExecutor(
+            defn, ctx, handlers={"set_variable": fake_set_var}
+        ).execute()
+    assert result.reached_nodes == ["s", "a", "e"]
+    assert any("edges from handle" in r.getMessage() for r in caplog.records)
+
+
 # --------------------------------------------------------------------------- #
 # Executor: branching (handle match selects route)
 # --------------------------------------------------------------------------- #
