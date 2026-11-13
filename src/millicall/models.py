@@ -198,6 +198,23 @@ class Trunk(Base):
     options_ping_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=30, server_default="30"
     )
+    # 音声・FAX 併用回線の FAX 自動検知（issue #121）。True のとき public.xml の着信で
+    # transfer の前に spandsp_start_fax_detect を仕掛け、CNG（発呼側 FAX の 1100Hz）を
+    # 検知したら fax_route_number（FAX 受信番号）へ切り替える。
+    fax_detect_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    # CNG 検知窓（秒）。5〜120。
+    fax_detect_timeout_sec: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=20, server_default="20"
+    )
+    # CNG 検知時の切替先 FAX 受信番号（fax_receivers.number）。NULL = 未設定。
+    fax_route_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 検知中に案内音声（tts_cache_dir/builtin/fax_receive_notice.wav, issue #123）を流す。
+    # True のときは先に answer してから検知を仕掛け、案内を再生してから通常の transfer へ進む。
+    fax_detect_announce: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )
@@ -245,6 +262,109 @@ class RingGroupMember(Base):
     )
     extension_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("extensions.id", ondelete="CASCADE"), nullable=False
+    )
+
+
+class FaxReceiver(Base):
+    """FAX 受信番号（統一番号プランの一員。kind="fax"）。
+
+    この番号への着信（トランク着信の transfer / FAX 自動検知の切替）は
+    default コンテキストの fax_<number> extension で rxfax により受信する。
+    """
+
+    __tablename__ = "fax_receivers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
+class Fax(Base):
+    """受信した FAX（rxfax の結果）。tiff_path / pdf_path は fax_dir 配下の絶対パス。"""
+
+    __tablename__ = "faxes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    call_uuid: Mapped[str] = mapped_column(String(150), nullable=False, index=True)
+    from_number: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="", server_default=""
+    )
+    to_number: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="", server_default=""
+    )
+    remote_station_id: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", server_default=""
+    )
+    pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    success: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    result_text: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    tiff_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), index=True
+    )
+
+
+class Webhook(Base):
+    """外部システムへのイベント通知先（issue #121）。secret_encrypted は repr/ログに出さない。"""
+
+    __tablename__ = "webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    # HMAC-SHA256 署名用シークレット（SecretBox 暗号化）。空文字 = 署名しない。
+    secret_encrypted: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    # 購読イベント名の JSON 配列（例: ["call.inbound", "fax.received"]）。
+    events: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        attrs = [
+            f"{k}={v!r}"
+            for k, v in self.__dict__.items()
+            if not k.startswith("_") and k != "secret_encrypted"
+        ]
+        return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class WebhookDelivery(Base):
+    """Webhook 配信ログ（1 試行 = 1 行。webhook ごとに直近 200 件のみ保持）。"""
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (Index("ix_webhook_deliveries_webhook_id_id", "webhook_id", "id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    webhook_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False
+    )
+    delivery_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    event: Mapped[str] = mapped_column(String(50), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    success: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
     )
 
 

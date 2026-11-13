@@ -1,6 +1,7 @@
 """統一内線番号プラン。
 
-「番号を持つものはすべて内線」— extensions / ai_agents / workflows / ring_groups が
+「番号を持つものはすべて内線」— extensions / ai_agents / workflows / ring_groups /
+fax_receivers が
 単一の番号空間を共有する。SQLite はテーブル横断の UNIQUE を張れないため、
 一意性は本モジュールの assert_number_free をすべての書き込み API が通すことで担保する。
 """
@@ -11,7 +12,15 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from millicall.models import AiAgent, Extension, RingGroup, RingGroupMember, Trunk, Workflow
+from millicall.models import (
+    AiAgent,
+    Extension,
+    FaxReceiver,
+    RingGroup,
+    RingGroupMember,
+    Trunk,
+    Workflow,
+)
 
 # 全種別共通の内線番号形式（2〜6桁）
 NUMBER_RE = re.compile(r"^\d{2,6}$")
@@ -21,6 +30,7 @@ KIND_EXTENSION = "extension"
 KIND_AI_AGENT = "ai_agent"
 KIND_WORKFLOW = "workflow"
 KIND_RING_GROUP = "ring_group"
+KIND_FAX = "fax"
 
 
 class NumberConflictError(ValueError):
@@ -88,6 +98,16 @@ async def list_numbers(session: AsyncSession) -> list[NumberPlanEntry]:
                 enabled=g.enabled,
             )
         )
+    for f in await session.scalars(select(FaxReceiver)):
+        entries.append(
+            NumberPlanEntry(
+                number=f.number,
+                kind=KIND_FAX,
+                id=f.id,
+                label=f.name,
+                enabled=f.enabled,
+            )
+        )
 
     trunks = (await session.scalars(select(Trunk).where(Trunk.inbound_extension != ""))).all()
     by_number = {t.inbound_extension: [] for t in trunks}
@@ -114,6 +134,9 @@ async def find_number(session: AsyncSession, number: str) -> NumberPlanEntry | N
     g = await session.scalar(select(RingGroup).where(RingGroup.number == number))
     if g is not None:
         return NumberPlanEntry(number, KIND_RING_GROUP, g.id, g.name, g.enabled)
+    f = await session.scalar(select(FaxReceiver).where(FaxReceiver.number == number))
+    if f is not None:
+        return NumberPlanEntry(number, KIND_FAX, f.id, f.name, f.enabled)
     return None
 
 

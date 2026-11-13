@@ -32,6 +32,8 @@ from millicall.crypto import SecretBox
 from millicall.db import create_db_engine
 from millicall.db_migrations import sqlite_path, upgrade_to_head
 from millicall.extensions.router import router as extensions_router
+from millicall.fax.router import router as fax_router
+from millicall.fax.service import RXFAX_SUBCLASS, FaxService
 from millicall.mcp_server.ephemeral import EphemeralAgentStore
 from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
@@ -60,6 +62,8 @@ from millicall.telephony.service import (
 from millicall.trunks.router import router as trunks_router
 from millicall.tts_cache.router import router as tts_cache_router
 from millicall.users.router import router as users_router
+from millicall.webhooks.dispatcher import WebhookDispatcher
+from millicall.webhooks.router import router as webhooks_router
 from millicall.workflows.errors import WorkflowValidationError
 from millicall.workflows.router import router as workflows_router
 from millicall.workflows.runner import WorkflowRunner
@@ -238,6 +242,21 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
         sync_builtin_audio(settings.tts_cache_dir)
     except Exception:
         logger.exception("組み込み音声の同期に失敗しました")
+    # 受信 FAX の保存先（FreeSWITCH の rxfax と同一絶対パスを共有する）。
+    settings.fax_dir.mkdir(parents=True, exist_ok=True)
+
+    # Webhook 配信（issue #121）。ESL イベントと FAX 受信から fire-and-forget で送る。
+    webhook_dispatcher = WebhookDispatcher(
+        app.state.sessionmaker, SecretBox(app.state.secrets.master_key)
+    )
+    app.state.webhook_dispatcher = webhook_dispatcher
+    fax_service = FaxService(
+        app.state.sessionmaker,
+        settings.fax_dir,
+        dispatcher=webhook_dispatcher,
+        public_base_url=settings.public_base_url,
+    )
+    app.state.fax_service = fax_service
     app.state.session_registry = SessionRegistry()
     # 発信オーケストレーション（MCP dial/converse）の応答待ちレジストリ。
     # MediaEventRouter が CHANNEL_ANSWER で解決する。
@@ -319,6 +338,9 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
     async def _compose_handler(event: dict) -> None:
         await recorder.handle(event)
         await media_router.handle(event)
+        # どちらも配信/変換をタスクへ逃がして即座に戻る（ESL 処理をブロックしない）。
+        await webhook_dispatcher.handle(event)
+        await fax_service.handle(event)
 
     def _make_event_client(handler):
         return ESLClient(
@@ -327,7 +349,16 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
 
     event_listener = EslEventListener(
         _make_event_client,
-        ["CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_HANGUP_COMPLETE", "PLAYBACK_STOP", "DTMF"],
+        # CUSTOM のサブクラスは CUSTOM の後ろに並べる（mod_event_socket の仕様上、末尾に置く）。
+        [
+            "CHANNEL_CREATE",
+            "CHANNEL_ANSWER",
+            "CHANNEL_HANGUP_COMPLETE",
+            "PLAYBACK_STOP",
+            "DTMF",
+            "CUSTOM",
+            RXFAX_SUBCLASS,
+        ],
         _compose_handler,
     )
     await event_listener.start()
@@ -339,6 +370,7 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
             yield
         finally:
             await event_listener.stop()
+            await webhook_dispatcher.close()
             await esl_command.close()
             await engine.dispose()
             # Argon2 専用 executor を停止し、未開始の計算を取り消す（issue #81）
@@ -417,6 +449,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(scim_router)
     app.include_router(system_router)
     app.include_router(users_router)
+    app.include_router(fax_router)
+    app.include_router(webhooks_router)
 
     @app.exception_handler(WorkflowValidationError)
     async def _workflow_validation_handler(_request, exc: WorkflowValidationError):

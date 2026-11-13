@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.config import Settings
 from millicall.crypto import SecretBox
-from millicall.models import AiAgent, NetworkConfig, Workflow
+from millicall.models import AiAgent, FaxReceiver, NetworkConfig, Workflow
 from millicall.numberplan import load_ring_groups_with_members
 from millicall.secrets_store import Secrets
 from millicall.sip_credentials import (
@@ -21,6 +21,7 @@ from millicall.telephony.esl import ESLClient, ESLError
 from millicall.telephony.fsconfig import (
     AiAgentConfig,
     ExtensionConfig,
+    FaxReceiverConfig,
     FreeswitchConfigWriter,
     RingGroupConfig,
     TrunkConfig,
@@ -62,6 +63,8 @@ def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfi
         # SIP多層防御 (Phase 6 Task 7)
         sip_trusted_cidrs=settings.sip_trusted_cidrs,
         sip_reject_anonymous=settings.sip_reject_anonymous,
+        fax_dir=settings.fax_dir,
+        fax_announce_path=settings.tts_cache_dir / "builtin" / "fax_receive_notice.wav",
     )
 
 
@@ -122,6 +125,10 @@ class TelephonyChangeListener:
                 trunk_type=t.trunk_type,
                 inbound_cidrs=[c for c in t.inbound_cidrs.split(",") if c],
                 options_ping_seconds=t.options_ping_seconds,
+                fax_detect_enabled=t.fax_detect_enabled,
+                fax_detect_timeout_sec=t.fax_detect_timeout_sec,
+                fax_route_number=t.fax_route_number,
+                fax_detect_announce=t.fax_detect_announce,
             )
             for t, password in creds.trunks
         ]
@@ -149,6 +156,12 @@ class TelephonyChangeListener:
             .order_by(AiAgent.number)
         )
         return [AiAgentConfig(number=a.number or "", agent_id=a.id) for a in result]
+
+    async def _load_fax_receivers(self, session: AsyncSession) -> list[FaxReceiverConfig]:
+        result = await session.scalars(
+            select(FaxReceiver).where(FaxReceiver.enabled.is_(True)).order_by(FaxReceiver.number)
+        )
+        return [FaxReceiverConfig(number=f.number, name=f.name) for f in result]
 
     async def _load_child_lan_ip(self, session: AsyncSession) -> str | None:
         """子LAN（netd DHCP ネットワーク）が適用済みなら子LAN GW IP を返す。
@@ -200,12 +213,13 @@ class TelephonyChangeListener:
         ring_groups = await self._load_ring_groups(session)
         ai_agents = await self._load_ai_agents(session)
         workflows = await self._load_workflows(session)
+        fax_receivers = await self._load_fax_receivers(session)
         # 子LAN 適用時は internal プロファイル（sip-ip/rtp-ip/ドメイン）と
         # ディレクトリ・dialplan のドメインを子LAN GW IP へ切り替える。
         # 未適用時は None を渡して従来動作（sip_bind_ip / sip_domain）を維持する。
         child_lan_ip = await self._load_child_lan_ip(session)
         self._writer.set_internal_network(child_lan_ip, child_lan_ip)
-        return (configs, trunks, ring_groups, ai_agents, workflows), status
+        return (configs, trunks, ring_groups, ai_agents, workflows, fax_receivers), status
 
     async def validate(self, session: AsyncSession) -> None:
         """Preflight pending DB changes without touching FreeSWITCH or its files."""

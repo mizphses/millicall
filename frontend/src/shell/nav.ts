@@ -18,6 +18,8 @@ import {
   KeyRound,
   ShieldCheck,
   Settings2,
+  Printer,
+  Webhook,
 } from "lucide-react";
 
 /** サイドナビとヘッダ題で共有するルート定義。 */
@@ -51,6 +53,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: "/ai-agents",  label: "AI エージェント", icon: React.createElement(Bot,       { size: ICON_SIZE }) },
       { path: "/workflows",  label: "ワークフロー",    icon: React.createElement(GitBranch, { size: ICON_SIZE }) },
       { path: "/contacts",   label: "電話帳",          icon: React.createElement(BookUser,  { size: ICON_SIZE }) },
+      { path: "/faxes",      label: "受信 FAX",        icon: React.createElement(Printer,   { size: ICON_SIZE }) },
     ],
   },
   {
@@ -61,6 +64,7 @@ export const NAV_SECTIONS: NavSection[] = [
       // ネットワークは「内向き」（電話管理用 LAN 側）と「外向き」（リモートアクセス側）に分離
       { path: "/network",        label: "ネットワーク（内向き）", icon: React.createElement(Wifi,  { size: ICON_SIZE }) },
       { path: "/network/remote", label: "ネットワーク（外向き）", icon: React.createElement(Globe, { size: ICON_SIZE }) },
+      { path: "/webhooks",  label: "Webhook",      icon: React.createElement(Webhook,    { size: ICON_SIZE }) },
       { path: "/users",     label: "ユーザー管理", icon: React.createElement(Users,      { size: ICON_SIZE }) },
       { path: "/system",    label: "システム",     icon: React.createElement(ServerCog,  { size: ICON_SIZE }) },
       { path: "/sso",       label: "SSO / SCIM",   icon: React.createElement(KeyRound,   { size: ICON_SIZE }) },

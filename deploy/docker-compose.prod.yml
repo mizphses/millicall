@@ -110,6 +110,9 @@ services:
       # TTS 音声ファイルを core と同一絶対パスで共有（uuid_broadcast がこのパスを再生）。
       # 無いと AI/ワークフロー応対の音声再生が本番で無音になる。
       - ./data/freeswitch/tts:/app/data/freeswitch/tts
+      # 受信 FAX（rxfax の TIFF 出力先）を core と同一絶対パスで共有（core が PDF 化して保存）。
+      # 無いと FAX は受信できても core から TIFF が見えず、PDF 化・一覧表示されない。
+      - ./data/fax:/app/data/fax
     # H3: FreeSWITCH は root + ネットワーク系 cap が必要なため cap_drop は行わない。
     # no-new-privileges とメモリ/PID 制限のみ適用する。
     security_opt:

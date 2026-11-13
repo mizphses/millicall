@@ -233,6 +233,27 @@ class Settings(BaseSettings):
         # 相対パスが渡された場合は cwd（本番: /app）基準で解決する。
         return v.resolve()
 
+    @property
+    def fax_dir(self) -> Path:
+        """受信 FAX（TIFF/PDF）の保存先の絶対パス（data_dir/fax）。
+
+        FreeSWITCH の rxfax にこの絶対パスをそのまま渡すため、FreeSWITCH コンテナにも
+        同一パスで bind mount する（compose の ./data/fax:/app/data/fax）。
+        """
+        return (self.data_dir / "fax").resolve()
+
+    @property
+    def public_base_url(self) -> str:
+        """外部（Webhook 受信側など）から core を指す URL のベース。
+
+        mcp_issuer_url が既定値（http://localhost）以外ならそれを、そうでなければ
+        http://<sip_domain> を使う。末尾スラッシュは除く。
+        """
+        issuer = self.mcp_issuer_url.strip().rstrip("/")
+        if issuer and issuer not in ("http://localhost", "http://127.0.0.1"):
+            return issuer
+        return f"http://{self.sip_domain}{http_port_suffix(self.http_port)}"
+
     @field_validator("media_ws_base_url", mode="after")
     @classmethod
     def _derive_media_ws(cls, v: str, info) -> str:

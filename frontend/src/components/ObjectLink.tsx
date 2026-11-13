@@ -41,11 +41,12 @@ export function NumberPlanLink({
       extension: "/extensions",
       ai_agent: "/ai-agents",
       ring_group: "/routes",
+      fax: "/routes",
       workflow: `/workflows/${entry.id}`,
     } as Record<string, string>
   )[entry.kind];
   return to ? (
-    <ObjectLink to={to} id={entry.kind === "workflow" ? undefined : entry.id}>
+    <ObjectLink to={to} id={entry.kind === "workflow" || entry.kind === "fax" ? undefined : entry.id}>
       {entry.number}
       {entry.label ? ` · ${entry.label}` : ""}
     </ObjectLink>

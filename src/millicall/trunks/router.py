@@ -21,7 +21,7 @@ from millicall.deps import (
     get_settings_dep,
     require_admin,
 )
-from millicall.models import Trunk
+from millicall.models import FaxReceiver, Trunk
 from millicall.numberplan import find_number
 from millicall.sip_credentials import encrypt_sip_password
 from millicall.telephony.esl import ESLError
@@ -120,6 +120,29 @@ async def _validate_inbound_extension(session: AsyncSession, number: str) -> Non
         )
 
 
+async def _validate_fax_detect(
+    session: AsyncSession, enabled: bool, route_number: str | None
+) -> None:
+    """FAX 自動検知の切替先が既存の FAX 受信番号であることを検証する。
+
+    route_number は設定されていれば常に検証し、自動検知が有効なら必須とする。
+    """
+    if route_number:
+        exists = await session.scalar(
+            select(FaxReceiver.id).where(FaxReceiver.number == route_number)
+        )
+        if exists is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"FAX 切替先 {route_number} は FAX 受信番号として登録されていません",
+            )
+    elif enabled:
+        raise HTTPException(
+            status_code=422,
+            detail="FAX 自動検知を有効にするには切替先の FAX 受信番号を指定してください",
+        )
+
+
 async def _validate_pending(session: AsyncSession, listener: ExtensionChangeListener) -> None:
     """Check the pending transaction's complete configuration before committing."""
     await session.flush()
@@ -163,6 +186,8 @@ async def create_trunk(
     await _validate_inbound_extension(session, body.inbound_extension)
     await _validate_source_port(session, body.source_port, settings)
     inbound_cidrs = _validate_inbound_cidrs(body.inbound_cidrs)
+    fax_route_number = body.fax_route_number or None
+    await _validate_fax_detect(session, body.fax_detect_enabled, fax_route_number)
     trunk = Trunk(
         name=body.name,
         display_name=body.display_name,
@@ -176,6 +201,10 @@ async def create_trunk(
         trunk_type=body.trunk_type,
         inbound_cidrs=inbound_cidrs,
         options_ping_seconds=body.options_ping_seconds,
+        fax_detect_enabled=body.fax_detect_enabled,
+        fax_detect_timeout_sec=body.fax_detect_timeout_sec,
+        fax_route_number=fax_route_number,
+        fax_detect_announce=body.fax_detect_announce,
         enabled=body.enabled,
     )
     session.add(trunk)
@@ -266,6 +295,9 @@ async def update_trunk(
         "inbound_extension",
         "trunk_type",
         "options_ping_seconds",
+        "fax_detect_enabled",
+        "fax_detect_timeout_sec",
+        "fax_detect_announce",
         "enabled",
     ):
         val = getattr(body, fld)
@@ -280,6 +312,13 @@ async def update_trunk(
             status_code=422,
             detail="パスワードが未設定です。有効化する前にパスワードを再入力してください",
         )
+    if "fax_route_number" in body.model_fields_set:
+        trunk.fax_route_number = body.fax_route_number or None
+    if (
+        "fax_route_number" in body.model_fields_set
+        or body.fax_detect_enabled is not None
+    ):
+        await _validate_fax_detect(session, trunk.fax_detect_enabled, trunk.fax_route_number)
     # source_port は None（自動採番）への変更もあり得るため、明示送信時のみ更新する。
     # model_fields_set で「未指定」と「null 明示」を区別する。
     if "source_port" in body.model_fields_set:

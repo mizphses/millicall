@@ -2,8 +2,8 @@
   <context name="default">
 {#
   【統一番号プラン】順序が重要:
-    1. グループ着信（一斉鳴動） 2. AIエージェント 3. ワークフロー 4. 汎用（電話機）
-  1〜3 に一致しない 2〜6 桁のみ 4 の bridge user/N に到達する。
+    1. グループ着信（一斉鳴動） 2. AIエージェント 3. ワークフロー 4. FAX 受信 5. 汎用（電話機）
+  1〜4 に一致しない 2〜6 桁のみ 4 の bridge user/N に到達する。
   外線着信も public コンテキストから transfer でここに入るため、
   内線発信・外線着信のどちらも同じ番号解決になる。
 #}
@@ -47,6 +47,22 @@
             外線 DTMF はインバンドのみなので spandsp のインバンド検出を起動する。 -#}
         <action application="start_dtmf"/>
         <action application="park"/>
+      </condition>
+    </extension>
+{% endfor %}
+{% for fax in fax_receivers %}
+    <extension name="fax_{{ fax.number }}">
+      <condition field="destination_number" expression="^{{ fax.number | re_escape }}$">
+        <action application="log" data="INFO ===== FAX RECEIVE {{ fax.number }} ====="/>
+        {#- verbose_events: spandsp::rxfaxresult に variable_millicall_* を載せるため -#}
+        <action application="set" data="verbose_events=true"/>
+        <action application="set" data="millicall_fax_receiver={{ fax.number }}"/>
+        <action application="answer"/>
+        {#- 初版は G.711 パススルーのみ（ひかり電話 HGW は T.38 非対応） -#}
+        <action application="set" data="fax_enable_t38=false"/>
+        <action application="set" data="fax_verbose=false"/>
+        <action application="rxfax" data="{{ fax_dir }}/${uuid}.tif"/>
+        <action application="hangup"/>
       </condition>
     </extension>
 {% endfor %}
