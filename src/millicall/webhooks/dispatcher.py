@@ -7,8 +7,9 @@ ESL イベントストリーム（EslEventListener の _compose_handler）と FA
 - ``X-Millicall-Event`` / ``X-Millicall-Delivery``（uuid4。再試行でも同じ値）
 - タイムアウト 10 秒、最大 3 回（失敗後 1 秒 → 5 秒待って再試行）
 - 送信は asyncio タスクで行い、ESL イベント処理をブロックしない（fire-and-forget）
-- 接続先は net_guard.make_pinned_transport(url, lan_allowed=True) で解決・固定する
-  （LAN の受信サーバーは許可、link-local/メタデータ等は遮断）。リダイレクトは追わない。
+- 接続先は net_guard.make_webhook_transport で解決・固定する。LAN（RFC1918）の受信サーバーは
+  許可するが、loopback・link-local（メタデータ）・自ホストのアドレス・docker proxy / ESL の
+  host:port は遮断する（ローカル専用サービスへの SSRF 防止）。リダイレクトは追わない。
 - 各試行を webhook_deliveries に記録し、webhook ごとに直近 200 件だけ残す。
 """
 
@@ -30,7 +31,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from millicall.models import Webhook, WebhookDelivery
-from millicall.net_guard import make_pinned_transport
+from millicall.net_guard import WebhookTargetPolicy, make_webhook_transport
 from millicall.telephony.events import event_to_cdr
 
 if TYPE_CHECKING:
@@ -137,10 +138,13 @@ def event_to_webhook(event: dict[str, str]) -> tuple[str, dict[str, Any]] | None
     return None
 
 
-async def default_transport_factory(url: str) -> httpx.AsyncBaseTransport:
-    # make_pinned_transport は同期 DNS 解決を行うためスレッドへ逃がす（issue #81）。
-    _ip, transport = await asyncio.to_thread(make_pinned_transport, url, lan_allowed=True)
-    return transport
+def policy_transport_factory(policy: WebhookTargetPolicy | None) -> TransportFactory:
+    async def factory(url: str) -> httpx.AsyncBaseTransport:
+        # 同期 DNS 解決を行うためスレッドへ逃がす（issue #81）。
+        _ip, transport = await asyncio.to_thread(make_webhook_transport, url, policy)
+        return transport
+
+    return factory
 
 
 @dataclass
@@ -169,12 +173,13 @@ class WebhookDispatcher:
         secret_box: SecretBox,
         *,
         transport_factory: TransportFactory | None = None,
+        target_policy: WebhookTargetPolicy | None = None,
         retry_delays: tuple[float, ...] = RETRY_DELAYS,
         timeout: float = REQUEST_TIMEOUT,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._box = secret_box
-        self._transport_factory = transport_factory or default_transport_factory
+        self._transport_factory = transport_factory or policy_transport_factory(target_policy)
         self._retry_delays = retry_delays
         self._timeout = timeout
         self._tasks: set[asyncio.Task] = set()

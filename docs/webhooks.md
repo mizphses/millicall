@@ -107,8 +107,12 @@ app.post("/millicall/webhook", express.raw({ type: "application/json" }), (req, 
 ## セキュリティ
 
 - URL は `http://` / `https://` のみ。`user:pass@` を含む URL は拒否します。
-- 送信先は DNS 解決結果を検証して接続先 IP に固定します（DNS リバインディング対策）。LAN（RFC1918）と
-  loopback は許可しますが、リンクローカル（クラウドメタデータ `169.254.169.254` 等）・マルチキャスト・予約済みアドレスは遮断します。
+- 送信先は DNS 解決結果を検証して接続先 IP に固定します（DNS リバインディング対策）。LAN（RFC1918）の
+  受信サーバーは許可しますが、次は遮断します:
+  - loopback（`127.0.0.0/8`・`::1`）・`0.0.0.0/8`・リンクローカル（クラウドメタデータ `169.254.169.254` 等）・マルチキャスト・予約済み
+  - **millicall を動かしているホスト自身のアドレス**（ホスト名の解決結果・`MILLICALL_SIP_BIND_IP`・IP 指定の `MILLICALL_SIP_DOMAIN`）。
+    core API・docker socket-proxy・ESL などローカル専用サービスへの踏み台を防ぐためです。同一ホスト上の受信サーバーには送れません
+  - docker socket-proxy（`MILLICALL_DOCKER_PROXY_URL`）と ESL（`MILLICALL_ESL_HOST:PORT`）の host:port
 - シークレットは master_key 由来の鍵で暗号化して保存し、API・画面・監査ログには出しません（`has_secret` のみ）。
 - 作成・更新・削除・テスト送信は監査ログに残ります。
 - 配信ログは Webhook ごとに直近 200 件を保持します。

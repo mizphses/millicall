@@ -2,6 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -40,6 +41,7 @@ from millicall.media.audio_fork import MediaEventRouter, register_media_ws
 from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
 from millicall.media.tickets import MediaStreamTickets
+from millicall.net_guard import WebhookTargetPolicy, build_webhook_policy
 from millicall.network.client import NetdClient
 from millicall.network.router import router as network_router
 from millicall.process_lock import acquire_single_process_lock
@@ -140,6 +142,20 @@ async def _reapply_network_config_on_startup(app: FastAPI, settings: Settings) -
             "起動時のネットワーク設定再適用に失敗しました（core 起動は継続します）",
             exc_info=True,
         )
+
+
+def _webhook_target_policy(settings: Settings) -> WebhookTargetPolicy:
+    """Webhook 送信先から除外する自ホストのアドレスと内部サービスの host:port（同期 DNS）。"""
+    endpoints: list[tuple[str, int]] = [(settings.esl_host, settings.esl_port)]
+    if settings.docker_proxy_url:
+        proxy = urlsplit(settings.docker_proxy_url)
+        if proxy.hostname:
+            port = proxy.port or (443 if proxy.scheme == "https" else 80)
+            endpoints.append((proxy.hostname, port))
+    return build_webhook_policy(
+        local_ip_literals=[settings.sip_bind_ip, settings.sip_domain, settings.event_socket_ip],
+        internal_endpoints=endpoints,
+    )
 
 
 @asynccontextmanager
@@ -247,7 +263,9 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
 
     # Webhook 配信（issue #121）。ESL イベントと FAX 受信から fire-and-forget で送る。
     webhook_dispatcher = WebhookDispatcher(
-        app.state.sessionmaker, SecretBox(app.state.secrets.master_key)
+        app.state.sessionmaker,
+        SecretBox(app.state.secrets.master_key),
+        target_policy=await asyncio.to_thread(_webhook_target_policy, settings),
     )
     app.state.webhook_dispatcher = webhook_dispatcher
     fax_service = FaxService(

@@ -23,8 +23,10 @@ provisioning/service.py・ai/registry.py 等の外部 HTTP 発信箇所で再利
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import socket
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
@@ -245,4 +247,135 @@ def make_pinned_transport(url: str, *, lan_allowed: bool = False) -> tuple[str, 
         pinned_ip = _resolve_and_check_ssrf_lan_allowed(url)
     else:
         pinned_ip = _resolve_and_check_ssrf(url)
+    return pinned_ip, _PinnedTransport(host, pinned_ip)
+
+
+# --------------------------------------------------------------------------- #
+# Webhook 送信先ポリシー（issue #121）
+# --------------------------------------------------------------------------- #
+
+
+def _is_blocked_ip_webhook(ip_str: str) -> bool:
+    """Webhook 送信先として拒否する IP か。
+
+    LAN（RFC1918）の受信サーバーは許可するが、loopback（127.0.0.0/8, ::1）は拒否する
+    （docker socket-proxy・ESL・core 自身の API などローカル専用サービスへの踏み台を防ぐ）。
+    link-local（クラウドメタデータ含む）・multicast・reserved・unspecified も拒否。
+    """
+    try:
+        raw = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    # ::1 は IPv4-compatible の範囲に入り _normalize_ip で 0.0.0.1 に畳まれるため、
+    # 正規化前にも loopback を判定する。
+    if raw.is_loopback:
+        return True
+    ip = _normalize_ip(raw)
+    return (
+        ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        # 0.0.0.0/8（"this network"）は多くの OS で自ホスト宛として扱われる
+        or (ip.version == 4 and int(ip) >> 24 == 0)
+    )
+
+
+def _normalized_str(ip_str: str) -> str | None:
+    try:
+        return str(_normalize_ip(ipaddress.ip_address(ip_str.split("%", 1)[0])))
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class WebhookTargetPolicy:
+    """Webhook 送信先の追加拒否リスト（起動時に build_webhook_policy で組み立てる）。
+
+    blocked_ips: 自ホストのアドレス（loopback 以外）。自ホスト上のサービスへの送信を一律拒否する。
+    blocked_endpoints: (ip, port)。docker socket-proxy・ESL など内部サービスの接続先。
+        LAN 上の別コンテナ/ホストにあっても、その host:port への送信は拒否する。
+    """
+
+    blocked_ips: frozenset[str] = frozenset()
+    blocked_endpoints: frozenset[tuple[str, int]] = frozenset()
+
+
+def _resolve_all(host: str, port: int | None = None) -> set[str]:
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError):
+        return set()
+    out: set[str] = set()
+    for *_rest, sockaddr in infos:
+        norm = _normalized_str(str(sockaddr[0]))
+        if norm is not None:
+            out.add(norm)
+    return out
+
+
+def build_webhook_policy(
+    *,
+    local_ip_literals: list[str | None] | None = None,
+    internal_endpoints: list[tuple[str, int]] | None = None,
+) -> WebhookTargetPolicy:
+    """自ホストのアドレスと内部サービスの接続先から Webhook 用ポリシーを作る（同期 DNS）。
+
+    Args:
+        local_ip_literals: 自ホストを指す設定値（sip_bind_ip / sip_domain 等）。IP リテラルのみ採用。
+        internal_endpoints: (host, port) の一覧（docker proxy・ESL 等）。host は名前解決する。
+    """
+    own: set[str] = _resolve_all(socket.gethostname())
+    with contextlib.suppress(OSError):
+        own |= _resolve_all(socket.getfqdn())
+    for literal in local_ip_literals or []:
+        if literal:
+            norm = _normalized_str(literal)
+            if norm is not None:
+                own.add(norm)
+    endpoints: set[tuple[str, int]] = set()
+    for host, port in internal_endpoints or []:
+        if not host:
+            continue
+        for ip in _resolve_all(host, port):
+            endpoints.add((ip, port))
+    return WebhookTargetPolicy(frozenset(own), frozenset(endpoints))
+
+
+def resolve_webhook_target(url: str, policy: WebhookTargetPolicy | None = None) -> str:
+    """Webhook URL を解決・検証し、接続に固定する IP を返す。拒否時は ValueError。"""
+    policy = policy or WebhookTargetPolicy()
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"URL からホスト名を解析できません: {url!r}")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        results = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"DNS 解決失敗 ({host!r}): {exc}") from exc
+    resolved = [str(sockaddr[0]) for *_rest, sockaddr in results]
+    if not resolved:
+        raise ValueError(f"DNS 解決結果が空です ({host!r})")
+    for ip_str in resolved:
+        norm = _normalized_str(ip_str)
+        if norm is None or _is_blocked_ip_webhook(ip_str.split("%", 1)[0]):
+            raise ValueError(
+                f"SSRF ブロック: {host!r} が {ip_str!r} に解決され、ループバック/リンクローカル等の"
+                "アドレスへの送信は拒否されます"
+            )
+        if norm in policy.blocked_ips:
+            raise ValueError(f"SSRF ブロック: {host!r} は自ホスト（{ip_str}）を指しています")
+        if (norm, port) in policy.blocked_endpoints:
+            raise ValueError(f"SSRF ブロック: {host!r}:{port} は内部サービスの接続先です")
+    return resolved[0]
+
+
+def make_webhook_transport(
+    url: str, policy: WebhookTargetPolicy | None = None
+) -> tuple[str, _PinnedTransport]:
+    """Webhook 用: 検証済み IP に固定したトランスポートを返す（リダイレクト追従は呼び出し側で禁止）。"""
+    host = urlparse(url).hostname or ""
+    pinned_ip = resolve_webhook_target(url, policy)
     return pinned_ip, _PinnedTransport(host, pinned_ip)
