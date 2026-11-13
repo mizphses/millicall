@@ -41,6 +41,26 @@ export interface paths {
         patch: operations["update_agent_api_ai_agents__agent_id__patch"];
         trace?: never;
     };
+    "/api/audio/builtin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Builtin
+         * @description 同梱の組み込み音声。path は play_audio の file_path にそのまま入る絶対パス。
+         */
+        get: operations["list_builtin_api_audio_builtin_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/audit": {
         parameters: {
             query?: never;
@@ -2104,6 +2124,15 @@ export interface components {
             /** Samlresponse */
             SAMLResponse: string;
         };
+        /** BuiltinAudioOut */
+        BuiltinAudioOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Path */
+            path: string;
+        };
         /** CallCreate */
         CallCreate: {
             /** From Extension */
@@ -3198,6 +3227,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_builtin_api_audio_builtin_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuiltinAudioOut"][];
                 };
             };
         };
@@ -5455,7 +5504,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: string;
+                        [key: string]: string | number;
                     };
                 };
             };

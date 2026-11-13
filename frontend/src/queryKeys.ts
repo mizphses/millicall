@@ -38,6 +38,8 @@ export const WORKFLOWS_KEY = ["workflows"] as const;
 export const workflowKey = (id: number) => ["workflows", id] as const;
 /** node-types カタログ（更新不要なので単独キー）。 */
 export const WORKFLOW_NODE_TYPES_KEY = ["workflow-node-types"] as const;
+/** 組み込み音声（同梱 WAV）一覧。play_audio の「組み込み音声」セレクトで使う。 */
+export const BUILTIN_AUDIO_KEY = ["audio", "builtin"] as const;
 
 // ─────────────────────────────────────────────────────────
 // ネットワーク設定用キー（Phase 5 T4）

@@ -116,6 +116,29 @@
 
 ---
 
+## 組み込み音声
+
+millicall には次の案内音声が同梱されています。core の起動時に FreeSWITCH と共有している tts ディレクトリ配下（`{tts_cache_dir}/builtin/`、コンテナ内では `/app/data/freeswitch/tts/builtin/`）へ自動でコピーされるため、手作業での配置は不要です。
+
+| ID | 表示名 | ファイル |
+|---|---|---|
+| `fax_receive_notice` | FAX受信案内 | `fax_receive_notice.wav`（約 5.6 秒） |
+
+### play_audio での使い方
+
+`play_audio` ノードの設定パネルにある「組み込み音声」セレクトから選ぶと、「再生ファイル」（`file_path`）にその音声の絶対パスが入ります。「（指定なし）」を選ぶと組み込み音声の指定を外します。「再生ファイル」を手入力で編集することもできます。
+
+一覧は `GET /api/audio/builtin` で取得できます（ログインしていればロールは問いません）。
+
+### 音声を追加するには
+
+1. 8kHz / 16bit / モノラルの PCM WAV を `src/millicall/assets/audio/` に置きます。ファイル名は ASCII の英数字・`._-` だけにしてください（再生パスの検証で日本語などは拒否されます）。
+2. 同じディレクトリの `manifest.json` に `{"id": "...", "label": "表示名", "file": "ファイル名.wav"}` を追加します。表示名は日本語で構いません。
+
+MP3 などから変換する場合の例: `ffmpeg -i input.mp3 -ar 8000 -ac 1 -c:a pcm_s16le output.wav`
+
+---
+
 ## メール通知ノードの SMTP 設定
 
 `email_notify` ノードを使う場合は `.env` に SMTP 設定が必要です。

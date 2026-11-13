@@ -51,6 +51,14 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   dynamicHandles: boolean;
 }
 
+/** 組み込み音声（GET /api/audio/builtin）。 */
+export interface BuiltinAudioOption {
+  id: string;
+  label: string;
+  /** play_audio の file_path にそのまま入る絶対パス。 */
+  path: string;
+}
+
 /** プロバイダ参照用。 */
 export interface ProviderOption {
   id: number;

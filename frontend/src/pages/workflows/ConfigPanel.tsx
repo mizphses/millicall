@@ -3,12 +3,18 @@
  * config_schema を走査して動的フォームを生成する（Phase 4b Task 10）。
  */
 import { useQuery } from "@tanstack/react-query";
+import { Fragment } from "react";
 
 import { css } from "styled-system/css";
 import { input } from "styled-system/recipes";
 
 import { api } from "../../api/client";
-import { AGENTS_KEY, PROVIDERS_KEY, WORKFLOWS_KEY } from "../../queryKeys";
+import {
+  AGENTS_KEY,
+  BUILTIN_AUDIO_KEY,
+  PROVIDERS_KEY,
+  WORKFLOWS_KEY,
+} from "../../queryKeys";
 import {
   rowsFromValue,
   rowsToValue,
@@ -19,6 +25,7 @@ import {
 } from "./editorState";
 import type {
   AgentOption,
+  BuiltinAudioOption,
   ConfigSchemaField,
   ProviderOption,
   WorkflowOption,
@@ -29,6 +36,8 @@ interface ConfigPanelProps {
   nodeId: string;
   /** ノードの日本語ラベル。 */
   nodeLabel: string;
+  /** バックエンドのノード type（"play_audio" なら組み込み音声セレクトを出す）。 */
+  nodeType?: string;
   /** 現在の config 値。 */
   config: Record<string, unknown>;
   /** config_schema 定義。 */
@@ -76,6 +85,7 @@ function TimeConditionHint({ config }: { config: Record<string, unknown> }) {
 export function ConfigPanel({
   nodeId,
   nodeLabel,
+  nodeType,
   config,
   schema,
   onChange,
@@ -109,6 +119,18 @@ export function ConfigPanel({
       if (error) throw new Error("ワークフロー取得失敗");
       return (data ?? []) as WorkflowOption[];
     },
+  });
+
+  const isPlayAudio = nodeType === "play_audio";
+  const builtinAudioQuery = useQuery({
+    queryKey: BUILTIN_AUDIO_KEY,
+    queryFn: async () => {
+      const { data, error } = await api.GET("/api/audio/builtin");
+      if (error) throw new Error("組み込み音声取得失敗");
+      return (data ?? []) as BuiltinAudioOption[];
+    },
+    enabled: isPlayAudio,
+    staleTime: Infinity,
   });
 
   const providers = providersQuery.data ?? [];
@@ -192,19 +214,29 @@ export function ConfigPanel({
       >
         {isTimeConditionSchema(schema) && <TimeConditionHint config={config} />}
         {schema.map((field) => (
-          <SchemaField
-            key={`${nodeId}:${field.key}`}
-            field={field}
-            draft={drafts[`${nodeId}:${field.key}`]}
-            onDraftChange={(draft) =>
-              onDraftChange(`${nodeId}:${field.key}`, draft)
-            }
-            value={config[field.key]}
-            onChange={(v) => onChange(field.key, v)}
-            providers={providers}
-            agents={agents}
-            workflows={workflows}
-          />
+          <Fragment key={`${nodeId}:${field.key}`}>
+            {isPlayAudio && field.key === "file_path" && (
+              <BuiltinAudioSelect
+                options={builtinAudioQuery.data ?? []}
+                isError={builtinAudioQuery.isError}
+                onRetry={() => void builtinAudioQuery.refetch()}
+                value={config.file_path}
+                onChange={(v) => onChange("file_path", v)}
+              />
+            )}
+            <SchemaField
+              field={field}
+              draft={drafts[`${nodeId}:${field.key}`]}
+              onDraftChange={(draft) =>
+                onDraftChange(`${nodeId}:${field.key}`, draft)
+              }
+              value={config[field.key]}
+              onChange={(v) => onChange(field.key, v)}
+              providers={providers}
+              agents={agents}
+              workflows={workflows}
+            />
+          </Fragment>
         ))}
         {schema.length === 0 && (
           <p className={css({ color: "text.muted", fontSize: "sm" })}>
@@ -248,6 +280,82 @@ export function ConfigPanel({
         </button>
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+// 組み込み音声セレクト（play_audio 専用）
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 同梱の組み込み音声から選ぶと file_path にその絶対パスを入れる。
+ * 「（指定なし）」は組み込み音声が選ばれていたときだけ file_path を空に戻し、
+ * 手入力のパスには触れない。file_path の手入力は下の欄で引き続き可能。
+ */
+function BuiltinAudioSelect({
+  options,
+  isError,
+  onRetry,
+  value,
+  onChange,
+}: {
+  options: BuiltinAudioOption[];
+  isError: boolean;
+  onRetry: () => void;
+  value: unknown;
+  onChange: (v: string) => void;
+}) {
+  const current = typeof value === "string" ? value : "";
+  const matched = options.find((o) => o.path === current);
+  return (
+    <label className={css({ display: "block" })}>
+      <span
+        className={css({
+          display: "block",
+          fontSize: "sm",
+          color: "text.muted",
+          mb: "1",
+        })}
+      >
+        組み込み音声
+      </span>
+      <select
+        className={input()}
+        value={matched ? matched.id : ""}
+        onChange={(e) => {
+          const picked = options.find((o) => o.id === e.target.value);
+          if (picked) onChange(picked.path);
+          else if (matched) onChange("");
+        }}
+      >
+        <option value="">（指定なし）</option>
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {isError && (
+        <span
+          role="alert"
+          className={css({
+            display: "block",
+            color: "danger.text",
+            fontSize: "xs",
+            mt: "1",
+          })}
+        >
+          組み込み音声の取得に失敗しました。{" "}
+          <button
+            type="button"
+            onClick={onRetry}
+            className={css({ textDecoration: "underline" })}
+          >
+            再試行
+          </button>
+        </span>
+      )}
+    </label>
   );
 }
 
