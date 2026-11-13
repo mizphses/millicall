@@ -11,7 +11,8 @@
     raw document から re-query しない。
   - XXE/エンティティ爆発対策: defusedxml.ElementTree で先にパースし、
     エラー時は lxml に渡さない。
-  - Replay 防御: プロセス内 LRU 集合でアサーション ID を追跡する（per-process; 注意事項参照）。
+  - Replay 防御: 消費済みアサーション ID / AuthnRequest ID を DB（saml_consumed_ids）に
+    記録する。再起動後・複数プロセス間でも一回限りの消費を保証する（replay.py）。
   - RelayState オープンリダイレクト対策: ローカルパス（/ で始まり // でなく、
     スキームを含まない）のみ許可する。
   - 監査: saml.login.success / saml.login.failure（理由コードのみ; アサーション内容は記録しない）。
@@ -35,11 +36,9 @@
 
 import base64
 import secrets
-import time
 import urllib.parse
 import zlib
 from datetime import UTC, datetime, timedelta
-from threading import Lock
 
 import defusedxml.ElementTree as dET
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -54,6 +53,7 @@ from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
 from millicall.auth.csrf import generate_csrf_token
 from millicall.auth.hashing import hash_password_async
+from millicall.auth.saml.replay import consume_once
 from millicall.auth.security import issue_session
 from millicall.models import User
 
@@ -92,47 +92,6 @@ _NS_MD = "urn:oasis:names:tc:SAML:2.0:metadata"
 def _q(ns: str, tag: str) -> str:
     """Clark 記法の完全修飾タグ名を返す（"{ns}tag"）。"""
     return f"{{{ns}}}{tag}"
-
-
-# ---------------------------------------------------------------------------
-# Replay 防御: プロセス内アサーション ID キャッシュ
-# ---------------------------------------------------------------------------
-# 注意: per-process インメモリ実装のため、複数プロセス/ワーカー構成では
-# プロセスをまたぐリプレイ防御は行われない。シングルワーカーが推奨構成。
-# 本番環境でマルチプロセス運用が必要な場合は Redis 等の共有ストアへの移行が必要。
-
-
-class _ReplayCache:
-    """消費済みアサーション ID の TTL 付きキャッシュ。"""
-
-    # consumed_id -> expire_ts（monotonic clock）
-    _cache: dict[str, float]
-    _lock: Lock
-
-    def __init__(self) -> None:
-        self._cache = {}
-        self._lock = Lock()
-
-    def check_and_add(self, assertion_id: str, ttl_seconds: int) -> bool:
-        """assertion_id を消費する。既に消費済みなら False を返す。
-
-        TTL 切れのエントリは opportunistic に掃除する（最大 1000 エントリ）。
-        """
-        now = time.monotonic()
-        expire_at = now + ttl_seconds
-        with self._lock:
-            # 古いエントリを掃除（メモリリーク防止）
-            if len(self._cache) > 1000:
-                expired = [k for k, v in self._cache.items() if v < now]
-                for k in expired:
-                    del self._cache[k]
-            if assertion_id in self._cache and self._cache[assertion_id] > now:
-                return False  # 有効期限内の重複 → リプレイ
-            self._cache[assertion_id] = expire_at
-            return True
-
-
-_replay_cache = _ReplayCache()
 
 
 # ---------------------------------------------------------------------------
@@ -577,10 +536,15 @@ async def saml_acs(
     else:
         ttl = settings.saml_allowed_clock_skew_seconds * 2
 
-    if not _replay_cache.check_and_add(assertion_id, ttl):
+    # アサーション ID と AuthnRequest ID を同一トランザクションで一回限り消費する。
+    duplicate = await consume_once(
+        request.app.state.sessionmaker,
+        [("assertion:" + assertion_id, ttl), ("request:" + pending["id"], _REQUEST_TTL)],
+    )
+    if duplicate == 0:
         await _fail("replay_detected")
         raise HTTPException(status_code=400, detail="Replay detected")
-    if not _replay_cache.check_and_add("request:" + pending["id"], _REQUEST_TTL):
+    if duplicate == 1:
         await _fail("request_replayed")
         raise HTTPException(status_code=400, detail="Login request already consumed")
 

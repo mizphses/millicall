@@ -19,7 +19,11 @@ from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend
 from starlette.middleware.authentication import AuthenticationMiddleware
 
 from millicall.mcp_server.login import router as login_router
-from millicall.mcp_server.oauth import MillicallOAuthProvider, ResourceBoundTokenVerifier
+from millicall.mcp_server.oauth import (
+    MillicallOAuthProvider,
+    ResourceBoundTokenVerifier,
+    install_hashed_client_auth,
+)
 from millicall.mcp_server.server import build_mcp, build_transport_security
 
 if TYPE_CHECKING:
@@ -51,8 +55,9 @@ def mount_mcp(app: FastAPI) -> None:
     app.state.mcp_session_manager = mcp.session_manager
 
     # /.well-known/*, /authorize, /token, /register, /mcp を本体アプリの root に取り込む
-    # （SPA catch-all より前に評価される順で追加）。
-    app.router.routes.extend(mcp_app.routes)
+    # （SPA catch-all より前に評価される順で追加）。/token は client_secret をハッシュ照合する
+    # 認証器へ差し替える（DB には client_secret のハッシュしか無いため）。
+    app.router.routes.extend(install_hashed_client_auth(mcp_app.routes, provider))
 
     # Bearer 認証（BearerAuthBackend）+ AuthContext ミドルウェアを引き継ぐ。
     # 未取り込みだと /mcp の RequireAuthMiddleware が認証コンテキストを得られず全拒否になる。

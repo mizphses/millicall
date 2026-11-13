@@ -437,12 +437,38 @@ async def test_mcp_disabled(tmp_path):
             assert not hasattr(app.state, "mcp_session_manager")
 
 
+async def _issue_access_token(app, username, client_id="c1-client"):
+    """provider API 経由でクライアント登録 → 認可コード発行 → 交換し、access token を返す。"""
+    from mcp.shared.auth import OAuthClientInformationFull
+    from pydantic import AnyUrl
+
+    provider = app.state.mcp_oauth_provider
+    client = OAuthClientInformationFull(
+        client_id=client_id,
+        redirect_uris=[AnyUrl("https://claude.ai/cb")],
+        grant_types=["authorization_code", "refresh_token"],
+        token_endpoint_auth_method="none",
+    )
+    await provider.register_client(client)
+    state = await provider._current_user_state(username)
+    code = await provider.create_auth_code(
+        client_id=client_id,
+        username=username,
+        code_challenge="ch",
+        redirect_uri="https://claude.ai/cb",
+        scopes=[],
+        user_state=state[1],
+    )
+    loaded = await provider.load_authorization_code(client, code)
+    tokens = await provider.exchange_authorization_code(client, loaded)
+    return tokens.access_token
+
+
 # --------------------------------------------------------------------------
 # 監査 C1: MCP Bearer の失効契約（enabled / session_epoch 照合）
 # --------------------------------------------------------------------------
 async def test_access_token_revoked_when_user_disabled(mcp_app):
     """発行後にユーザーを無効化すると load_access_token が拒否する。"""
-    from mcp.server.auth.provider import AccessToken
     from sqlalchemy import select
 
     from millicall.models import User
@@ -450,44 +476,37 @@ async def test_access_token_revoked_when_user_disabled(mcp_app):
     await _make_user(mcp_app, username="c1disable", password="Pass1234x", role="admin")
     provider = mcp_app.state.mcp_oauth_provider
 
-    # トークンを手動登録し、発行時 epoch を記録する（exchange 経路の内部状態を再現）。
-    provider._access_tokens["tok-c1a"] = AccessToken(
-        token="tok-c1a", client_id="c", scopes=[], expires_at=None, subject="c1disable"
-    )
-    await provider._record_token_epoch("c1disable", "tok-c1a", "ref-c1a")
+    # 正規の発行経路（コード発行 → 交換）でトークンを得る。発行時 epoch は DB に記録される。
+    token = await _issue_access_token(mcp_app, "c1disable")
 
     # 有効なうちは通る
-    assert await provider.load_access_token("tok-c1a") is not None
+    assert await provider.load_access_token(token) is not None
 
     # 無効化 → 拒否
     async with mcp_app.state.sessionmaker() as s:
         u = await s.scalar(select(User).where(User.username == "c1disable"))
         u.enabled = False
         await s.commit()
-    assert await provider.load_access_token("tok-c1a") is None
+    assert await provider.load_access_token(token) is None
 
 
 async def test_access_token_revoked_when_epoch_bumped(mcp_app):
     """session_epoch を bump すると発行済みトークンが失効する（パスワード変更/logout-all 等）。"""
-    from mcp.server.auth.provider import AccessToken
     from sqlalchemy import select
 
     from millicall.models import User
 
     await _make_user(mcp_app, username="c1epoch", password="Pass1234x", role="admin")
     provider = mcp_app.state.mcp_oauth_provider
-    provider._access_tokens["tok-c1e"] = AccessToken(
-        token="tok-c1e", client_id="c", scopes=[], expires_at=None, subject="c1epoch"
-    )
-    await provider._record_token_epoch("c1epoch", "tok-c1e", "ref-c1e")
+    token = await _issue_access_token(mcp_app, "c1epoch")
 
-    assert await provider.load_access_token("tok-c1e") is not None
+    assert await provider.load_access_token(token) is not None
 
     async with mcp_app.state.sessionmaker() as s:
         u = await s.scalar(select(User).where(User.username == "c1epoch"))
         u.session_epoch = (u.session_epoch or 0) + 1
         await s.commit()
-    assert await provider.load_access_token("tok-c1e") is None
+    assert await provider.load_access_token(token) is None
 
 
 # --------------------------------------------------------------------------
@@ -632,14 +651,45 @@ async def test_mcp_callback_disabled_user_records_failure(tmp_path):
 # mcp SDK 2.x 移行: resource（RFC 8707）束縛とボディ上限
 # --------------------------------------------------------------------------
 async def _bearer_for(mcp_app, username: str, token: str, resource: str | None) -> None:
-    """provider 内部に resource 指定のアクセストークンを直接登録する（epoch も記録）。"""
-    from mcp.server.auth.provider import AccessToken
+    """resource 指定のアクセストークン行を DB ストアへ直接登録する（発行時 epoch も記録）。"""
+    import hashlib
+    import time
+
+    from mcp.shared.auth import OAuthClientInformationFull
+    from pydantic import AnyUrl
+
+    from millicall.models import McpOAuthToken
 
     provider = mcp_app.state.mcp_oauth_provider
-    provider._access_tokens[token] = AccessToken(
-        token=token, client_id="c", scopes=[], expires_at=None, subject=username, resource=resource
-    )
-    await provider._record_token_epoch(username, token, f"ref-{token}")
+    if await provider.get_client("c") is None:
+        await provider.register_client(
+            OAuthClientInformationFull(
+                client_id="c",
+                redirect_uris=[AnyUrl("https://claude.ai/cb")],
+                grant_types=["authorization_code", "refresh_token"],
+                token_endpoint_auth_method="none",
+            )
+        )
+    user_id, epoch, password_hash = (await provider._current_user_state(username))[1]
+    now = time.time()
+    async with mcp_app.state.sessionmaker() as session:
+        session.add(
+            McpOAuthToken(
+                token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                kind="access",
+                grant_id=f"grant-{token}",
+                client_id="c",
+                subject=username,
+                user_id=user_id,
+                session_epoch=epoch,
+                credential_tag=hashlib.sha256(password_hash.encode()).hexdigest(),
+                scopes="[]",
+                resource=resource,
+                created_at=now,
+                expires_at=now + 3600,
+            )
+        )
+        await session.commit()
 
 
 async def test_bearer_for_other_resource_rejected_on_mcp(mcp_app, mcp_client):
