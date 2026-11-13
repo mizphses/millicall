@@ -4,8 +4,14 @@
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, Pencil, ToggleLeft, ToggleRight, Trash2 } from "lucide-react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import {
+  AlertTriangle,
+  Pencil,
+  ToggleLeft,
+  ToggleRight,
+  Trash2,
+} from "lucide-react";
 
 import { css } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
@@ -14,6 +20,8 @@ import { api } from "../api/client";
 import type { components } from "../api/schema";
 import { WORKFLOWS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Field } from "../components/Field";
+import { validateWorkflowMetadata } from "./workflows/editorState";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
 import { SlidePanel } from "../components/SlidePanel";
@@ -33,12 +41,16 @@ async function fetchWorkflows(): Promise<WorkflowRead[]> {
 
 async function createWorkflow(body: WorkflowUpsert): Promise<WorkflowRead> {
   const { data, error, response } = await api.POST("/api/workflows", { body });
-  if (response.status === 409) throw new NumberConflictError("この番号は既に使用されています");
+  if (response.status === 409)
+    throw new NumberConflictError("この番号は既に使用されています");
   if (error || !data) throw new Error("ワークフローの作成に失敗しました");
   return data;
 }
 
-async function updateWorkflow(id: number, body: WorkflowUpsert): Promise<WorkflowRead> {
+async function updateWorkflow(
+  id: number,
+  body: WorkflowUpsert,
+): Promise<WorkflowRead> {
   const { data, error } = await api.PUT("/api/workflows/{workflow_id}", {
     params: { path: { workflow_id: id } },
     body,
@@ -64,27 +76,22 @@ function emptyForm(): CreateForm {
   return { name: "", number: "", description: "" };
 }
 
-function validateForm(form: CreateForm): Partial<Record<keyof CreateForm, string>> {
-  const errors: Partial<Record<keyof CreateForm, string>> = {};
-  if (!form.name.trim()) errors.name = "名前は必須です";
-  if (form.name.trim().length > 100) errors.name = "名前は100文字以内にしてください";
-  if (!form.number.trim()) errors.number = "番号は必須です";
-  if (!/^\d{2,6}$/.test(form.number.trim()))
-    errors.number = "内線番号は2〜6桁の数字で入力してください";
-  return errors;
-}
-
 export function WorkflowsPage() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
-  const listQuery = useQuery({ queryKey: WORKFLOWS_KEY, queryFn: fetchWorkflows });
+  const listQuery = useQuery({
+    queryKey: WORKFLOWS_KEY,
+    queryFn: fetchWorkflows,
+  });
   const workflows = listQuery.data ?? [];
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [form, setForm] = useState<CreateForm>(emptyForm());
-  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof CreateForm, string>>>({});
+  const [fieldErrors, setFieldErrors] = useState<
+    Partial<Record<keyof CreateForm, string>>
+  >({});
   const [deleteTarget, setDeleteTarget] = useState<WorkflowRead | null>(null);
 
   function openCreate() {
@@ -107,7 +114,14 @@ export function WorkflowsPage() {
         // バックエンドは「start ノードちょうど1個」を必須とするため、
         // 空グラフではなく start のみの最小定義で作成する(空だと 422 で作成不能)。
         definition: {
-          nodes: [{ id: "start", type: "start", position: { x: 80, y: 80 }, config: {} }],
+          nodes: [
+            {
+              id: "start",
+              type: "start",
+              position: { x: 80, y: 80 },
+              config: {},
+            },
+          ],
           edges: [],
         },
       }),
@@ -116,7 +130,10 @@ export function WorkflowsPage() {
       toast.success("ワークフローを作成しました");
       setPanelOpen(false);
       // 作成直後にエディタへ
-      void navigate({ to: "/workflows/$workflowId", params: { workflowId: String(created.id) } });
+      void navigate({
+        to: "/workflows/$workflowId",
+        params: { workflowId: String(created.id) },
+      });
     },
     onError: (err) => {
       if (err instanceof NumberConflictError) {
@@ -159,15 +176,36 @@ export function WorkflowsPage() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const errors = validateForm(form);
+    const errors = validateWorkflowMetadata(form);
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
     createMutation.mutate();
   }
 
   const columns: Column<WorkflowRead>[] = [
-    { key: "number", header: "内線番号", width: "120px" },
-    { key: "name", header: "名前" },
+    {
+      key: "number",
+      header: "内線番号",
+      width: "120px",
+      sortValue: (row) => Number(row.number),
+    },
+    {
+      key: "name",
+      header: "名前",
+      render: (row) => (
+        <Link
+          to="/workflows/$workflowId"
+          params={{ workflowId: String(row.id) }}
+          className={css({
+            color: "accent.text",
+            textDecoration: "underline",
+            fontWeight: "500",
+          })}
+        >
+          {row.name}
+        </Link>
+      ),
+    },
     {
       key: "description",
       header: "説明",
@@ -186,9 +224,14 @@ export function WorkflowsPage() {
         (row.warnings ?? []).length > 0 ? (
           <span
             title={(row.warnings ?? []).join("\n")}
-            className={css({ display: "inline-flex", alignItems: "center", color: "warn.text" })}
+            className={css({
+              display: "inline-flex",
+              alignItems: "center",
+              color: "warn.text",
+            })}
           >
-            <AlertTriangle size={16} />
+            <AlertTriangle size={16} aria-hidden />
+            警告 {(row.warnings ?? []).length} 件
           </span>
         ) : null,
     },
@@ -206,10 +249,17 @@ export function WorkflowsPage() {
     {
       key: "actions",
       header: "操作",
+      sortable: false,
       width: "220px",
       align: "right",
       render: (row) => (
-        <div className={css({ display: "flex", gap: "2", justifyContent: "flex-end" })}>
+        <div
+          className={css({
+            display: "flex",
+            gap: "2",
+            justifyContent: "flex-end",
+          })}
+        >
           <button
             type="button"
             className={button({ variant: "secondary", size: "sm" })}
@@ -220,7 +270,8 @@ export function WorkflowsPage() {
               })
             }
           >
-            <Pencil size={14} />編集
+            <Pencil size={14} />
+            編集
           </button>
           <button
             type="button"
@@ -237,7 +288,8 @@ export function WorkflowsPage() {
             className={button({ variant: "ghost", size: "sm" })}
             onClick={() => setDeleteTarget(row)}
           >
-            <Trash2 size={14} />削除
+            <Trash2 size={14} />
+            削除
           </button>
         </div>
       ),
@@ -249,7 +301,11 @@ export function WorkflowsPage() {
       title="ワークフロー"
       description="IVR・AI 応対フローの作成・編集・管理"
       actions={
-        <button type="button" className={button({ variant: "primary" })} onClick={openCreate}>
+        <button
+          type="button"
+          className={button({ variant: "primary" })}
+          onClick={openCreate}
+        >
           ワークフローを追加
         </button>
       }
@@ -259,12 +315,20 @@ export function WorkflowsPage() {
         rows={workflows}
         rowKey={(row) => row.id}
         loading={listQuery.isLoading}
+        error={listQuery.error}
+        onRetry={() => void listQuery.refetch()}
+        searchable
+        searchPlaceholder="名前・内線番号・説明で検索"
+        searchText={(row) => `${row.name} ${row.number} ${row.description}`}
+        storageKey="workflows"
         emptyMessage="ワークフローがまだありません。右上の「ワークフローを追加」から登録してください。"
       />
 
       <SlidePanel
         open={panelOpen}
         title="ワークフローを追加"
+        busy={createMutation.isPending}
+        dirty={JSON.stringify(form) !== JSON.stringify(emptyForm())}
         onClose={closePanel}
         footer={
           <>
@@ -290,11 +354,17 @@ export function WorkflowsPage() {
         <form
           id="workflow-create-form"
           onSubmit={handleSubmit}
-          className={css({ display: "flex", flexDirection: "column", gap: "4" })}
+          className={css({
+            display: "flex",
+            flexDirection: "column",
+            gap: "4",
+          })}
         >
-          <Field label="名前" error={fieldErrors.name}>
+          <Field label="名前" required error={fieldErrors.name}>
             <input
-              className={input({ invalid: fieldErrors.name ? true : undefined })}
+              className={input({
+                invalid: fieldErrors.name ? true : undefined,
+              })}
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
               placeholder="受付フロー"
@@ -303,13 +373,23 @@ export function WorkflowsPage() {
             />
           </Field>
 
-          <Field label="内線番号" error={fieldErrors.number}>
+          <Field
+            label="内線番号"
+            required
+            help="2〜6桁の数字"
+            error={fieldErrors.number}
+          >
             <input
-              className={input({ invalid: fieldErrors.number ? true : undefined })}
+              className={input({
+                invalid: fieldErrors.number ? true : undefined,
+              })}
               value={form.number}
-              onChange={(e) => setForm((f) => ({ ...f, number: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, number: e.target.value }))
+              }
               placeholder="300"
-              maxLength={30}
+              maxLength={6}
+              inputMode="numeric"
             />
           </Field>
 
@@ -317,7 +397,9 @@ export function WorkflowsPage() {
             <input
               className={input()}
               value={form.description}
-              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, description: e.target.value }))
+              }
               placeholder="メインの受付フロー"
             />
           </Field>
@@ -339,29 +421,5 @@ export function WorkflowsPage() {
         onCancel={() => setDeleteTarget(null)}
       />
     </PageLayout>
-  );
-}
-
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className={css({ display: "block" })}>
-        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
-          {label}
-        </span>
-        {children}
-      </label>
-      {error ? (
-        <p className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>
-      ) : null}
-    </div>
   );
 }

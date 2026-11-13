@@ -13,17 +13,15 @@
 """
 
 import json
-import secrets as secrets_mod
 
 import pyotp
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
+from millicall.auth.hashing import find_recovery_code, generate_recovery_codes
 from millicall.auth.router import _issue_session_and_cookies
 from millicall.auth.security import bump_session_epoch
 from millicall.auth.throttle import check_and_raise, record_failure
@@ -32,11 +30,6 @@ from millicall.deps import get_current_user, get_secret_box, get_session
 from millicall.models import User
 
 router = APIRouter(prefix="/api/auth/totp", tags=["auth"])
-
-_hasher = PasswordHasher()
-
-# リカバリコードの生成数
-_RECOVERY_CODE_COUNT = 10
 
 
 # ---------------------------------------------------------------------------
@@ -79,46 +72,13 @@ class TotpVerifyResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _generate_recovery_codes() -> tuple[list[str], list[str]]:
-    """10 個のリカバリコードを生成する。
-
-    Returns:
-        (plaintext_codes, hashed_codes) — hashed_codes のみ DB に保存する
-    """
-    plain: list[str] = []
-    hashed: list[str] = []
-    for _ in range(_RECOVERY_CODE_COUNT):
-        raw = secrets_mod.token_hex(10)  # 20 文字の hex 文字列
-        # 人間が読みやすい形式: xxxxx-xxxxx-xxxxx-xxxxx（4 × 5 文字）
-        code = f"{raw[:5]}-{raw[5:10]}-{raw[10:15]}-{raw[15:20]}"
-        plain.append(code)
-        hashed.append(_hasher.hash(code))
-    return plain, hashed
-
-
-def _check_recovery_code(stored_hashes: list[str], code: str) -> int | None:
-    """リカバリコードをすべてのハッシュと比較し、一致したインデックスを返す。
-
-    Argon2 verify を使って定数時間比較する。一致がなければ None を返す。
-    """
-    for i, h in enumerate(stored_hashes):
-        try:
-            if _hasher.verify(h, code):
-                return i
-        except VerifyMismatchError:
-            continue
-        except Exception:  # noqa: BLE001
-            continue
-    return None
-
-
-def _verify_totp_or_recovery(user: User, box: SecretBox, code: str) -> str | None:
+async def _verify_totp_or_recovery(user: User, box: SecretBox, code: str) -> str | None:
     """TOTP コードまたはリカバリコードを検証する。
 
     Returns:
         "totp"     : TOTP コードが一致した場合
         "recovery:N": N 番目のリカバリコードが一致した場合
-        None       : いずれも一致しない場合
+        None       : いずれも一致しない場合（リカバリコードの形式不正も同じく None）
 
     リカバリコードが一致した場合は当該エントリを消費（None にセット）する。
     呼び出し後に DB commit すること。
@@ -144,7 +104,8 @@ def _verify_totp_or_recovery(user: User, box: SecretBox, code: str) -> str | Non
     except (json.JSONDecodeError, TypeError):
         return None
 
-    idx = _check_recovery_code(stored, code)
+    # Argon2 はイベントループ外で計算し、形式不正なら計算せずに不一致とする（issue #81）
+    idx = await find_recovery_code(stored, code)
     if idx is None:
         return None
 
@@ -203,7 +164,7 @@ async def totp_setup(
     )
     user = await _refresh_authenticated_user(session, user)
     if user.totp_enabled and (
-        not body.code or _verify_totp_or_recovery(user, box, body.code) is None
+        not body.code or await _verify_totp_or_recovery(user, box, body.code) is None
     ):
         await record_failure(session, ip=ip, username=user.username, action="totp")
         await record_audit(
@@ -308,7 +269,7 @@ async def totp_verify(
             detail="Invalid TOTP code",
         )
 
-    plain_codes, hashed_codes = _generate_recovery_codes()
+    plain_codes, hashed_codes = await generate_recovery_codes()
     user.totp_enabled = True
     user.recovery_codes = json.dumps(hashed_codes)
     bump_session_epoch(user)
@@ -364,7 +325,7 @@ async def totp_disable(
             detail="TOTP は有効ではありません",
         )
 
-    method = _verify_totp_or_recovery(user, box, body.code)
+    method = await _verify_totp_or_recovery(user, box, body.code)
     if method is None:
         # 失敗を記録する（H-2: TOTP disable も試行回数を追跡する）
         await record_failure(session, ip=ip, username=user.username, action="totp")

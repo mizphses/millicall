@@ -7,7 +7,7 @@
  */
 
 import { css, cx } from "styled-system/css";
-import { input } from "styled-system/recipes";
+import { button, input } from "styled-system/recipes";
 
 import { parseRowsJson, SCIM_ROLE_OPTIONS, type ScimRoleMapRow } from "./scimRoleMap";
 
@@ -33,16 +33,18 @@ export function ScimRoleMapField({
       {rows.map((row, i) => (
         <div key={i} className={css({ display: "flex", gap: "2", alignItems: "center" })}>
           <input
+            aria-label={`割り当て ${i + 1} のグループ名`}
             className={input()}
             value={row.group}
             placeholder="グループ名（displayName）"
-            style={{ flex: 2 }}
+            style={{ flex: 2, minWidth: 0 }}
             onChange={(e) =>
               update(rows.map((r, j) => (j === i ? { ...r, group: e.target.value } : r)))
             }
           />
           <select
-            className={cx(input(), css({ flex: 1 }))}
+            aria-label={`割り当て ${i + 1} のロール`}
+            className={cx(input(), css({ flex: 1, minW: 0 }))}
             value={row.role}
             onChange={(e) =>
               update(rows.map((r, j) => (j === i ? { ...r, role: e.target.value } : r)))
@@ -56,12 +58,12 @@ export function ScimRoleMapField({
           </select>
           <button
             type="button"
-            aria-label="この割り当てを削除"
+            aria-label={`割り当て ${i + 1} を削除`}
             onClick={() => update(rows.filter((_, j) => j !== i))}
             className={css({
               flexShrink: 0,
-              width: "28px",
-              height: "28px",
+              width: "44px",
+              height: "44px",
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
@@ -81,16 +83,7 @@ export function ScimRoleMapField({
       <button
         type="button"
         onClick={() => update([...rows, { group: "", role: "user" }])}
-        className={css({
-          fontSize: "sm",
-          color: "text.muted",
-          bg: "transparent",
-          border: "none",
-          cursor: "pointer",
-          textAlign: "left",
-          px: "0",
-          _hover: { color: "text" },
-        })}
+        className={button({ variant: "secondary", size: "sm" })}
       >
         + 行を追加
       </button>

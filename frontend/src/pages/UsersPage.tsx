@@ -1,3 +1,6 @@
+import { useObjectSelection } from "../hooks/useObjectSelection";
+import { apiError } from "./settings/formState";
+import { Field } from "../components/Field";
 /**
  * ユーザー管理ページ（Phase 6 T9b）。管理者専用。
  *
@@ -66,8 +69,7 @@ async function patchUser(id: number, form: UserEditForm, original: UserRead): Pr
     body: patch,
   });
   if (response.status === 400) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? "最後の管理者は変更できません");
+    throw apiError(error, "最後の管理者は変更できません");
   }
   if (error || !data) throw new Error("ユーザーの更新に失敗しました");
   return data as UserRead;
@@ -79,10 +81,9 @@ async function resetPassword(id: number, newPassword: string): Promise<void> {
     body: { new_password: newPassword },
   });
   if (response.status === 400) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? "パスワードリセットに失敗しました");
+    throw apiError(error, "パスワードリセットに失敗しました");
   }
-  if (error) throw new Error("パスワードリセットに失敗しました");
+  if (!response.ok || error) throw apiError(error, "パスワードリセットに失敗しました");
 }
 
 async function deleteUser(id: number): Promise<void> {
@@ -90,10 +91,9 @@ async function deleteUser(id: number): Promise<void> {
     params: { path: { user_id: id } },
   });
   if (response.status === 400) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? "最後の管理者は削除できません");
+    throw apiError(error, "最後の管理者は削除できません");
   }
-  if (error) throw new Error("ユーザーの削除に失敗しました");
+  if (!response.ok || error) throw apiError(error, "ユーザーの削除に失敗しました");
 }
 
 // ─────────────────────────────────────────────────────────
@@ -132,6 +132,14 @@ export function UsersPage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
+  const selection = useObjectSelection(listQuery.data, openSelectedUser, closeUserPanel);
+  function openSelectedUser(user: UserRead) {
+    selection.select(user.id);
+    setEditForm(editFormFromUser(user));
+    setPanelMode({ kind: "edit", user });
+  }
+  function closeUserPanel() { setPanelMode({ kind: "closed" }); selection.clear(); }
+
   // ─── ミューテーション ───
 
   const createMutation = useMutation({
@@ -141,11 +149,12 @@ export function UsersPage() {
         [...(prev ?? []), user]
       );
       toast.success(`ユーザー「${user.username}」を作成しました`);
-      setPanelMode({ kind: "closed" });
+      closeUserPanel();
       setCreateForm(emptyCreateForm());
       setCreateErrors({});
     },
     onError: (err) => {
+      if (err instanceof Error && "status" in err && err.status === 409) setCreateErrors({ username: err.message });
       toast.error(err instanceof Error ? err.message : "作成に失敗しました");
     },
   });
@@ -160,7 +169,7 @@ export function UsersPage() {
         (prev ?? []).map((u) => (u.id === updated.id ? updated : u))
       );
       toast.success("ユーザー情報を更新しました");
-      setPanelMode({ kind: "closed" });
+      closeUserPanel();
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "更新に失敗しました");
@@ -174,7 +183,7 @@ export function UsersPage() {
     },
     onSuccess: () => {
       toast.success("パスワードをリセットしました");
-      setPanelMode({ kind: "closed" });
+      closeUserPanel();
       setNewPassword("");
       setConfirmPassword("");
     },
@@ -197,7 +206,6 @@ export function UsersPage() {
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "削除に失敗しました");
-      setDeleteTarget(null);
     },
   });
 
@@ -207,9 +215,7 @@ export function UsersPage() {
       key: "username",
       header: "ユーザー名",
       render: (u) => (
-        <span className={css({ fontWeight: "500", fontFamily: "mono", fontSize: "sm" })}>
-          {u.username}
-        </span>
+        <button type="button" className={css({ fontWeight: "600", fontFamily: "mono", fontSize: "sm", color: "accent.text", textDecoration: "underline", cursor: "pointer" })} onClick={() => { editMutation.reset(); setEditForm(editFormFromUser(u)); setPanelMode({ kind: "edit", user: u }); selection.select(u.id); }}>{u.username}</button>
       ),
     },
     {
@@ -250,12 +256,7 @@ export function UsersPage() {
     {
       key: "totp_enabled",
       header: "2FA",
-      render: (u) =>
-        u.totp_enabled ? (
-          <ShieldCheck size={16} className={css({ color: "success.text", display: "inline" })} />
-        ) : (
-          <ShieldOff size={16} className={css({ color: "text.subtle", display: "inline" })} />
-        ),
+      render: (u) => <span className={css({ display: "inline-flex", alignItems: "center", gap: "1", whiteSpace: "nowrap" })}>{u.totp_enabled ? <ShieldCheck size={16} className={css({ color: "success.text" })} /> : <ShieldOff size={16} className={css({ color: "text.muted" })} />}{u.totp_enabled ? "有効" : "未設定"}</span>,
     },
     {
       key: "email",
@@ -266,8 +267,8 @@ export function UsersPage() {
     },
     {
       key: "_actions",
-      header: "",
-      width: "180px",
+      header: "操作",
+      width: "300px",
       align: "right",
       render: (u) => (
         <div className={css({ display: "flex", gap: "1", justifyContent: "flex-end" })}>
@@ -278,12 +279,13 @@ export function UsersPage() {
               className={button({ variant: "ghost", size: "sm" })}
               title="パスワードをリセット"
               onClick={() => {
+                resetMutation.reset();
                 setNewPassword("");
                 setConfirmPassword("");
                 setPanelMode({ kind: "reset-password", user: u });
               }}
             >
-              <KeyRound size={14} />
+              <KeyRound size={14} />パスワード
             </button>
           )}
           {/* 編集 */}
@@ -292,11 +294,12 @@ export function UsersPage() {
             className={button({ variant: "ghost", size: "sm" })}
             title="編集"
             onClick={() => {
+              editMutation.reset();
               setEditForm(editFormFromUser(u));
-              setPanelMode({ kind: "edit", user: u });
+              setPanelMode({ kind: "edit", user: u }); selection.select(u.id);
             }}
           >
-            <Pencil size={14} />
+            <Pencil size={14} />編集
           </button>
           {/* 削除 */}
           <button
@@ -305,7 +308,7 @@ export function UsersPage() {
             title="削除"
             onClick={() => setDeleteTarget(u)}
           >
-            <Trash2 size={14} className={css({ color: "danger.text" })} />
+            <Trash2 size={14} className={css({ color: "danger.text" })} />削除
           </button>
         </div>
       ),
@@ -321,44 +324,34 @@ export function UsersPage() {
       : null;
 
   return (
-    <PageLayout title="ユーザー管理" description="システムユーザーの一覧・作成・編集・削除">
-      {/* ヘッダアクション */}
-      <div className={css({ display: "flex", justifyContent: "flex-end", mb: "4" })}>
-        <button
-          type="button"
-          className={button({ variant: "primary" })}
-          style={{ height: "36px" }}
-          onClick={() => {
-            setCreateForm(emptyCreateForm());
-            setCreateErrors({});
-            setPanelMode({ kind: "create" });
-          }}
-        >
-          <Plus size={16} />
-          ユーザーを追加
-        </button>
-      </div>
+    <PageLayout title="ユーザー管理" description="システムを利用するユーザーと権限を管理します" actions={
+      <button type="button" className={button({ variant: "primary" })} onClick={() => { createMutation.reset(); setCreateForm(emptyCreateForm()); setCreateErrors({}); selection.clear(); setPanelMode({ kind: "create" }); }}><Plus size={16} />ユーザーを追加</button>
+    }>
 
       <DataTable
         columns={columns}
         rows={listQuery.data ?? []}
         rowKey={(u) => u.id}
         loading={listQuery.isLoading}
+        error={listQuery.error}
+        onRetry={() => void listQuery.refetch()}
+        searchable
         emptyMessage="ユーザーがいません"
       />
 
       {/* ─── 作成パネル ─── */}
       <SlidePanel
         open={panelMode.kind === "create"}
+        busy={createMutation.isPending}
         title="ユーザーを追加"
-        onClose={() => setPanelMode({ kind: "closed" })}
+        onClose={closeUserPanel}
         footer={
           <>
             <button
               type="button"
               className={button({ variant: "secondary" })}
               style={{ height: "36px" }}
-              onClick={() => setPanelMode({ kind: "closed" })}
+              onClick={closeUserPanel}
               disabled={createMutation.isPending}
             >
               キャンセル
@@ -381,6 +374,7 @@ export function UsersPage() {
         }
       >
         <div className={css({ display: "flex", flexDirection: "column", gap: "4" })}>
+          {createMutation.isError && <p role="alert" className={css({ color: "danger.text", fontSize: "sm" })}>{createMutation.error.message}</p>}
           <Field label="ユーザー名 *" error={createErrors.username}>
             <input
               className={input()}
@@ -432,15 +426,16 @@ export function UsersPage() {
       {/* ─── 編集パネル ─── */}
       <SlidePanel
         open={panelMode.kind === "edit"}
+        busy={editMutation.isPending}
         title={panelMode.kind === "edit" ? `編集: ${panelMode.user.username}` : "編集"}
-        onClose={() => setPanelMode({ kind: "closed" })}
+        onClose={closeUserPanel}
         footer={
           <>
             <button
               type="button"
               className={button({ variant: "secondary" })}
               style={{ height: "36px" }}
-              onClick={() => setPanelMode({ kind: "closed" })}
+              onClick={closeUserPanel}
               disabled={editMutation.isPending}
             >
               キャンセル
@@ -458,14 +453,15 @@ export function UsersPage() {
         }
       >
         <div className={css({ display: "flex", flexDirection: "column", gap: "4" })}>
-          <Field label="表示名">
+          {editMutation.isError && <p role="alert" className={css({ color: "danger.text", fontSize: "sm" })}>{editMutation.error.message}</p>}
+          <Field required label="表示名">
             <input
               className={input()}
               value={editForm.display_name}
               onChange={(e) => setEditForm((f) => ({ ...f, display_name: e.target.value }))}
             />
           </Field>
-          <Field label="ロール">
+          <Field required label="ロール">
             <select
               className={input()}
               value={editForm.role}
@@ -519,19 +515,20 @@ export function UsersPage() {
       {/* ─── パスワードリセットパネル ─── */}
       <SlidePanel
         open={panelMode.kind === "reset-password"}
+        busy={resetMutation.isPending}
         title={
           panelMode.kind === "reset-password"
             ? `パスワードリセット: ${panelMode.user.username}`
             : "パスワードリセット"
         }
-        onClose={() => setPanelMode({ kind: "closed" })}
+        onClose={closeUserPanel}
         footer={
           <>
             <button
               type="button"
               className={button({ variant: "secondary" })}
               style={{ height: "36px" }}
-              onClick={() => setPanelMode({ kind: "closed" })}
+              onClick={closeUserPanel}
               disabled={resetMutation.isPending}
             >
               キャンセル
@@ -554,7 +551,9 @@ export function UsersPage() {
         }
       >
         <div className={css({ display: "flex", flexDirection: "column", gap: "4" })}>
-          <Field label="新しいパスワード">
+          {resetMutation.isError && <p role="alert" className={css({ color: "danger.text", fontSize: "sm" })}>{resetMutation.error.message}</p>}
+          <p className={css({ fontSize: "sm", color: "text.muted" })}>パスワードを変更すると、このユーザーの既存のセッションはすべて終了します。</p>
+          <Field required label="新しいパスワード">
             <input
               className={input()}
               type="password"
@@ -563,7 +562,7 @@ export function UsersPage() {
               autoComplete="new-password"
             />
           </Field>
-          <Field label="パスワードの確認" error={resetPasswordError ?? undefined}>
+          <Field required label="パスワードの確認" error={resetPasswordError ?? undefined}>
             <input
               className={input()}
               type="password"
@@ -597,27 +596,3 @@ export function UsersPage() {
 // ─────────────────────────────────────────────────────────
 // 補助コンポーネント
 // ─────────────────────────────────────────────────────────
-
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className={css({ display: "block" })}>
-        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
-          {label}
-        </span>
-        {children}
-      </label>
-      {error ? (
-        <p className={css({ fontSize: "sm", color: "danger.text", mt: "1" })}>{error}</p>
-      ) : null}
-    </div>
-  );
-}

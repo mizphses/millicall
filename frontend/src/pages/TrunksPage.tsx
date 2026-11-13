@@ -1,3 +1,6 @@
+import { ObjectLink, NumberPlanLink } from "../components/ObjectLink";
+import { useObjectSelection } from "../hooks/useObjectSelection";
+import { Field } from "../components/Field";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
@@ -65,11 +68,12 @@ async function updateTrunk(
   return data;
 }
 
-async function deleteTrunk(id: number): Promise<void> {
-  const { error } = await api.DELETE("/api/trunks/{trunk_id}", {
+async function deleteTrunk(id: number): Promise<boolean> {
+  const { error, response } = await api.DELETE("/api/trunks/{trunk_id}", {
     params: { path: { trunk_id: id } },
   });
   if (error) throw new Error("トランクの削除に失敗しました");
+  return response.headers.has("X-Apply-Warning");
 }
 
 type TrunkStatusResult = components["schemas"]["TrunkStatusResult"];
@@ -137,7 +141,10 @@ export function TrunksPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<TrunkRead | null>(null);
 
+  const selection = useObjectSelection(listQuery.data, openEdit, closePanel);
+
   function openCreate() {
+    selection.clear();
     setEditing(null);
     setForm(emptyForm());
     setFieldErrors({});
@@ -146,6 +153,7 @@ export function TrunksPage() {
   }
 
   function openEdit(trunk: TrunkRead) {
+    selection.select(trunk.id);
     setEditing(trunk);
     setForm(formFromTrunk(trunk));
     setFieldErrors({});
@@ -155,6 +163,7 @@ export function TrunksPage() {
 
   function closePanel() {
     setPanelOpen(false);
+    selection.clear();
   }
 
   const saveMutation = useMutation({
@@ -162,10 +171,12 @@ export function TrunksPage() {
       if (editing) return updateTrunk(editing.id, form, editing);
       return createTrunk(form);
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
+      if (saved.apply_warning) toast.warn(saved.apply_warning);
       queryClient.invalidateQueries({ queryKey: TRUNKS_KEY });
-      toast.success(editing ? "トランクを更新しました" : "トランクを作成しました");
+      toast.success(editing ? "トランクを保存し、反映を試行しました" : "トランクを作成しました");
       setPanelOpen(false);
+    selection.clear();
     },
     onError: (err) => {
       if (err instanceof TrunkNameConflictError) {
@@ -178,7 +189,8 @@ export function TrunksPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteTrunk(id),
-    onSuccess: () => {
+    onSuccess: (warning) => {
+      if (warning) toast.warn("削除は保存されましたが、電話サービスへの反映に失敗しました。システム画面で電話サービスの状態を確認してください。");
       queryClient.invalidateQueries({ queryKey: TRUNKS_KEY });
       toast.success("トランクを削除しました");
       setDeleteTarget(null);
@@ -193,14 +205,6 @@ export function TrunksPage() {
     const errors = validateForm(form, editing ? "edit" : "create");
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
-    if (editing) {
-      const payload = buildUpdatePayload(form, editing);
-      if (Object.keys(payload).length === 0) {
-        toast.show("変更はありません", "neutral");
-        setPanelOpen(false);
-        return;
-      }
-    }
     saveMutation.mutate();
   }
 
@@ -224,7 +228,7 @@ export function TrunksPage() {
       key: "inbound_extension",
       header: "着信先",
       width: "90px",
-      render: (row) => (row.inbound_extension !== "" ? row.inbound_extension : "—"),
+      render: (row) => { const entry = numberPlan.find(value => value.number === row.inbound_extension); return entry ? <NumberPlanLink entry={entry} /> : row.inbound_extension || "—"; },
     },
     {
       key: "enabled",
@@ -284,10 +288,14 @@ export function TrunksPage() {
         rows={listQuery.data ?? []}
         rowKey={(row) => row.id}
         loading={listQuery.isLoading}
+        error={listQuery.error}
+        onRetry={() => void listQuery.refetch()}
+        searchable
         emptyMessage="トランクがまだありません。右上の「トランクを追加」から登録してください。"
       />
 
       <SlidePanel
+        busy={saveMutation.isPending}
         open={panelOpen}
         title={editing ? "トランクを編集" : "トランクを追加"}
         onClose={closePanel}
@@ -317,7 +325,8 @@ export function TrunksPage() {
           onSubmit={handleSubmit}
           className={css({ display: "flex", flexDirection: "column", gap: "4" })}
         >
-          <Field label="名前（識別子）" error={fieldErrors.name}>
+          {editing && <p className={css({ fontSize: "sm", color: "text.muted" })}>保存すると、変更がない場合も電話サービスへ設定を再反映します。</p>}
+          <Field required label="名前（識別子）" error={fieldErrors.name}>
             <input
               className={input({ invalid: fieldErrors.name ? true : undefined })}
               value={form.name}
@@ -328,7 +337,7 @@ export function TrunksPage() {
             />
           </Field>
 
-          <Field label="表示名" error={fieldErrors.display_name}>
+          <Field required label="表示名" error={fieldErrors.display_name}>
             <input
               className={input({ invalid: fieldErrors.display_name ? true : undefined })}
               value={form.display_name}
@@ -337,7 +346,7 @@ export function TrunksPage() {
             />
           </Field>
 
-          <Field label="種別" error={fieldErrors.trunk_type}>
+          <Field required label="種別" error={fieldErrors.trunk_type}>
             <select
               className={input({ invalid: fieldErrors.trunk_type ? true : undefined })}
               value={form.trunk_type}
@@ -350,7 +359,7 @@ export function TrunksPage() {
             </select>
           </Field>
 
-          <Field label="ホスト名" error={fieldErrors.host}>
+          <Field required label="ホスト名" error={fieldErrors.host}>
             <input
               className={input({ invalid: fieldErrors.host ? true : undefined })}
               value={form.host}
@@ -361,7 +370,7 @@ export function TrunksPage() {
             />
           </Field>
 
-          <Field label="ユーザー名" error={fieldErrors.username}>
+          <Field required label="ユーザー名" error={fieldErrors.username}>
             <input
               className={input({ invalid: fieldErrors.username ? true : undefined })}
               value={form.username}
@@ -371,6 +380,7 @@ export function TrunksPage() {
           </Field>
 
           <Field
+            required={!editing}
             label={editing ? "パスワード（空のまま＝変更しない）" : "パスワード"}
             error={fieldErrors.password}
           >
@@ -411,7 +421,7 @@ export function TrunksPage() {
             />
           </Field>
 
-          <Field label="着信先内線番号" error={fieldErrors.inbound_extension}>
+          <Field label="着信先内線番号" error={fieldErrors.inbound_extension} help={<ObjectLink to="/routes" newTab>番号プランを確認・登録</ObjectLink>}>
             <select
               className={input({ invalid: fieldErrors.inbound_extension ? true : undefined })}
               value={form.inbound_extension}
@@ -497,26 +507,3 @@ export function TrunksPage() {
 /** フォーム 1 項目（ラベル + 入力 + インラインエラー）。
  * wrap 方式: label > span（テキスト）+ children（input 等）で関連付ける。
  * Task 2（ExtensionsPage）で確立した標準形を踏襲。 */
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className={css({ display: "block" })}>
-        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
-          {label}
-        </span>
-        {children}
-      </label>
-      {error ? (
-        <p className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>
-      ) : null}
-    </div>
-  );
-}

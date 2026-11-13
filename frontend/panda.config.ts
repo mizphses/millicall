@@ -78,7 +78,7 @@ const inputRecipe = defineRecipe({
     transition: "border-color 0.12s",
     _placeholder: { color: "text.subtle" },
     _hover: { borderColor: "border.strong" },
-    _focus: { outline: "none", borderColor: "accent" },
+    _focus: { outline: "2px solid", outlineColor: "accent", outlineOffset: "2px", borderColor: "accent" },
     _disabled: { bg: "gray.50", opacity: 0.7, cursor: "not-allowed" },
   },
   variants: {
@@ -239,7 +239,7 @@ export default defineConfig({
           "bg.muted": { value: "{colors.gray.50}" },
           text: { value: "{colors.gray.900}" },
           "text.muted": { value: "{colors.gray.600}" },
-          "text.subtle": { value: "{colors.gray.400}" },
+          "text.subtle": { value: "{colors.gray.600}" },
           border: { value: "{colors.gray.200}" },
           "border.strong": { value: "{colors.gray.300}" },
           accent: { value: "{colors.teal.500}" },
@@ -279,5 +279,6 @@ export default defineConfig({
       WebkitFontSmoothing: "antialiased",
     },
     "*": { boxSizing: "border-box" },
+    ":focus-visible": { outline: "2px solid", outlineColor: "accent", outlineOffset: "2px" },
   },
 });

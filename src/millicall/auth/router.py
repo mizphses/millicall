@@ -13,8 +13,6 @@ TOTP 2FA が無効なユーザーのログインフロー:
 import json
 
 import pyotp
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -27,6 +25,11 @@ from millicall.auth.csrf import (
     generate_csrf_token,
     set_csrf_cookie,
 )
+from millicall.auth.hashing import (
+    find_recovery_code,
+    find_recovery_code_sync,
+    verify_password_async,
+)
 from millicall.auth.schemas import LoginRequest, UserRead
 from millicall.auth.security import (
     bump_session_epoch,
@@ -36,7 +39,6 @@ from millicall.auth.security import (
     matches_credentials,
     read_session,
     read_totp_ticket,
-    verify_password,
 )
 from millicall.auth.throttle import check_and_raise, clear_failures, record_failure
 from millicall.crypto import SecretBox
@@ -48,9 +50,6 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # タイミング均一化: 存在しないユーザーに対してもArgon2を必ず実行し、
 # レスポンス時間によるユーザー列挙を防ぐ
 _DUMMY_HASH = hash_password("millicall-dummy-timing-guard")
-
-# リカバリコード用 Argon2 ハッシャー（TOTP ルーターと共用せずここで宣言）
-_hasher = PasswordHasher()
 
 
 # ---------------------------------------------------------------------------
@@ -78,19 +77,6 @@ class PublicConfig(BaseModel):
 # ---------------------------------------------------------------------------
 # ユーティリティ
 # ---------------------------------------------------------------------------
-
-
-def _check_recovery_code(stored_hashes: list[str], code: str) -> int | None:
-    """リカバリコードを Argon2 で比較して一致したインデックスを返す。"""
-    for i, h in enumerate(stored_hashes):
-        try:
-            if _hasher.verify(h, code):
-                return i
-        except VerifyMismatchError:
-            continue
-        except Exception:  # noqa: BLE001
-            continue
-    return None
 
 
 def _set_session_cookie(response: Response, settings, token: str) -> None:
@@ -148,7 +134,8 @@ async def login(
 
     user = await session.scalar(select(User).where(User.username == body.username))
     check_hash = user.hashed_password if user is not None else _DUMMY_HASH
-    password_ok = verify_password(check_hash, body.password)
+    # Argon2 はイベントループ外（上限付き専用 executor）で計算する（issue #81）
+    password_ok = await verify_password_async(check_hash, body.password)
     if user is None or not password_ok or not user.enabled or user.origin != "local":
         # 失敗を記録（タイミングガードのダミーハッシュが完了した後）
         await record_failure(session, ip=ip, username=body.username, action="login")
@@ -250,7 +237,7 @@ async def login_totp(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # TOTP コードまたはリカバリコードを検証
-    method = _verify_code(user, secrets, body.code)
+    method = await _verify_code_async(user, secrets, body.code)
     if method is None:
         await record_failure(session, ip=ip, username=user.username, action="totp")
         await record_audit(
@@ -266,7 +253,7 @@ async def login_totp(
     # 成功: 失敗カウンタをリセット
     await clear_failures(session, username=user.username)
 
-    # リカバリコードの場合は消費済みを DB に反映する（_verify_code が user.recovery_codes を更新済み）
+    # リカバリコードの場合は消費済みを DB に反映する（_verify_code_async が user.recovery_codes を更新済み）
     if method.startswith("recovery:"):
         session.add(user)
 
@@ -285,44 +272,78 @@ async def login_totp(
     return UserRead.model_validate(user)
 
 
-def _verify_code(user: User, secrets, code: str) -> str | None:
-    """TOTP コードまたはリカバリコードを検証する。
+def _check_totp_and_load_recovery(user: User, secrets, code: str) -> tuple[bool, list[str] | None]:
+    """TOTP コードを検証し、不一致ならリカバリコードのハッシュ一覧を読み出す。
 
     Returns:
-        "totp"      : TOTP コードが一致
-        "recovery:N": N 番目のリカバリコードが一致（消費済みに更新）
-        None        : いずれも一致しない
+        (totp_ok, stored_recovery_hashes)。TOTP 一致時は (True, None)。
+        リカバリコードを試せない場合（未設定・破損）は (False, None)。
     """
     if user.totp_secret is None:
-        return None
+        return False, None
 
     box = SecretBox(secrets.master_key)
     try:
         plain_secret = box.decrypt(user.totp_secret)
     except Exception:  # noqa: BLE001
-        return None
+        return False, None
 
     # TOTP 検証
     totp = pyotp.TOTP(plain_secret)
     if totp.verify(code, valid_window=1):
-        return "totp"
+        return True, None
 
-    # リカバリコード検証
+    # リカバリコード読み出し
     if user.recovery_codes is None:
-        return None
+        return False, None
     try:
         stored: list[str] = json.loads(user.recovery_codes)
     except (json.JSONDecodeError, TypeError):
-        return None
+        return False, None
+    return False, stored
 
-    idx = _check_recovery_code(stored, code)
-    if idx is None:
-        return None
 
-    # 使用済みエントリを消費（None を除外して保存）
+def _consume_recovery_code(user: User, stored: list[str], idx: int) -> str:
+    """使用済みエントリを消費（None を除外して保存）し、method 文字列を返す。"""
     stored[idx] = None  # type: ignore[call-overload]
     user.recovery_codes = json.dumps([h for h in stored if h is not None])
     return f"recovery:{idx}"
+
+
+async def _verify_code_async(user: User, secrets, code: str) -> str | None:
+    """TOTP コードまたはリカバリコードを検証する（Argon2 はイベントループ外で計算）。
+
+    Returns:
+        "totp"      : TOTP コードが一致
+        "recovery:N": N 番目のリカバリコードが一致（消費済みに更新）
+        None        : いずれも一致しない（リカバリコードの形式不正も同じく None）
+    """
+    totp_ok, stored = _check_totp_and_load_recovery(user, secrets, code)
+    if totp_ok:
+        return "totp"
+    if stored is None:
+        return None
+    idx = await find_recovery_code(stored, code)
+    if idx is None:
+        return None
+    return _consume_recovery_code(user, stored, idx)
+
+
+def _verify_code(user: User, secrets, code: str) -> str | None:
+    """:func:`_verify_code_async` の同期版。
+
+    同期呼び出し元（mcp_server/login.py）との互換のために残す。Argon2 をループ上で
+    計算するため、async ハンドラからの新規利用は :func:`_verify_code_async` を使うこと。
+    """
+    totp_ok, stored = _check_totp_and_load_recovery(user, secrets, code)
+    if totp_ok:
+        return "totp"
+    if stored is None:
+        return None
+    idx = find_recovery_code_sync(stored, code)
+    if idx is None:
+        return None
+    return _consume_recovery_code(user, stored, idx)
 
 
 @router.post("/logout")

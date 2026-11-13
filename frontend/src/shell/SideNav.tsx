@@ -8,7 +8,7 @@ import { activeNavPath, navSectionsForRole } from "./nav";
  * サイドナビ。role に応じて表示項目をフィルタする。
  * role 未指定時は安全側（一般ユーザー相当 = 管理系項目なし）で描画する。
  */
-export function SideNav({ role }: { role?: string }) {
+export function SideNav({ role, mobile = false, onNavigate }: { role?: string; mobile?: boolean; onNavigate?: () => void }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // 入れ子パス（/network と /network/remote）でも 1 件だけを強調する
   const activePath = activeNavPath(pathname);
@@ -16,6 +16,9 @@ export function SideNav({ role }: { role?: string }) {
 
   return (
     <nav
+      id={mobile ? "primary-navigation" : "desktop-navigation"}
+      aria-label="メインメニュー"
+      style={mobile ? { width: "100%" } : undefined}
       className={css({
         width: "sidebar",
         flexShrink: 0,
@@ -68,6 +71,8 @@ export function SideNav({ role }: { role?: string }) {
                   <li key={item.path}>
                     <Link
                       to={item.path}
+                      onClick={onNavigate}
+                      aria-current={active ? "page" : undefined}
                       className={css({
                         display: "flex",
                         alignItems: "center",

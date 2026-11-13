@@ -52,8 +52,9 @@ from sqlalchemy import select
 from millicall.app_settings.service import effective_settings
 from millicall.audit import get_client_ip, record_audit
 from millicall.auth.csrf import generate_csrf_token
+from millicall.auth.hashing import hash_password_async
 from millicall.auth.saml.replay import consume_once
-from millicall.auth.security import hash_password, issue_session
+from millicall.auth.security import issue_session
 from millicall.models import User
 
 router = APIRouter(prefix="/saml", tags=["saml"])
@@ -606,7 +607,7 @@ async def saml_acs(
                 # username は email（最大 50 文字; DB unique 制約あり）
                 username = email[:50]
                 # ローカルログイン不可: 使用不能なランダムパスワードをハッシュ化
-                unusable_pw = hash_password(secrets.token_hex(32))
+                unusable_pw = await hash_password_async(secrets.token_hex(32))
                 user = User(
                     username=username,
                     hashed_password=unusable_pw,
