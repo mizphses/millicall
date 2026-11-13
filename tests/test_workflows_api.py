@@ -105,6 +105,17 @@ async def test_reject_bad_source_handle(auth_client_with_telephony):
 
 
 @pytest.mark.asyncio
+async def test_reject_multiple_edges_from_same_handle(auth_client_with_telephony):
+    c = auth_client_with_telephony
+    definition = _valid_definition()
+    first = definition["edges"][0]
+    definition["edges"].append({**first, "id": "dup"})
+    resp = await _create_workflow(c, definition=definition)
+    assert resp.status_code == 422
+    assert any("multiple edges from sourceHandle" in d for d in resp.json()["detail"])
+
+
+@pytest.mark.asyncio
 async def test_reject_missing_required_config(auth_client_with_telephony):
     c = auth_client_with_telephony
     definition = {

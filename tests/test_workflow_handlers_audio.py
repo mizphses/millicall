@@ -717,3 +717,66 @@ def test_safe_mailbox_strips_metacharacters() -> None:
     assert _safe_mailbox("../../etc/passwd") == "______etc_passwd"
     assert _safe_mailbox("") == "default"
     assert _safe_mailbox("normal_box-1") == "normal_box-1"
+
+
+# =========================================================================== #
+# handed_off フラグ (#115): 転送成功後はランナーが切断しない
+# =========================================================================== #
+
+
+@pytest.mark.asyncio
+async def test_transfer_sets_handed_off() -> None:
+    ctx = make_ctx()
+    ctx.call_control = make_fake_call_control()
+
+    await handle_transfer(make_transfer_node(destination="9001"), ctx)
+
+    assert ctx.handed_off is True
+
+
+@pytest.mark.asyncio
+async def test_transfer_failure_leaves_handed_off_false() -> None:
+    ctx = make_ctx()
+    ctx.call_control = make_fake_call_control()
+    ctx.call_control.transfer.side_effect = RuntimeError("esl down")
+
+    with pytest.raises(RuntimeError):
+        await handle_transfer(make_transfer_node(destination="9001"), ctx)
+
+    assert ctx.handed_off is False
+
+
+@pytest.mark.asyncio
+async def test_transfer_no_call_control_not_handed_off() -> None:
+    ctx = make_ctx()
+
+    await handle_transfer(make_transfer_node(destination="9001"), ctx)
+
+    assert ctx.handed_off is False
+
+
+@pytest.mark.asyncio
+async def test_human_escalation_sets_handed_off() -> None:
+    ctx = make_ctx()
+    ctx.primitives = make_fake_primitives()
+    ctx.call_control = make_fake_call_control()
+
+    await handle_human_escalation(
+        make_human_escalation_node(destination="5000", announcement_text=""), ctx
+    )
+
+    assert ctx.handed_off is True
+
+
+@pytest.mark.asyncio
+async def test_human_escalation_failure_leaves_handed_off_false() -> None:
+    ctx = make_ctx()
+    ctx.call_control = make_fake_call_control()
+    ctx.call_control.transfer.side_effect = RuntimeError("esl down")
+
+    with pytest.raises(RuntimeError):
+        await handle_human_escalation(
+            make_human_escalation_node(destination="5000", announcement_text=""), ctx
+        )
+
+    assert ctx.handed_off is False

@@ -59,7 +59,7 @@ def validate_graph(
 
     Checks: (a) exactly one start node, (b) every edge source/target references
     an existing node, (c) every edge sourceHandle is in the source node's handle
-    vocabulary, (e) goto target existence + goto/call_workflow cycle detection,
+    vocabulary, (c') at most one edge per (source, sourceHandle), (e) goto target existence + goto/call_workflow cycle detection,
     (f) unreachable-node warnings. Required-config enforcement (d) already
     happened at parse time.
     """
@@ -96,6 +96,19 @@ def validate_graph(
                     f"edge '{edge.id}' uses sourceHandle '{handle}' not in "
                     f"vocabulary for node '{edge.source}' ({source_node.type}): {allowed}"
                 )
+
+    # (c') one outgoing edge per (source, sourceHandle): the executor follows only
+    # the first match, so extra edges from the same handle would be silently ignored.
+    edges_by_handle: dict[tuple[str, str | None], list[str]] = {}
+    for edge in definition.edges:
+        edges_by_handle.setdefault((edge.source, edge.sourceHandle), []).append(edge.id)
+    for (source, handle), edge_ids in edges_by_handle.items():
+        if len(edge_ids) > 1:
+            source_type = node_map[source].type if source in node_map else "unknown"
+            result.errors.append(
+                f"node '{source}' ({source_type}) has multiple edges from "
+                f"sourceHandle '{handle}': {edge_ids}"
+            )
 
     # (e) goto target existence + goto cycle detection
     for node in definition.nodes:

@@ -562,6 +562,29 @@ async def test_say_and_listen_combines_say_then_listen(tmp_path):
     assert any(c.startswith("uuid_record fixed-uuid start") for c in esl.cmds)
 
 
+@pytest.mark.asyncio
+async def test_listen_without_stt_returns_empty(tmp_path):
+    """STT 未設定（None）でも例外にならず空文字を返し、録音もしない (#115)。"""
+    esl = _FakeEsl()
+    prim, slept = _make_primitives(esl, _FakeCallControl(), _FakeTTS(b""), None, tmp_path)
+    assert await prim.listen(max_seconds=5) == ""
+    assert await prim.listen(max_seconds=5) == ""
+    assert not any(c.startswith("uuid_record") for c in esl.cmds)
+    assert slept == []
+
+
+@pytest.mark.asyncio
+async def test_say_and_listen_without_stt_says_and_returns_empty(tmp_path):
+    """STT 未設定でも say は再生され、聞き取りは空文字 (#115)。"""
+    esl = _FakeEsl()
+    cc = _FakeCallControl()
+    prim, _ = _make_primitives(esl, cc, _FakeTTS(b"\x00\x00" * 400), None, tmp_path)
+    said, heard = await prim.say_and_listen("ご用件をどうぞ", max_seconds=5)
+    assert said == "ご用件をどうぞ"
+    assert heard == ""
+    assert len(cc.played) == 1
+
+
 # ===========================================================================
 # resolve_default_providers（裁定#1: 既定 MCP エージェント / プロバイダ解決）
 # ===========================================================================

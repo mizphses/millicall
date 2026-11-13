@@ -116,12 +116,20 @@ class WorkflowRunner:
                 "workflow runner: provider build failed for workflow_id=%d", workflow_id
             )
 
-        if tts is None or stt is None:
+        if tts is None:
             logger.warning(
                 "workflow runner: could not build primitives (tts=%s, stt=%s) "
                 "for workflow_id=%d; call_control will still work",
                 tts,
                 stt,
+                workflow_id,
+            )
+        elif stt is None:
+            # STT が無くても TTS 再生（play_audio / アナウンス）は行えるよう primitives は
+            # 構築する。listen 系ノードは空の認識結果を返す。
+            logger.warning(
+                "workflow runner: no STT provider for workflow_id=%d; "
+                "TTS playback will work but listen nodes will return empty transcripts",
                 workflow_id,
             )
 
@@ -136,7 +144,7 @@ class WorkflowRunner:
         )
 
         primitives: CallPrimitives | None = None
-        if tts is not None and stt is not None:
+        if tts is not None:
             primitives = CallPrimitives(
                 esl=self._esl,
                 call_uuid=uuid,
@@ -188,7 +196,9 @@ class WorkflowRunner:
         finally:
             # ハングアップが済んでいなければ切断する（正常終了・例外どちらでも）。
             # ctx が None の場合は ChannelContext 構築前に例外が発生したケース。
-            if not (ctx is not None and ctx.hung_up):
+            # transfer 等でダイヤルプランへ引き渡し済み（handed_off）のチャネルは
+            # 切断しない（転送直後に uuid_kill すると転送先へ繋がらない）。
+            if not (ctx is not None and (ctx.hung_up or ctx.handed_off)):
                 if ctx is not None:
                     await self._safe_hangup_ctx(ctx)
                 else:
