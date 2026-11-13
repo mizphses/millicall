@@ -26,6 +26,8 @@ from millicall.telephony.fsconfig import (
     TrunkConfig,
     WorkflowConfig,
     build_reload_commands,
+    is_profile_command_failure,
+    profile_start_command_from_restart,
 )
 
 logger = logging.getLogger("millicall.telephony.service")
@@ -257,8 +259,15 @@ class TelephonyChangeListener:
             # ゲートウェイは restart 後に直ちに REGISTER を試行するため、保存直後に
             # HGW 側で登録状態を確認できる。
             for cmd in build_reload_commands(current_trunk_names or [], changed=sync_gateway):
-                if (await client.api(cmd)).lstrip().startswith("-ERR"):
-                    raise ESLError("trunk profile update was rejected")
+                reply = await client.api(cmd)
+                start_cmd = profile_start_command_from_restart(cmd)
+                if start_cmd is not None and "Invalid Profile" in reply:
+                    # 新規トランクはプロファイルが未ロードのため、restart には
+                    # `Invalid Profile [external_<name>]` が返り（-ERR ではない）起動しない。
+                    # 同じプロファイルを start で起動し直す（issue #113）。
+                    reply = await client.api(start_cmd)
+                if is_profile_command_failure(reply):
+                    raise ESLError(f"trunk profile update was rejected: {reply.strip()}")
 
     async def notify(self, session: AsyncSession, *, sync_gateway: str | None = None) -> str | None:
         await self.regenerate(session)

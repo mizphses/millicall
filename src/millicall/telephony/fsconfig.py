@@ -157,6 +157,33 @@ def _reload_command_for(name: str, *, present: bool) -> str:
     return f"sofia profile external_{name} {action}"
 
 
+def profile_start_command_from_restart(cmd: str) -> str | None:
+    """`sofia profile external_<name> restart` を同プロファイルの start コマンドに変換する。
+
+    FreeSWITCH は未ロードのプロファイルへの restart に `Invalid Profile [...]` を返し
+    （`-ERR` で始まらない）、プロファイルは起動しない。新規トランクではこの応答を
+    受けたら start にフォールバックする。restart コマンド以外は None を返す。
+    トランク名は _reload_command_for と同じく検証する。
+    """
+    prefix = "sofia profile external_"
+    suffix = " restart"
+    if not (cmd.startswith(prefix) and cmd.endswith(suffix)):
+        return None
+    name = cmd[len(prefix) : -len(suffix)]
+    if not _SAFE_TRUNK_NAME_RE.fullmatch(name):
+        raise ValueError(f"不正なトランク名です: {name!r}")
+    return f"sofia profile external_{name} start"
+
+
+def is_profile_command_failure(reply: str) -> bool:
+    """sofia profile start/restart/stop の応答が失敗を示すかを判定する。
+
+    FreeSWITCH は `-ERR` 以外にも `Invalid Profile [...]` や `... Failure` などの
+    テキストで失敗を返すため、それらも失敗として扱う。
+    """
+    return reply.lstrip().startswith("-ERR") or "Invalid Profile" in reply or "Failure" in reply
+
+
 def build_reload_commands(
     trunk_names: list[str],
     *,

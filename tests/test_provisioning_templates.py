@@ -466,3 +466,66 @@ def test_yealink_phonebook_is_xml() -> None:
 
     assert xml_bytes.startswith(b"<?xml")
     assert b"YealinkIPPhoneDirectory" in xml_bytes
+
+
+# ---------------------------------------------------------------------------
+# issue #85: SIP NOTIFY 再取得・Action URI・トークン付き URL
+# ---------------------------------------------------------------------------
+
+
+def test_panasonic_common_resync_from_sip_is_check_sync() -> None:
+    """CFG_RESYNC_FROM_SIP は Y/N ではなく NOTIFY の Event 値（check-sync）。"""
+    from millicall.provisioning.templates import render_panasonic_common
+
+    content = render_panasonic_common(network_config=_MockNetworkConfig(), settings=_MockSettings())
+    assert 'CFG_RESYNC_FROM_SIP="check-sync"' in content
+    assert 'CFG_RESYNC_FROM_SIP="Y"' not in content
+
+
+def test_yealink_common_action_uri_limited_to_pbx_ip() -> None:
+    from millicall.provisioning.templates import render_yealink_common
+
+    nc = _MockNetworkConfig(lan_ip="10.1.2.3", provisioning_base_url="")
+    content = render_yealink_common(network_config=nc, settings=_MockSettings())
+    assert "features.action_uri.enable = 1" in content
+    assert "features.action_uri_limit_ip = 10.1.2.3" in content
+    # 通常 URL では DHCP option を止めない
+    assert "dhcp_option.enable" not in content
+
+
+def test_yealink_common_no_action_uri_without_lan_ip() -> None:
+    """PBX の LAN IP が取れない場合は Action URI 設定を出力しない。"""
+    from millicall.provisioning.templates import render_yealink_common
+
+    nc = _MockNetworkConfig(lan_ip="", provisioning_base_url="http://pbx.example")
+    content = render_yealink_common(network_config=nc, settings=_MockSettings())
+    assert "action_uri" not in content
+
+
+def test_token_root_used_for_provisioning_paths_only() -> None:
+    from millicall.provisioning.templates import (
+        render_panasonic_common,
+        render_panasonic_model_file,
+        render_yealink_boot,
+        render_yealink_common,
+    )
+
+    nc = _MockNetworkConfig(provisioning_base_url="http://172.20.0.1:8000")
+    st = _MockSettings()
+    root = "http://172.20.0.1:8000/provisioning/t/TOKEN123"
+
+    boot = render_yealink_boot(network_config=nc, settings=st, token="TOKEN123")
+    assert f"include:config <{root}/Yealink/common.cfg>" in boot
+    assert f"include:config <{root}/Yealink/$MAC.cfg>" in boot
+
+    common = render_yealink_common(network_config=nc, settings=st, token="TOKEN123")
+    assert f"static.auto_provision.server.url = {root}/Yealink" in common
+    assert "static.auto_provision.dhcp_option.enable = 0" in common
+    assert "http://172.20.0.1:8000/provisioning/phonebook/yealink.xml" in common
+
+    pana = render_panasonic_common(network_config=nc, settings=st, token="TOKEN123")
+    assert f'CFG_STANDARD_FILE_PATH="{root}/Panasonic/Config{{MAC}}.cfg"' in pana
+    assert "http://172.20.0.1:8000/provisioning/phonebook/panasonic.xml" in pana
+
+    model = render_panasonic_model_file(network_config=nc, settings=st, token="TOKEN123")
+    assert f'CFG_MASTER_FILE_PATH="{root}/Panasonic/ConfigCommon.cfg"' in model

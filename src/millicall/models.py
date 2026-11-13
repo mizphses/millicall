@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy import false as sa_false
 from sqlalchemy import true as sa_true
 from sqlalchemy.orm import Mapped, mapped_column
@@ -496,11 +496,23 @@ class Device(Base):
     provisioned: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_false()
     )
-    # ワンタイムプロビジョニングトークン。使用後に NULL 化する。NEVER log。
+    # 端末固有 cfg の配信ゲート。"standard"（LAN + 登録済み端末 + IP 一致 + active/enabled）/
+    # "strict"（加えてパス形式トークン必須）。issue #85。
+    provision_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="standard", server_default="standard"
+    )
+    # 厳格モードのプロビジョニングトークンの SHA-256 hex（平文は保存しない）。
+    # 管理者が明示的に発行・破棄する。取得のたびに消費はしない。NEVER log。
     provision_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    # 端末固有 cfg の最終取得記録（取得確認用）。
+    last_config_fetch_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_config_fetch_user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_config_fetch_used_token: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
@@ -513,3 +525,86 @@ class Device(Base):
             if not k.startswith("_") and k != "provision_token"
         ]
         return f"<{self.__class__.__name__}({', '.join(attrs)})>"
+
+
+class McpOAuthClient(Base):
+    """MCP OAuth の動的クライアント登録（RFC 7591 DCR）。
+
+    client_secret は SHA-256 ハッシュのみ保存する（平文は登録応答でのみ返す）。
+    client_info は OAuthClientInformationFull の JSON（client_secret は除外）。
+    """
+
+    __tablename__ = "mcp_oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_secret_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    client_info: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    # 最後にトークンを発行した時刻。NULL = 一度も認可が完了していない登録。
+    last_used_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class McpOAuthCode(Base):
+    """MCP OAuth 認可コード（一回限り）。code は SHA-256 ハッシュのみ保存する。"""
+
+    __tablename__ = "mcp_oauth_codes"
+
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("mcp_oauth_clients.client_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 発行時のアカウント状態（User.id / session_epoch / 資格情報タグ）。交換時に現在値と照合する。
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    credential_tag: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_challenge: Mapped[str] = mapped_column(String(255), nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    redirect_uri_provided_explicitly: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)  # JSON 配列
+    resource: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+
+
+class McpOAuthToken(Base):
+    """MCP OAuth アクセス/リフレッシュトークン。token は SHA-256 ハッシュのみ保存する。
+
+    grant_id は同一認可（コード交換 → リフレッシュの連鎖）に属するトークンを束ねる。
+    """
+
+    __tablename__ = "mcp_oauth_tokens"
+    __table_args__ = (Index("ix_mcp_oauth_tokens_subject_kind", "subject", "kind"),)
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)  # "access" / "refresh"
+    grant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    client_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("mcp_oauth_clients.client_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    credential_tag: Mapped[str] = mapped_column(String(64), nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)  # JSON 配列
+    resource: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+
+
+class SamlConsumedId(Base):
+    """消費済み SAML アサーション ID / AuthnRequest ID（リプレイ防御）。
+
+    key は "assertion:<ID>" / "request:<ID>" の SHA-256。PRIMARY KEY への INSERT で
+    複数プロセス間でも一回限りの消費を保証する。
+    """
+
+    __tablename__ = "saml_consumed_ids"
+
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)

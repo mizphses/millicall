@@ -1,15 +1,22 @@
-"""プロビジョニングサービス — デバイス同期・クイックプロビジョニング・電話機リセット。
+"""プロビジョニングサービス — デバイス同期・クイックプロビジョニング・再取得指示。
 
 netd 経由で DHCP リースを取得して Device 行を upsert したり、
 管理者が指定した内線番号をデバイスに割り当てたりするユースケース関数群。
+端末固有 cfg の配信ゲート（provision_mode / 厳格モードのトークン）と取得記録、
+SIP 登録状態の取得、電話機への再取得指示（resync）の補助もここに置く。
 """
 
+import asyncio
 import base64
+import hashlib
+import hmac
 import logging
+import re
 import secrets
-import urllib.parse
 from collections.abc import Awaitable, Callable, Iterator, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 from sqlalchemy import inspect as sa_inspect
@@ -22,6 +29,7 @@ from millicall.net_guard import _check_device_ip, _PinnedTransport
 from millicall.network.client import NetdClient
 from millicall.network.validation import is_valid_hostname, normalize_mac, validate_ipv4
 from millicall.sip_credentials import new_extension_password
+from millicall.telephony.esl import ESLError
 
 logger = logging.getLogger("millicall.provisioning")
 
@@ -121,6 +129,8 @@ async def sync_devices_from_leases(
                 model=None,
                 extension_id=None,
                 provision_token=None,
+                last_config_fetch_at=None,
+                last_config_fetch_user_agent=None,
             )
             session.add(device)
             by_mac[mac] = device
@@ -145,31 +155,23 @@ async def quick_provision(
     telephony_notify: Callable[[AsyncSession], Awaitable[None]],
     *,
     secret_box: SecretBox,
-    set_token: bool = False,
 ) -> Device:
     """デバイスに内線を割り当ててプロビジョニング完了状態にする。
 
     Extension が存在しない場合は新規作成する（SIP パスワードは自動生成）。
-    ``set_token=True`` のときのみワンタイムプロビジョニングトークンを設定し、
     FreeSWITCH 設定を再生成する。
 
-    トークンを設定するかどうか（``set_token``）について:
-        端末固有 cfg ルート（``_get_provisioned_device``）は「provision_token が
-        設定されていれば ?token= 一致必須、無ければ LAN + known-device で通過」という
-        ゲートを持つ。しかし DHCP-ZTP の電話は boot/共通 cfg の絶対 URL から
-        ``$MAC.cfg`` をトークン無しで取得しにくるため、トークンを配送する手段が
-        必要になる。現状その配送手段は ``resync_phone`` のみだが、``resync_phone`` は
-        電話へ「自分の option66 URL から再取得せよ」と促すだけで **URL に
-        provision_token を含めない**（＝トークンは消費されない）。加えて
-        ``resync_phone`` は電話機管理者資格情報（``phone_admin_username`` /
-        ``phone_admin_password``）が未設定だとスキップされる。
+    トークンについて（issue #85）:
+        プロビジョニングトークンはここでは発行しない。端末固有 cfg は既定（standard）で
+        LAN + 登録済み端末 + IP 一致 + active/enabled のゲートで配信する。トークン必須の
+        厳格モード（strict）は管理者が端末ごとに明示的に選び、トークンも明示的に発行して
+        電話機の Web 画面へ手入力する（``issue_provision_token`` / devices_router 参照）。
+        以前は電話機管理者資格情報が設定済みだと自動でトークンを発行していたが、
+        トークン付き URL を電話機へ配送する手段が無く、電話機が 404 のまま
+        登録できなくなっていた。
 
-        したがって資格情報が未設定のまま常にトークンを設定すると、電話は
-        トークン無しで cfg を取りに来て 404 となり登録できない（ZTP がブロックされる）。
-        トークンを配送できる見込みがある場合（＝資格情報が設定済み）のみトークンを
-        設定する方針とし、それ以外は ``provision_token=None`` のままにして
-        LAN + known-device ゲートで ZTP を通す。呼び出し元が資格情報の有無を
-        判定して ``set_token`` に渡す。
+        内線の割り当てが変わるため、設定ファイル取得記録はリセットする
+        （以前の取得は新しい内線の設定を反映していない）。
 
     Args:
         session: SQLAlchemy 非同期セッション。
@@ -178,7 +180,7 @@ async def quick_provision(
         display_name: 内線の表示名（既存 Extension がある場合は更新しない）。
         telephony_notify: TelephonyChangeListener.notify のような非同期 callable。
                           call signature: ``async (session) -> None``。
-        set_token: True のときのみ provision_token を設定する。既定 False。
+        secret_box: 新規作成する内線の SIP パスワードを暗号化する鍵。
 
     Returns:
         更新済みの Device オブジェクト。
@@ -204,10 +206,8 @@ async def quick_provision(
 
     device.extension_id = ext.id
     device.provisioned = True
-    # トークンは配送できる見込みがある場合（資格情報設定済み）のみ設定する。
-    # 未設定なら None のままにして LAN + known-device ゲートで ZTP を通す。
-    if set_token:
-        device.provision_token = secrets.token_urlsafe(32)
+    # 取得確認は新しい割り当てで取り直す（UI の「完了」判定に古い取得を使わない）。
+    reset_config_fetch(device)
 
     await session.commit()
     await session.refresh(device)
@@ -218,46 +218,332 @@ async def quick_provision(
     return device
 
 
+# ---------------------------------------------------------------------------
+# 配信ゲートの補助（provision_mode / トークン / 取得記録）— issue #85
+# ---------------------------------------------------------------------------
+
+PROVISION_MODE_STANDARD = "standard"
+PROVISION_MODE_STRICT = "strict"
+PROVISION_MODES = (PROVISION_MODE_STANDARD, PROVISION_MODE_STRICT)
+
+# User-Agent の保存上限（devices.last_config_fetch_user_agent の列長）。
+_USER_AGENT_MAX = 255
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def generate_provision_token() -> str:
+    """厳格モード用のプロビジョニングトークン（URL セーフ・43 文字）を生成する。"""
+    return secrets.token_urlsafe(32)
+
+
+def hash_provision_token(token: str) -> str:
+    """トークンの SHA-256 hex を返す。DB には平文ではなくこの値を保存する。
+
+    トークンは 256bit の乱数のためソルト・ストレッチは不要（総当たり不能）。
+    """
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def provision_token_matches(device: Device, token: str) -> bool:
+    """提示されたトークンが Device に保存済みのトークン（ハッシュ）と一致するか。"""
+    if device.provision_token is None:
+        return False
+    return hmac.compare_digest(
+        hash_provision_token(token).encode(), device.provision_token.encode()
+    )
+
+
+def sanitize_user_agent(user_agent: str | None) -> str | None:
+    """User-Agent から制御文字を除き、列長に収める（管理 UI 表示用）。"""
+    if not user_agent:
+        return None
+    cleaned = _CONTROL_CHARS_RE.sub("", user_agent).strip()
+    return cleaned[:_USER_AGENT_MAX] or None
+
+
+def record_config_fetch(device: Device, *, user_agent: str | None, used_token: bool) -> None:
+    """端末固有 cfg を配信したことを Device に記録する（commit は呼び出し元）。"""
+    device.last_config_fetch_at = _utcnow()
+    device.last_config_fetch_user_agent = sanitize_user_agent(user_agent)
+    device.last_config_fetch_used_token = used_token
+
+
+def reset_config_fetch(device: Device) -> None:
+    """取得記録を未取得に戻す（内線の再割り当て・トークン再発行時など）。"""
+    device.last_config_fetch_at = None
+    device.last_config_fetch_user_agent = None
+    device.last_config_fetch_used_token = False
+
+
+def detect_vendor(device: Device) -> str | None:
+    """取得時の User-Agent（なければ model）から "yealink" / "panasonic" を推定する。
+
+    推定できなければ None（resync では全ベンダーの手段を試す）。
+    """
+    for source in (device.last_config_fetch_user_agent, device.model):
+        if not source:
+            continue
+        low = source.lower()
+        if "yealink" in low:
+            return "yealink"
+        if "panasonic" in low or "kx-" in low:
+            return "panasonic"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# FreeSWITCH の SIP 登録状態 / check-sync NOTIFY（ESL 経由）
+# ---------------------------------------------------------------------------
+
+# ESL 疎通の最大待ち時間（秒）。trunks/router の _STATUS_TIMEOUT と同水準。
+_ESL_TIMEOUT = 5.0
+
+# check_sync に渡す user@domain の user 部の許容形式。ESL コマンドへの改行・空白・
+# 制御文字の混入（コマンド注入）を防ぐため、英数と限られた記号のみに厳格に絞る。
+# domain 部は validate_ipv4 / is_valid_hostname で検証する。
+_SIP_USER_RE = re.compile(r"^[A-Za-z0-9_.+-]{1,64}$")
+
+EslFactory = Callable[[], Any]
+
+
+@dataclass(frozen=True)
+class SipRegistration:
+    """``sofia status profile internal reg`` の 1 登録分。"""
+
+    user: str  # "1001@192.168.10.1"（User: 行そのまま）
+    ip: str | None  # 登録元 IP（IP: 行。古い FreeSWITCH では無いことがある）
+
+    @property
+    def user_part(self) -> str:
+        return self.user.split("@", 1)[0]
+
+
+def parse_sofia_registrations(output: str) -> list[SipRegistration]:
+    """``sofia status profile internal reg`` の出力から登録一覧を取り出す。
+
+    出力は ``Call-ID:`` で始まる「キー: 値」行のブロックの並び。User / IP のみ使う。
+    """
+    regs: list[SipRegistration] = []
+    current: dict[str, str] | None = None
+
+    def _flush() -> None:
+        if current and current.get("User"):
+            regs.append(SipRegistration(user=current["User"], ip=current.get("IP") or None))
+
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key == "Call-ID":
+            _flush()
+            current = {}
+        if current is not None:
+            current[key] = value.strip()
+    _flush()
+    return regs
+
+
+async def fetch_sip_registrations(
+    esl_factory: EslFactory,
+    *,
+    timeout: float = _ESL_TIMEOUT,
+) -> list[SipRegistration] | None:
+    """FreeSWITCH internal プロファイルの登録一覧を取得する。
+
+    FreeSWITCH へ到達できない場合は None（＝未確認。「登録なし」と区別する）。
+    接続は trunks/router の trunk_status と同様に要求ごとに張って閉じる。
+    """
+    client = esl_factory()
+
+    async def _query() -> str:
+        await client.connect()
+        return await client.api("sofia status profile internal reg")
+
+    try:
+        out = await asyncio.wait_for(_query(), timeout=timeout)
+    except (TimeoutError, OSError, ESLError):
+        return None
+    finally:
+        await client.close()
+    return parse_sofia_registrations(out)
+
+
+def device_is_registered(
+    device: Device, extension_number: str | None, regs: Sequence[SipRegistration]
+) -> bool:
+    """Device の内線が、Device の IP から登録されているか。
+
+    同じ内線を別端末（ソフトフォン等）で登録している場合に誤って「登録済み」と
+    しないよう、登録元 IP が取れる場合は IP 一致も要求する。
+    """
+    if not extension_number or not device.ip_address:
+        return False
+    for reg in regs:
+        if reg.user_part != extension_number:
+            continue
+        if reg.ip is None or reg.ip == device.ip_address:
+            return True
+    return False
+
+
+def valid_check_sync_target(user_at_domain: str) -> bool:
+    """check_sync の引数（user@domain）が厳格な形式に合うか。"""
+    user, sep, domain = user_at_domain.partition("@")
+    if not sep or not _SIP_USER_RE.match(user):
+        return False
+    try:
+        validate_ipv4(domain)
+        return True
+    except ValueError:
+        return is_valid_hostname(domain)
+
+
+@dataclass
+class ResyncAttempt:
+    """再取得指示の 1 手段の結果。
+
+    ok は「指示が受理された」ことだけを表す（電話機が実際に設定を取りに来たかは
+    取得記録 ``last_config_fetch_at`` で確認する）。verified=False の手段は
+    ベンダー資料で確認できていない（実機未検証）。skipped=True は送信していない。
+    """
+
+    method: str
+    ok: bool
+    detail: str
+    verified: bool = True
+    skipped: bool = False
+
+
+@dataclass
+class ResyncResult:
+    """resync_phone の構造化結果。"""
+
+    attempts: list[ResyncAttempt] = field(default_factory=list)
+
+    @property
+    def requested(self) -> bool:
+        """1 つ以上の手段で再取得の指示が受理されたか。"""
+        return any(a.ok for a in self.attempts)
+
+
+_CHECK_SYNC = "sip_notify_check_sync"
+
+
+async def _sip_check_sync(
+    device: Device,
+    esl_factory: EslFactory,
+    *,
+    timeout: float,
+) -> ResyncAttempt:
+    """端末 IP から登録中の SIP ユーザーへ check-sync NOTIFY を送らせる。
+
+    FreeSWITCH の ``sofia profile internal check_sync <user>@<domain>`` を使う。
+    宛先は「Device の IP から登録している登録」の User をそのまま使う（再割り当て直後で
+    旧内線のまま登録している端末にも届くよう、DB の内線番号ではなく登録から引く）。
+    """
+    regs = await fetch_sip_registrations(esl_factory, timeout=timeout)
+    if regs is None:
+        return ResyncAttempt(_CHECK_SYNC, False, "FreeSWITCH に接続できません", skipped=True)
+    target = next((r.user for r in regs if r.ip and r.ip == device.ip_address), None)
+    if target is None:
+        return ResyncAttempt(
+            _CHECK_SYNC, False, "この端末の SIP 登録が見つかりません", skipped=True
+        )
+    if not valid_check_sync_target(target):
+        logger.warning("resync_phone: check_sync 宛先の形式が不正なため送信しない: %r", target)
+        return ResyncAttempt(_CHECK_SYNC, False, "SIP 登録ユーザーの形式が不正です", skipped=True)
+
+    client = esl_factory()
+
+    async def _send() -> str:
+        await client.connect()
+        return await client.api(f"sofia profile internal check_sync {target}")
+
+    try:
+        out = await asyncio.wait_for(_send(), timeout=timeout)
+    except (TimeoutError, OSError, ESLError):
+        return ResyncAttempt(_CHECK_SYNC, False, "FreeSWITCH への送信に失敗しました")
+    finally:
+        await client.close()
+    if out.startswith("+OK"):
+        return ResyncAttempt(_CHECK_SYNC, True, f"NOTIFY を {target} へ送信しました")
+    return ResyncAttempt(_CHECK_SYNC, False, f"FreeSWITCH が拒否しました: {out[:80]}")
+
+
+async def _http_get_attempt(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None,
+    timeout: float,
+    verified: bool,
+) -> ResyncAttempt:
+    """HTTP GET を 1 回送り、2xx のときだけ成功とする（3xx のログイン画面等は失敗）。"""
+    try:
+        r = await client.get(url, headers=headers, timeout=timeout)
+    except Exception:  # noqa: BLE001 — 電話機側の失敗はすべて「指示できなかった」扱い
+        return ResyncAttempt(method, False, "接続できません", verified=verified)
+    ok = 200 <= r.status_code < 300
+    return ResyncAttempt(method, ok, f"HTTP {r.status_code}", verified=verified)
+
+
 async def resync_phone(
     device: Device,
     *,
     admin_username: str,
     admin_password: str,
-) -> bool:
-    """電話機の IP アドレスへ HTTP resync リクエストを送る（ベストエフォート）。
+    esl_factory: EslFactory | None = None,
+    http_timeout: float = 5.0,
+    esl_timeout: float = _ESL_TIMEOUT,
+) -> ResyncResult:
+    """電話機へ設定の再取得を指示する（ベストエフォート。例外は伝播させない）。
 
-    Panasonic KX-HDV → /admin/resync → /cgi-bin/api-provision の順で試行し、
-    どちらも失敗した場合は Yealink AutoProvision を試みる。
-    1 つでも成功したら True を返す。全失敗は False。
+    これは「再取得の指示」であって設定の配送ではない。電話機は自分に設定済みの
+    プロビジョニング URL（通常は DHCP option 66、厳格モードでは管理者が手入力した
+    トークン付き URL）から取りに来る。実際に取りに来たかは取得記録で確認する。
 
-    エラーは飲み込み、例外を呼び出し元に伝播させない。
+    手段（結果はすべて ``ResyncResult.attempts`` に残す）:
+      1. SIP NOTIFY check-sync（``esl_factory`` 指定時。端末 IP から SIP 登録中のときのみ）。
+         Panasonic は ConfigCommon.cfg の CFG_RESYNC_FROM_SIP="check-sync"、Yealink は
+         check-sync に反応する想定（いずれも実機要確認。Yealink は設定により再起動を伴う）。
+      2. HTTP。ベンダーは取得時の User-Agent から推定し、不明なら全手段を試す。
+         成功判定は 2xx のみ。最初に成功した時点で残りの HTTP 手段は送らない。
+         - Yealink Action URI ``/servlet?key=AutoP``（資料あり。common.cfg で配る
+           features.action_uri_limit_ip に PBX の IP が入っている必要がある）
+         - Panasonic ``/admin/resync``（**未検証**: ベンダー資料で確認できていない）
+         - Panasonic ``/cgi-bin/api-provision?event=resync``（**未検証**・認証なし）
+
+    電話機管理者資格情報（``admin_username`` / ``admin_password``）は Basic 認証に使う。
+    どちらかが空なら HTTP の手段は一切送らない（空の資格情報を送らない fail-closed
+    動作。監査 M2）。SIP NOTIFY は資格情報に依存しないため送る。
 
     セキュリティ: SSRF ガード (M4)
       * ``_check_device_ip`` でデバイス IP をループバック/リンクローカル/マルチキャスト/
         予約済み/未指定アドレスから拒否する（169.254.169.254 メタデータアドレスを含む）。
-        電話機は RFC1918 LAN 上にあるためプライベート IP は許可する。
+        電話機は RFC1918 LAN 上にあるためプライベート IP は許可する。拒否時は NOTIFY も送らない。
       * ``_PinnedTransport`` で IP リテラルに接続を固定し、リダイレクトは辿らない。
         これにより認証情報付きリクエストがリダイレクト先へ漏洩するのを防ぐ。
       * 残存リスク: 同一 LAN 上で ARP スプーフィング等が行われた場合、同セグメントの
         任意ホストへ認証情報が届く可能性はある。LAN 物理セキュリティが前提。
+      * ESL コマンドの引数（check_sync 宛先）は ``valid_check_sync_target`` で厳格に検証する。
 
     Args:
         device: IP アドレスを持つ Device オブジェクト。
         admin_username: 電話機 Web 管理者ユーザ名（Settings 由来。コードに定数を持たない）。
         admin_password: 電話機 Web 管理者パスワード（Settings 由来）。
+        esl_factory: ESLClient を生成する callable。None なら SIP NOTIFY を使わない。
+        http_timeout: HTTP 1 リクエストのタイムアウト（秒）。
+        esl_timeout: ESL 1 操作のタイムアウト（秒）。
 
     Returns:
-        resync リクエストが 1 つ以上成功したか否か。
+        各手段の結果を持つ ResyncResult。
     """
+    result = ResyncResult()
     if not device.ip_address:
-        return False
-
-    # 資格情報が未設定(空)なら resync をスキップする（監査 M2: phone_admin の既定を空にした。
-    # 空の Basic 認証を電話機へ送らない fail-closed 動作）。運用者が
-    # MILLICALL_PHONE_ADMIN_USERNAME/PASSWORD を設定して初めて resync が有効になる。
-    if not admin_username or not admin_password:
-        logger.info("resync_phone: 電話機管理者資格情報が未設定のため resync をスキップ")
-        return False
+        result.attempts.append(ResyncAttempt("http", False, "IP アドレスが不明です", skipped=True))
+        return result
 
     ip = device.ip_address
 
@@ -266,53 +552,79 @@ async def resync_phone(
         _check_device_ip(ip)
     except ValueError:
         logger.warning("resync_phone: デバイス IP %r はブロック対象アドレスのため中断", ip)
-        return False
+        result.attempts.append(
+            ResyncAttempt("http", False, "ブロック対象の IP アドレスです", skipped=True)
+        )
+        return result
+
+    if esl_factory is not None:
+        try:
+            result.attempts.append(await _sip_check_sync(device, esl_factory, timeout=esl_timeout))
+        except Exception:  # noqa: BLE001 — best-effort
+            logger.warning("resync_phone: check_sync で予期しない例外 ip=%s", ip, exc_info=True)
+            result.attempts.append(ResyncAttempt(_CHECK_SYNC, False, "予期しないエラー"))
+
+    # 資格情報が未設定(空)なら HTTP での指示は送らない（監査 M2: phone_admin の既定は空。
+    # 空の Basic 認証を電話機へ送らない fail-closed 動作）。運用者が
+    # MILLICALL_PHONE_ADMIN_USERNAME/PASSWORD（または管理画面）で設定して初めて有効になる。
+    if not admin_username or not admin_password:
+        logger.info("resync_phone: 電話機管理者資格情報が未設定のため HTTP での指示をスキップ")
+        result.attempts.append(
+            ResyncAttempt(
+                "http",
+                False,
+                "電話機管理者資格情報が未設定のため HTTP での指示は送りません",
+                skipped=True,
+            )
+        )
+        return _log_result(result, ip)
 
     creds = base64.b64encode(f"{admin_username}:{admin_password}".encode()).decode()
     auth_headers = {"Authorization": f"Basic {creds}"}
+
+    vendor = detect_vendor(device)
+    # (method, url, 送る資格情報, 資料で確認済みか)
+    candidates: list[tuple[str, str, dict[str, str] | None, bool]] = []
+    if vendor in (None, "yealink"):
+        candidates.append(
+            ("yealink_action_uri", f"http://{ip}/servlet?key=AutoP", auth_headers, True)
+        )
+    if vendor in (None, "panasonic"):
+        candidates.append(
+            ("panasonic_admin_resync", f"http://{ip}/admin/resync", auth_headers, False)
+        )
+        # 認証不要の手段には資格情報を付けない（不要な送信先へ渡さない）。
+        candidates.append(
+            (
+                "panasonic_cgi_provision",
+                f"http://{ip}/cgi-bin/api-provision?event=resync",
+                None,
+                False,
+            )
+        )
 
     # IP リテラルを直接使うため DNS 再解決なし; _PinnedTransport で再接続も同 IP に固定。
     transport = _PinnedTransport(ip, ip)
 
     async with httpx.AsyncClient(transport=transport, follow_redirects=False) as client:
-        # Panasonic resync (1): admin エンドポイント
-        try:
-            r = await client.get(
-                f"http://{ip}/admin/resync",
-                headers=auth_headers,
-                timeout=5.0,
+        for method, url, headers, verified in candidates:
+            attempt = await _http_get_attempt(
+                client, method, url, headers=headers, timeout=http_timeout, verified=verified
             )
-            if r.status_code < 400:
-                logger.info("resync_phone: Panasonic resync 成功 ip=%s", ip)
-                return True
-        except Exception:
-            logger.debug("resync_phone: Panasonic /admin/resync 失敗 ip=%s", ip)
+            result.attempts.append(attempt)
+            if attempt.ok:
+                break
 
-        # Panasonic resync (2): CGI フォールバック（認証なし）
-        try:
-            r = await client.get(
-                f"http://{ip}/cgi-bin/api-provision?event=resync",
-                timeout=5.0,
-            )
-            if r.status_code < 400:
-                logger.info("resync_phone: Panasonic CGI resync 成功 ip=%s", ip)
-                return True
-        except Exception:
-            logger.debug("resync_phone: Panasonic /cgi-bin/api-provision 失敗 ip=%s", ip)
+    return _log_result(result, ip)
 
-        # Yealink AutoProvision servlet
-        try:
-            action = urllib.parse.quote("http://127.0.0.1/autoprovision")
-            r = await client.get(
-                f"http://{ip}/servlet?key=AutoProvision&value={action}",
-                headers=auth_headers,
-                timeout=5.0,
-            )
-            if r.status_code < 400:
-                logger.info("resync_phone: Yealink AutoProvision 成功 ip=%s", ip)
-                return True
-        except Exception:
-            logger.debug("resync_phone: Yealink /servlet AutoProvision 失敗 ip=%s", ip)
 
-    logger.warning("resync_phone: 全手段失敗 ip=%s", ip)
-    return False
+def _log_result(result: ResyncResult, ip: str) -> ResyncResult:
+    if result.requested:
+        logger.info(
+            "resync_phone: 再取得を指示 ip=%s methods=%s",
+            ip,
+            ",".join(a.method for a in result.attempts if a.ok),
+        )
+    else:
+        logger.warning("resync_phone: どの手段でも再取得を指示できず ip=%s", ip)
+    return result

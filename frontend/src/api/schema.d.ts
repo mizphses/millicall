@@ -409,6 +409,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/devices/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Device Registrations
+         * @description FreeSWITCH の SIP 登録状態から「端末の IP から内線が登録されている」端末を返す。
+         *
+         *     FreeSWITCH へ到達できない場合も 200 で available=False を返す（UI は「未確認」と表示し、
+         *     登録済みと偽らない）。登録一覧は 1 回の ESL 問い合わせでまとめて取得する。
+         */
+        get: operations["device_registrations_api_devices_registrations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/devices/sync": {
         parameters: {
             query?: never;
@@ -448,7 +471,15 @@ export interface paths {
         delete: operations["delete_device_api_devices__device_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Device
+         * @description デバイスの配信ゲート（provision_mode）を切り替える。
+         *
+         *     standard へ戻すとトークンは破棄する（トークン付き URL は以後 404。電話機側の URL も
+         *     通常 URL に戻す必要がある）。strict にしてもトークンは自動発行しない
+         *     （POST /{id}/token で明示的に発行する。発行までは端末固有 cfg は 404）。
+         */
+        patch: operations["update_device_api_devices__device_id__patch"];
         trace?: never;
     };
     "/api/devices/{device_id}/quick-provision": {
@@ -464,10 +495,63 @@ export interface paths {
          * Quick Provision Endpoint
          * @description デバイスに内線を割り当て、プロビジョニング完了状態にする。
          *
-         *     内線割り当て後、best-effort で電話機への HTTP resync 要求も送る。
+         *     トークンは発行しない（既定は standard ゲート。厳格モードは管理者が個別に選ぶ）。
+         *     内線割り当て後、best-effort で電話機へ再取得を指示する（結果は応答に含めない。
+         *     取得できたかは一覧の取得記録で確認する）。
          */
         post: operations["quick_provision_endpoint_api_devices__device_id__quick_provision_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/devices/{device_id}/resync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resync Device
+         * @description 電話機へ設定の再取得を指示する（SIP NOTIFY check-sync と HTTP）。
+         *
+         *     これは指示のみで、電話機が取りに来たかは一覧の取得記録で確認する。
+         *     指示できなかった場合も 200 で requested=False を返す（各手段の結果を含む）。
+         */
+        post: operations["resync_device_api_devices__device_id__resync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/devices/{device_id}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue Provision Token
+         * @description 厳格モードのトークンを（再）発行し、トークン付き URL を一度だけ返す。
+         *
+         *     既存のトークンは無効になる（電話機に入力済みの古い URL は 404 になる）。
+         *     DB にはハッシュのみを保存し、監査ログにもトークンは記録しない。
+         *     取得記録はリセットする（新しいトークンでの取得を待つ）。
+         */
+        post: operations["issue_provision_token_api_devices__device_id__token_post"];
+        /**
+         * Revoke Provision Token
+         * @description 厳格モードのトークンを破棄する。厳格モードのままなら端末固有 cfg は 404 になる。
+         */
+        delete: operations["revoke_provision_token_api_devices__device_id__token_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1206,7 +1290,7 @@ export interface paths {
          * Root Panasonic Device Config
          * @description option 66 直下の Panasonic 端末固有設定を返す（既存 /Panasonic/Config{mac}.cfg に相当）。
          *
-         *     SIP 認証情報を含むため、LAN 制限 + known-device + トークンゲートを維持する。
+         *     SIP 認証情報を含むため、LAN 制限 + known-device + IP 一致 + provision_mode ゲートを維持する。
          */
         get: operations["root_panasonic_device_config_provisioning_Config_mac__cfg_get"];
         put?: never;
@@ -1226,7 +1310,7 @@ export interface paths {
         };
         /**
          * Panasonic Common Config
-         * @description Panasonic KX-HDV 共通設定ファイルを返す（LAN 制限のみ）。
+         * @description Panasonic KX-HDV 共通設定ファイルを返す（LAN 制限のみ。トークン付き URL は照合あり）。
          *
          *     端末固有のクレデンシャルを含まない共通設定。
          */
@@ -1248,9 +1332,10 @@ export interface paths {
         };
         /**
          * Panasonic Device Config
-         * @description Panasonic KX-HDV 端末固有設定ファイルを返す（LAN 制限 + known-device + トークンゲート）。
+         * @description Panasonic KX-HDV 端末固有設定ファイルを返す（LAN 制限 + known-device + IP 一致 + provision_mode ゲート）。
          *
          *     SIP 認証情報を含むため、プロビジョニング済みデバイスのみアクセス可能。
+         *     配信に成功したら取得記録（日時・User-Agent・トークン使用有無）を残す。
          */
         get: operations["panasonic_device_config_provisioning_Panasonic_Config_mac__cfg_get"];
         put?: never;
@@ -1270,7 +1355,7 @@ export interface paths {
         };
         /**
          * Yealink Common Config
-         * @description Yealink 共通設定ファイルを返す（LAN 制限のみ）。
+         * @description Yealink 共通設定ファイルを返す（LAN 制限のみ。トークン付きは照合あり）。
          */
         get: operations["yealink_common_config_provisioning_Yealink_common_cfg_get"];
         put?: never;
@@ -1290,7 +1375,7 @@ export interface paths {
         };
         /**
          * Yealink Boot
-         * @description Yealink 自動プロビジョニング起動ファイルを返す（LAN 制限のみ）。
+         * @description Yealink 自動プロビジョニング起動ファイルを返す（LAN 制限のみ。トークン付きは照合あり）。
          */
         get: operations["yealink_boot_provisioning_Yealink_y000000000000_boot_get"];
         put?: never;
@@ -1310,9 +1395,10 @@ export interface paths {
         };
         /**
          * Yealink Device Config
-         * @description Yealink 端末固有設定ファイルを返す（LAN 制限 + known-device + トークンゲート）。
+         * @description Yealink 端末固有設定ファイルを返す（LAN 制限 + known-device + IP 一致 + provision_mode ゲート）。
          *
          *     SIP 認証情報を含むため、プロビジョニング済みデバイスのみアクセス可能。
+         *     配信に成功したら取得記録（日時・User-Agent・トークン使用有無）を残す。
          */
         get: operations["yealink_device_config_provisioning_Yealink__mac__cfg_get"];
         put?: never;
@@ -1355,6 +1441,241 @@ export interface paths {
          * @description Yealink XML 電話帳を返す（LAN 制限のみ）。
          */
         get: operations["yealink_phonebook_provisioning_phonebook_yealink_xml_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/ConfigCommon.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Panasonic Common Config
+         * @description option 66 直下の Panasonic 共通設定を返す（既存 /Panasonic/ConfigCommon.cfg に相当）。
+         *
+         *     Panasonic KX-HDV は option 66 直下に ConfigCommon.cfg を直接要求する。
+         *     セキュリティ・レンダリングは既存ハンドラと同一（LAN 制限のみ）。
+         */
+        get: operations["root_panasonic_common_config_provisioning_t__token__ConfigCommon_cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/Config{mac}.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Panasonic Device Config
+         * @description option 66 直下の Panasonic 端末固有設定を返す（既存 /Panasonic/Config{mac}.cfg に相当）。
+         *
+         *     SIP 認証情報を含むため、LAN 制限 + known-device + IP 一致 + provision_mode ゲートを維持する。
+         */
+        get: operations["root_panasonic_device_config_provisioning_t__token__Config_mac__cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/Panasonic/ConfigCommon.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Panasonic Common Config
+         * @description Panasonic KX-HDV 共通設定ファイルを返す（LAN 制限のみ。トークン付き URL は照合あり）。
+         *
+         *     端末固有のクレデンシャルを含まない共通設定。
+         */
+        get: operations["panasonic_common_config_provisioning_t__token__Panasonic_ConfigCommon_cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/Panasonic/Config{mac}.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Panasonic Device Config
+         * @description Panasonic KX-HDV 端末固有設定ファイルを返す（LAN 制限 + known-device + IP 一致 + provision_mode ゲート）。
+         *
+         *     SIP 認証情報を含むため、プロビジョニング済みデバイスのみアクセス可能。
+         *     配信に成功したら取得記録（日時・User-Agent・トークン使用有無）を残す。
+         */
+        get: operations["panasonic_device_config_provisioning_t__token__Panasonic_Config_mac__cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/Yealink/common.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Yealink Common Config
+         * @description Yealink 共通設定ファイルを返す（LAN 制限のみ。トークン付きは照合あり）。
+         */
+        get: operations["yealink_common_config_provisioning_t__token__Yealink_common_cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/Yealink/y000000000000.boot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Yealink Boot
+         * @description Yealink 自動プロビジョニング起動ファイルを返す（LAN 制限のみ。トークン付きは照合あり）。
+         */
+        get: operations["yealink_boot_provisioning_t__token__Yealink_y000000000000_boot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/Yealink/{mac}.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Yealink Device Config
+         * @description Yealink 端末固有設定ファイルを返す（LAN 制限 + known-device + IP 一致 + provision_mode ゲート）。
+         *
+         *     SIP 認証情報を含むため、プロビジョニング済みデバイスのみアクセス可能。
+         *     配信に成功したら取得記録（日時・User-Agent・トークン使用有無）を残す。
+         */
+        get: operations["yealink_device_config_provisioning_t__token__Yealink__mac__cfg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/y000000000000.boot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Yealink Common Boot
+         * @description option 66 直下の Yealink 共通 boot ファイルを返す（既存 /Yealink/y000000000000.boot に相当）。
+         *
+         *     boot 内の絶対 URL include（/Yealink/common.cfg, /Yealink/$MAC.cfg）経由で
+         *     残りの設定は既存の /Yealink/ ルートに到達する。セキュリティは LAN 制限のみ。
+         */
+        get: operations["root_yealink_common_boot_provisioning_t__token__y000000000000_boot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/{mac}.boot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Yealink Mac Boot
+         * @description option 66 直下の Yealink MAC 別 boot ファイルを返す（共通 boot と同一内容）。
+         *
+         *     Yealink は起動時に <MAC>.boot を先に要求し、無ければ共通 boot にフォールバックする。
+         *     boot 内容は $MAC 展開されるため共通 boot と同一で良い。
+         *     不正な MAC 形式は 404 を返す（固定ルートを食わないよう検証）。
+         *     セキュリティは LAN 制限のみ（共通 boot と同様）。
+         */
+        get: operations["root_yealink_mac_boot_provisioning_t__token___mac__boot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provisioning/t/{token}/{name}.cfg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Root Cfg Dispatcher
+         * @description option 66 直下の ``{name}.cfg`` を単一ディスパッチャで振り分ける。
+         *
+         *     ``ConfigCommon.cfg`` / ``Config{mac}.cfg`` は上位の固定・具体ルートで処理済みのため
+         *     ここには到達しない。この直下 ``{name}.cfg`` に来るのは主に次の 2 系統:
+         *
+         *     - Panasonic プレプロビジョニング入口ファイル ``{MODEL}.cfg``
+         *       （KX-HDV130N / KX-HDV230N / KX-HDV330N / KX-HDV430N とその NB サフィックス等）。
+         *       SIP 認証情報を含まない最小の入口ファイルのため、LAN 制限のみでトークン不要
+         *       （トークン付き URL で来た場合は照合し、取得先 URL もトークン付きで返す）。
+         *     - Yealink 端末固有設定 ``{mac}.cfg``（12桁hex）。SIP 認証情報を含むため
+         *       端末固有 cfg の配信ゲート（モジュール docstring 参照）を適用する。
+         *
+         *     ``{model}.cfg`` と ``{mac}.cfg`` は同じ ``X.cfg`` にマッチし FastAPI では
+         *     ルート衝突するため、ファイル名パターンで確実に分岐する（KX-HDV* → 入口ファイル、
+         *     それ以外 → 従来どおり MAC 検証を経て Yealink 端末設定）。
+         */
+        get: operations["root_cfg_dispatcher_provisioning_t__token___name__cfg_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1427,9 +1748,10 @@ export interface paths {
          *
          *     - Panasonic プレプロビジョニング入口ファイル ``{MODEL}.cfg``
          *       （KX-HDV130N / KX-HDV230N / KX-HDV330N / KX-HDV430N とその NB サフィックス等）。
-         *       SIP 認証情報を含まない最小の入口ファイルのため、LAN 制限のみでトークン不要。
+         *       SIP 認証情報を含まない最小の入口ファイルのため、LAN 制限のみでトークン不要
+         *       （トークン付き URL で来た場合は照合し、取得先 URL もトークン付きで返す）。
          *     - Yealink 端末固有設定 ``{mac}.cfg``（12桁hex）。SIP 認証情報を含むため
-         *       LAN 制限 + known-device + トークンゲートを維持する。
+         *       端末固有 cfg の配信ゲート（モジュール docstring 参照）を適用する。
          *
          *     ``{model}.cfg`` と ``{mac}.cfg`` は同じ ``X.cfg`` にマッチし FastAPI では
          *     ルート衝突するため、ファイル名パターンで確実に分岐する（KX-HDV* → 入口ファイル、
@@ -1893,7 +2215,7 @@ export interface components {
         };
         /**
          * DeviceRead
-         * @description デバイス情報レスポンスモデル。provision_token は絶対に含めない。
+         * @description デバイス情報レスポンスモデル。provision_token（ハッシュ含む）は絶対に含めない。
          */
         DeviceRead: {
             /** Active */
@@ -1915,14 +2237,45 @@ export interface components {
             id: number;
             /** Ip Address */
             ip_address: string | null;
+            /** Last Config Fetch At */
+            last_config_fetch_at: string | null;
+            /** Last Config Fetch Used Token */
+            last_config_fetch_used_token: boolean;
+            /** Last Config Fetch User Agent */
+            last_config_fetch_user_agent: string | null;
             /** Last Seen */
             last_seen: string | null;
             /** Mac Address */
             mac_address: string;
             /** Model */
             model: string | null;
+            /**
+             * Provision Mode
+             * @enum {string}
+             */
+            provision_mode: "standard" | "strict";
             /** Provisioned */
             provisioned: boolean;
+            /** Token Issued */
+            token_issued: boolean;
+        };
+        /**
+         * DeviceRegistrations
+         * @description SIP 登録状態。available=False は FreeSWITCH から取得できなかった（未確認）。
+         */
+        DeviceRegistrations: {
+            /** Available */
+            available: boolean;
+            /** Registered Device Ids */
+            registered_device_ids: number[];
+        };
+        /**
+         * DeviceUpdate
+         * @description デバイス更新リクエストボディ（指定した項目のみ更新）。
+         */
+        DeviceUpdate: {
+            /** Provision Mode */
+            provision_mode?: ("standard" | "strict") | null;
         };
         /** ExtensionCreate */
         ExtensionCreate: {
@@ -2204,6 +2557,22 @@ export interface components {
             name?: string | null;
         };
         /**
+         * ProvisionTokenIssued
+         * @description 厳格モードのトークン発行結果。トークンはこの応答でしか返さない（DB はハッシュのみ）。
+         *
+         *     電話機の Web 画面へ手入力する URL を機種別に返す。
+         */
+        ProvisionTokenIssued: {
+            /** Panasonic Master File Url */
+            panasonic_master_file_url: string;
+            /** Panasonic Standard File Url */
+            panasonic_standard_file_url: string;
+            /** Token */
+            token: string;
+            /** Yealink Server Url */
+            yealink_server_url: string;
+        };
+        /**
          * PublicConfig
          * @description ログイン画面向けの公開設定レスポンス。
          *
@@ -2229,6 +2598,35 @@ export interface components {
         ResetPasswordBody: {
             /** New Password */
             new_password: string;
+        };
+        /**
+         * ResyncAttemptRead
+         * @description 再取得指示の 1 手段の結果。ok は「指示が受理された」ことのみを表す。
+         */
+        ResyncAttemptRead: {
+            /** Detail */
+            detail: string;
+            /** Method */
+            method: string;
+            /** Ok */
+            ok: boolean;
+            /** Skipped */
+            skipped: boolean;
+            /** Verified */
+            verified: boolean;
+        };
+        /**
+         * ResyncResultRead
+         * @description POST /api/devices/{id}/resync のレスポンス。
+         *
+         *     requested=True でも電話機が設定を取りに来たとは限らない。取得したかは
+         *     DeviceRead.last_config_fetch_at で確認する。
+         */
+        ResyncResultRead: {
+            /** Attempts */
+            attempts: components["schemas"]["ResyncAttemptRead"][];
+            /** Requested */
+            requested: boolean;
         };
         /** RingGroupRead */
         RingGroupRead: {
@@ -3404,6 +3802,26 @@ export interface operations {
             };
         };
     };
+    device_registrations_api_devices_registrations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceRegistrations"];
+                };
+            };
+        };
+    };
     sync_devices_api_devices_sync_post: {
         parameters: {
             query?: never;
@@ -3453,6 +3871,41 @@ export interface operations {
             };
         };
     };
+    update_device_api_devices__device_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     quick_provision_endpoint_api_devices__device_id__quick_provision_post: {
         parameters: {
             query?: never;
@@ -3467,6 +3920,99 @@ export interface operations {
                 "application/json": components["schemas"]["QuickProvisionBody"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resync_device_api_devices__device_id__resync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResyncResultRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    issue_provision_token_api_devices__device_id__token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProvisionTokenIssued"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_provision_token_api_devices__device_id__token_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -4928,9 +5474,7 @@ export interface operations {
     };
     root_panasonic_device_config_provisioning_Config_mac__cfg_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 mac: string;
@@ -4981,9 +5525,7 @@ export interface operations {
     };
     panasonic_device_config_provisioning_Panasonic_Config_mac__cfg_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 mac: string;
@@ -5054,9 +5596,7 @@ export interface operations {
     };
     yealink_device_config_provisioning_Yealink__mac__cfg_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 mac: string;
@@ -5125,6 +5665,261 @@ export interface operations {
             };
         };
     };
+    root_panasonic_common_config_provisioning_t__token__ConfigCommon_cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    root_panasonic_device_config_provisioning_t__token__Config_mac__cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mac: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    panasonic_common_config_provisioning_t__token__Panasonic_ConfigCommon_cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    panasonic_device_config_provisioning_t__token__Panasonic_Config_mac__cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mac: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    yealink_common_config_provisioning_t__token__Yealink_common_cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    yealink_boot_provisioning_t__token__Yealink_y000000000000_boot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    yealink_device_config_provisioning_t__token__Yealink__mac__cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mac: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    root_yealink_common_boot_provisioning_t__token__y000000000000_boot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    root_yealink_mac_boot_provisioning_t__token___mac__boot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mac: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    root_cfg_dispatcher_provisioning_t__token___name__cfg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     root_yealink_common_boot_provisioning_y000000000000_boot_get: {
         parameters: {
             query?: never;
@@ -5178,9 +5973,7 @@ export interface operations {
     };
     root_cfg_dispatcher_provisioning__name__cfg_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 name: string;
