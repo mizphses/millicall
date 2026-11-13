@@ -23,6 +23,10 @@ _VALID_DEST_RE = re.compile(r"^[0-9A-Za-z_.+*#-]{1,64}$")
 # チャネル UUID: 全 bgapi コマンドに補間されるため登録時に検証し、コマンド
 # インジェクションの起点を塞ぐ。空白・改行・ESL 区切りを含まない英数/ハイフン/
 # アンダースコアのみ許可（実 FS UUID は hex+ハイフンでこれに収まる）。
+# 外線番号（dialplan の outbound_external と同じ ``^0\d+$``）。ワークフロー/MCP からの
+# 転送でトランク着信チャネルを外線へ出す場合、calling_permission が無いと
+# dialplan で CALL_REJECTED になるため domestic を付与する対象の判定に使う。
+_EXTERNAL_DEST_RE = re.compile(r"^0\d+$")
 _VALID_UUID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 _VALID_AUDIO_PATH_RE = re.compile(r"[A-Za-z0-9._:/-]{1,512}")
 
@@ -141,7 +145,16 @@ class EslCallControl:
         ESL コマンド: ``uuid_transfer <uuid> <dest> XML default``
 
         dest はコマンドインジェクション防止のため厳格な allowlist で検証する。
+
+        dest が外線番号（0 始まりの数字列）の場合は、転送前に
+        ``uuid_setvar <uuid> calling_permission domestic`` を送る。トランク着信
+        チャネルには calling_permission が無く、dialplan の outbound_external で
+        拒否されるため。転送先は管理者設定（ワークフロー）/ MCP 呼び出し元由来で
+        あり domestic 付与は許容する。international は付与しない
+        （010 / 00x は outbound_intl_block で従来通り遮断される）。
         """
         if not dest or not _VALID_DEST_RE.fullmatch(dest):
             raise ValueError(f"invalid transfer destination: {dest!r}")
+        if _EXTERNAL_DEST_RE.fullmatch(dest):
+            await self._bgapi(f"uuid_setvar {self._uuid} calling_permission domestic")
         await self._bgapi(f"uuid_transfer {self._uuid} {dest} XML default")

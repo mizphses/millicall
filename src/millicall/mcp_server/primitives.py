@@ -13,6 +13,7 @@ voice 引数はコントローラ裁定#2 により受理して無視（互換�
 """
 
 import asyncio
+import logging
 import re
 import wave
 from collections.abc import Awaitable, Callable
@@ -27,6 +28,8 @@ from millicall.media.service import locked_bgapi
 # ESL 区切り（&;|`）を排してコマンドインジェクションを塞ぐ。英数・ドット・
 # アンダースコア・ハイフン・スラッシュのみ許可（絶対パス/ディレクトリ可）。
 _VALID_RECORD_PATH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,512}$")
+
+logger = logging.getLogger(__name__)
 
 _SAMPLE_RATE = 8000
 _BYTES_PER_SAMPLE = 2
@@ -72,6 +75,8 @@ class CallPrimitives:
         self._sleep = sleep
         self._read_recording = read_recording or _default_read_recording
         self._seq = 0
+        # STT 未設定時の警告を 1 通話で 1 回に抑えるためのフラグ。
+        self._warned_no_stt = False
         # 共有 ESL 接続の直列化（I6）: 未注入時は per-instance lock・再接続なしに
         # フォールバックする（後方互換。接続断は呼び出し元へ伝播）。
         self._lock = lock if lock is not None else asyncio.Lock()
@@ -100,7 +105,20 @@ class CallPrimitives:
         return len(pcm) / (_SAMPLE_RATE * _BYTES_PER_SAMPLE)
 
     async def listen(self, max_seconds: int = 15) -> str:
-        """一定時間録音し、STT で 1 発話をテキスト化して返す（無発話は空文字）。"""
+        """一定時間録音し、STT で 1 発話をテキスト化して返す（無発話は空文字）。
+
+        STT プロバイダが未設定（None）の場合は録音せず、警告を 1 回だけ出して
+        空文字を返す（TTS 再生のみのワークフローを動かせるようにするため）。
+        """
+        if self._stt is None:
+            if not self._warned_no_stt:
+                self._warned_no_stt = True
+                logger.warning(
+                    "CallPrimitives.listen: no STT provider configured (uuid=%s); "
+                    "returning empty transcript",
+                    self._call_uuid,
+                )
+            return ""
         self._seq += 1
         path = self._tts_dir / f"mcp_listen_{self._call_uuid}_{self._seq}.wav"
         path_str = str(path)
@@ -154,7 +172,10 @@ class CallPrimitives:
     async def say_and_listen(
         self, text: str, max_seconds: int = 15, *, tts=None
     ) -> tuple[str, str]:
-        """say → listen を 1 ターンで行い、(話した内容, 聞き取り) を返す。"""
+        """say → listen を 1 ターンで行い、(話した内容, 聞き取り) を返す。
+
+        STT 未設定時は say のみ行い、聞き取りは空文字になる（listen 参照）。
+        """
         await self.say(text, tts=tts)
         heard = await self.listen(max_seconds)
         return text, heard

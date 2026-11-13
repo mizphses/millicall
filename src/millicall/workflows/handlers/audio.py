@@ -124,6 +124,8 @@ async def handle_transfer(node: object, ctx: ChannelContext) -> None:
 
     if ctx.call_control is not None:
         await ctx.call_control.transfer(config.destination)
+        # チャネルはダイヤルプランへ引き渡し済み → ランナーは切断しない。
+        ctx.handed_off = True
 
     return None
 
@@ -192,5 +194,7 @@ async def handle_human_escalation(node: object, ctx: ChannelContext) -> None:
     # 2. 転送
     if ctx.call_control is not None:
         await ctx.call_control.transfer(config.destination)
+        # チャネルはダイヤルプランへ引き渡し済み → ランナーは切断しない。
+        ctx.handed_off = True
 
     return None
