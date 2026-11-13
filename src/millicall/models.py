@@ -289,6 +289,8 @@ class Fax(Base):
     """受信した FAX（rxfax の結果）。tiff_path / pdf_path は fax_dir 配下の絶対パス。"""
 
     __tablename__ = "faxes"
+    # 削除後に id（rowid）を再利用しない（PDF ダウンロードトークンの多層防御）。
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     call_uuid: Mapped[str] = mapped_column(String(150), nullable=False, index=True)

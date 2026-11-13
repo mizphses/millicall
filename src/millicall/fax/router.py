@@ -305,12 +305,14 @@ async def download_fax_pdf(
     box: SecretBox = Depends(get_secret_box),
 ) -> FileResponse:
     if token is not None:
-        if not verify_pdf_token(box, token, fax_id):
+        fax = await session.get(Fax, fax_id)
+        # 存在しない id も同じ 403 にする（トークンで id の有無を探らせない）。
+        if fax is None or not verify_pdf_token(box, token, fax):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token")
     else:
         user = await get_current_user(request, session)
         await require_admin(user)
-    fax = await _get_fax(session, fax_id)
+        fax = await _get_fax(session, fax_id)
     path = _safe_path(settings, fax.pdf_path)
     if path is None or not path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF がありません")

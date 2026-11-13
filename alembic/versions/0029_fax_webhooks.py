@@ -47,6 +47,8 @@ def upgrade() -> None:
         sa.Column("tiff_path", sa.Text(), nullable=True),
         sa.Column("pdf_path", sa.Text(), nullable=True),
         sa.Column("received_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
+        # 削除後に id を再利用しない（PDF ダウンロードトークンが別の FAX を開かないように）。
+        sqlite_autoincrement=True,
     )
     op.create_index("ix_faxes_call_uuid", "faxes", ["call_uuid"])
     op.create_index("ix_faxes_received_at", "faxes", ["received_at"])

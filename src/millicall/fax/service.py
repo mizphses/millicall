@@ -284,7 +284,7 @@ class FaxService:
         url = f"{self._base_url}/api/faxes/{fax.id}/pdf"
         if self._box is None:
             return url
-        return f"{url}?{urlencode({'token': issue_pdf_token(self._box, fax.id)})}"
+        return f"{url}?{urlencode({'token': issue_pdf_token(self._box, fax)})}"
 
     async def cleanup(self, retention_days: int, *, now: datetime | None = None) -> int:
         """retention_days より古い FAX（行 + fax_dir 内の TIFF/PDF）を削除し、件数を返す。"""
@@ -308,18 +308,25 @@ class FaxService:
         return len(old)
 
 
-def issue_pdf_token(box: SecretBox, fax_id: int) -> str:
+def _pdf_token_claims(fax: Fax) -> dict[str, Any]:
+    # id だけでなく call_uuid と受信時刻にも束縛する（行が削除されて同じ id が再利用されても、
+    # 別の FAX は開けない）。
+    return {
+        "p": _PDF_TOKEN_PURPOSE,
+        "fax_id": fax.id,
+        "call_uuid": fax.call_uuid,
+        "received_at": fax.received_at.isoformat() if fax.received_at else None,
+    }
+
+
+def issue_pdf_token(box: SecretBox, fax: Fax) -> str:
     """FAX PDF のダウンロードトークン（Fernet。発行時刻を内包し 24 時間で失効）。"""
-    return box.encrypt(json.dumps({"p": _PDF_TOKEN_PURPOSE, "fax_id": fax_id}))
+    return box.encrypt(json.dumps(_pdf_token_claims(fax)))
 
 
-def verify_pdf_token(box: SecretBox, token: str, fax_id: int) -> bool:
+def verify_pdf_token(box: SecretBox, token: str, fax: Fax) -> bool:
     try:
         data = json.loads(box.decrypt(token, ttl=PDF_TOKEN_TTL_SECONDS))
     except Exception:  # noqa: BLE001 — 改ざん・期限切れ・形式不正はすべて無効
         return False
-    return (
-        isinstance(data, dict)
-        and data.get("p") == _PDF_TOKEN_PURPOSE
-        and data.get("fax_id") == fax_id
-    )
+    return isinstance(data, dict) and data == _pdf_token_claims(fax)

@@ -136,15 +136,62 @@ async def test_retention_cleanup_deletes_old_rows_and_files(app):
 # --------------------------------------------------------------------------- 署名付き URL
 
 
-def test_pdf_token_binds_fax_id_and_expires(monkeypatch):
+def _fax(fax_id=12, call_uuid="u-a", received_at=datetime(2026, 11, 14, 1, 2, 3)) -> Fax:
+    return Fax(id=fax_id, call_uuid=call_uuid, received_at=received_at)
+
+
+def test_pdf_token_binds_fax_identity_and_expires(monkeypatch):
     box = SecretBox("k" * 32)
-    token = issue_pdf_token(box, 12)
-    assert verify_pdf_token(box, token, 12)
-    assert not verify_pdf_token(box, token, 13)
-    assert not verify_pdf_token(SecretBox("other" * 8), token, 12)
-    assert not verify_pdf_token(box, token[:-2] + "AA", 12)
+    fax = _fax()
+    token = issue_pdf_token(box, fax)
+    assert verify_pdf_token(box, token, fax)
+    assert not verify_pdf_token(box, token, _fax(fax_id=13))
+    # 同じ id でも別の FAX（id 再利用）は開けない
+    assert not verify_pdf_token(box, token, _fax(call_uuid="u-b"))
+    assert not verify_pdf_token(box, token, _fax(received_at=datetime(2026, 11, 15)))
+    assert not verify_pdf_token(SecretBox("other" * 8), token, fax)
+    tampered = token[:20] + ("A" if token[20] != "A" else "B") + token[21:]
+    assert not verify_pdf_token(box, tampered, fax)
     monkeypatch.setattr(fax_service_mod, "PDF_TOKEN_TTL_SECONDS", -10)
-    assert not verify_pdf_token(box, token, 12)
+    assert not verify_pdf_token(box, token, fax)
+
+
+async def test_token_for_deleted_fax_does_not_open_new_fax_with_same_id(app, client):
+    fax_dir = app.state.settings.fax_dir
+    fax_dir.mkdir(parents=True, exist_ok=True)
+    pdf_a = fax_dir / "a.pdf"
+    pdf_a.write_bytes(b"%PDF-1.4 A")
+    pdf_b = fax_dir / "b.pdf"
+    pdf_b.write_bytes(b"%PDF-1.4 B")
+    box = SecretBox(app.state.secrets.master_key)
+    async with app.state.sessionmaker() as s:
+        fax_a = Fax(call_uuid="uuid-a", pdf_path=str(pdf_a))
+        s.add(fax_a)
+        await s.commit()
+        await s.refresh(fax_a)
+        token = issue_pdf_token(box, fax_a)
+        fax_id = fax_a.id
+        await s.delete(fax_a)
+        await s.commit()
+        # 同じ id を明示して別の FAX を作る（rowid 再利用の再現）
+        s.add(Fax(id=fax_id, call_uuid="uuid-b", pdf_path=str(pdf_b)))
+        await s.commit()
+    r = await client.get(f"/api/faxes/{fax_id}/pdf", params={"token": token})
+    assert r.status_code == 403
+
+
+async def test_faxes_ids_are_not_reused(app):
+    async with app.state.sessionmaker() as s:
+        first = Fax(call_uuid="x1")
+        s.add(first)
+        await s.commit()
+        first_id = first.id
+        await s.delete(first)
+        await s.commit()
+        second = Fax(call_uuid="x2")
+        s.add(second)
+        await s.commit()
+        assert second.id > first_id
 
 
 async def test_pdf_url_token_allows_download_without_session(app, client):
