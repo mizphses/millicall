@@ -15,7 +15,7 @@ quick_provision が自動でワンタイムトークンを発行していたが�
 provision_token には厳格モードで管理者が明示発行したトークンの SHA-256 hex を保存する。
 
 Revision ID: 0026
-Revises: 0023
+Revises: 0025
 Create Date: 2026-11-10
 """
 
@@ -25,8 +25,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0026"
-# マージ時に 0024（別セッション）/ 0025（issue #86）の後ろへ付け替える（down_revision="0025"）。
-down_revision: str | None = "0023"
+down_revision: str | None = "0025"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
