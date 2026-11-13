@@ -7,9 +7,8 @@ ESL イベントストリーム（EslEventListener の _compose_handler）と FA
 - ``X-Millicall-Event`` / ``X-Millicall-Delivery``（uuid4。再試行でも同じ値）
 - タイムアウト 10 秒、最大 3 回（失敗後 1 秒 → 5 秒待って再試行）
 - 送信は asyncio タスクで行い、ESL イベント処理をブロックしない（fire-and-forget）
-- 接続先は net_guard.make_webhook_transport で解決・固定する。LAN（RFC1918）の受信サーバーは
-  許可するが、loopback・link-local（メタデータ）・自ホストのアドレス・docker proxy / ESL の
-  host:port は遮断する（ローカル専用サービスへの SSRF 防止）。リダイレクトは追わない。
+- 接続先は net_guard.make_webhook_transport で解決・固定する（規則は net_guard の
+  「Webhook 送信先ポリシー」参照。ローカル専用サービスへの SSRF 防止）。リダイレクトは追わない。
 - 各試行を webhook_deliveries に記録し、webhook ごとに直近 200 件だけ残す。
 """
 
@@ -138,10 +137,17 @@ def event_to_webhook(event: dict[str, str]) -> tuple[str, dict[str, Any]] | None
     return None
 
 
-def policy_transport_factory(policy: WebhookTargetPolicy | None) -> TransportFactory:
+PolicyProvider = Callable[[], Awaitable[WebhookTargetPolicy]]
+
+
+def policy_transport_factory(
+    policy: WebhookTargetPolicy | None = None, provider: PolicyProvider | None = None
+) -> TransportFactory:
     async def factory(url: str) -> httpx.AsyncBaseTransport:
-        # 同期 DNS 解決を行うためスレッドへ逃がす（issue #81）。
-        _ip, transport = await asyncio.to_thread(make_webhook_transport, url, policy)
+        # 送信のたびにポリシー（許可 CIDR・自ホストのアドレス）を評価する。
+        current = await provider() if provider is not None else policy
+        # 同期 DNS 解決・インターフェース列挙を行うためスレッドへ逃がす（issue #81）。
+        _ip, transport = await asyncio.to_thread(make_webhook_transport, url, current)
         return transport
 
     return factory
@@ -174,12 +180,15 @@ class WebhookDispatcher:
         *,
         transport_factory: TransportFactory | None = None,
         target_policy: WebhookTargetPolicy | None = None,
+        policy_provider: PolicyProvider | None = None,
         retry_delays: tuple[float, ...] = RETRY_DELAYS,
         timeout: float = REQUEST_TIMEOUT,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._box = secret_box
-        self._transport_factory = transport_factory or policy_transport_factory(target_policy)
+        self._transport_factory = transport_factory or policy_transport_factory(
+            target_policy, policy_provider
+        )
         self._retry_delays = retry_delays
         self._timeout = timeout
         self._tasks: set[asyncio.Task] = set()

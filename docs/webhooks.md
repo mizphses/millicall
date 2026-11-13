@@ -107,12 +107,21 @@ app.post("/millicall/webhook", express.raw({ type: "application/json" }), (req, 
 ## セキュリティ
 
 - URL は `http://` / `https://` のみ。`user:pass@` を含む URL は拒否します。
-- 送信先は DNS 解決結果を検証して接続先 IP に固定します（DNS リバインディング対策）。LAN（RFC1918）の
-  受信サーバーは許可しますが、次は遮断します:
-  - loopback（`127.0.0.0/8`・`::1`）・`0.0.0.0/8`・リンクローカル（クラウドメタデータ `169.254.169.254` 等）・マルチキャスト・予約済み
-  - **millicall を動かしているホスト自身のアドレス**（ホスト名の解決結果・`MILLICALL_SIP_BIND_IP`・IP 指定の `MILLICALL_SIP_DOMAIN`）。
-    core API・docker socket-proxy・ESL などローカル専用サービスへの踏み台を防ぐためです。同一ホスト上の受信サーバーには送れません
-  - docker socket-proxy（`MILLICALL_DOCKER_PROXY_URL`）と ESL（`MILLICALL_ESL_HOST:PORT`）の host:port
+- 送信先は **送信のたびに** DNS 解決結果をすべて検証し、接続先 IP に固定します（DNS リバインディング対策）。
+  core は `network_mode: host` で動くため、ローカル専用サービス（docker socket-proxy・ESL・core 自身の API）への
+  踏み台にならないよう次の規則を適用します。
+
+  | 規則 | 対象 | 許可 CIDR で解除 |
+  |---|---|---|
+  | 常に拒否 | loopback（`127.0.0.0/8`・`::1`）・`0.0.0.0/8`・リンクローカル（`169.254.169.254` 等のメタデータ含む）・マルチキャスト・予約済み | 不可 |
+  | 常に拒否 | **millicall ホスト自身の全インターフェースのアドレス**（LAN・docker ブリッジ `172.17.0.1` 等・`tailscale0`）。列挙は 30 秒キャッシュ。列挙に失敗した場合は送信を拒否（fail-closed） | 不可 |
+  | 既定で拒否 | docker 既定レンジ `172.16.0.0/12`（子 LAN 既定の `172.20.0.0/16` を含む）・CGNAT `100.64.0.0/10`（tailnet） | 可 |
+  | 既定で拒否 | 非グローバル宛ての内部サービスポート `80`・`443`・`2375`・`2376`・`8021`・core の HTTP ポート・ESL ポート・docker proxy のポート | 可（許可 CIDR 内の宛先のみ） |
+  | 許可 | 上記以外の RFC1918（`192.168.0.0/16`・`10.0.0.0/8`）の LAN 受信サーバー、グローバルアドレス | — |
+
+  許可 CIDR は **設定 → Webhook → Webhook 許可 CIDR**（`webhook_allowed_cidrs`、改行/カンマ区切り）で指定します。
+  例: LAN の `http://192.168.1.50/`（80 番）に送るには `192.168.1.50/32` を、tailnet 上の受信サーバーに送るには
+  `100.64.0.0/10` を追加します。同一ホスト上の受信サーバーには送れません。
 - シークレットは master_key 由来の鍵で暗号化して保存し、API・画面・監査ログには出しません（`has_secret` のみ）。
 - 作成・更新・削除・テスト送信は監査ログに残ります。
 - 配信ログは Webhook ごとに直近 200 件を保持します。

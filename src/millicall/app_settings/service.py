@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from millicall.config import Settings
 from millicall.crypto import SecretBox
 from millicall.models import AppSetting
+from millicall.net_guard import parse_allowed_cidrs
 
 logger = logging.getLogger("millicall.app_settings")
 
@@ -80,6 +81,8 @@ EDITABLE_SETTINGS: dict[str, SettingMeta] = {
     "mcp_enabled": SettingMeta("telephony"),
     # --- ネットワーク（外向き） ---
     "tailscale_serve_enabled": SettingMeta("network"),
+    # --- Webhook ---
+    "webhook_allowed_cidrs": SettingMeta("webhooks"),
 }
 
 SECRET_KEYS: frozenset[str] = frozenset(k for k, m in EDITABLE_SETTINGS.items() if m.secret)
@@ -115,6 +118,13 @@ def _validate_extra(key: str, value: object) -> None:
                 raise SettingValidationError(
                     key, f"無効な国際発信プレフィックスです: '{p}'（2〜8桁の数字のみ許可）"
                 )
+    elif key == "webhook_allowed_cidrs" and isinstance(value, str):
+        try:
+            parse_allowed_cidrs(value)
+        except ValueError:
+            raise SettingValidationError(
+                key, "CIDR 表記が不正です（例: 172.20.0.0/16, 100.64.0.0/10）"
+            ) from None
     elif key == "vad_mode":
         _check_range(key, value, lambda v: 0 <= v <= 3, "0〜3 の整数で指定してください")
     elif key == "saml_default_role":

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -41,7 +42,11 @@ from millicall.media.audio_fork import MediaEventRouter, register_media_ws
 from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
 from millicall.media.tickets import MediaStreamTickets
-from millicall.net_guard import WebhookTargetPolicy, build_webhook_policy
+from millicall.net_guard import (
+    WEBHOOK_INTERNAL_PORTS,
+    WebhookTargetPolicy,
+    parse_allowed_cidrs,
+)
 from millicall.network.client import NetdClient
 from millicall.network.router import router as network_router
 from millicall.process_lock import acquire_single_process_lock
@@ -144,18 +149,14 @@ async def _reapply_network_config_on_startup(app: FastAPI, settings: Settings) -
         )
 
 
-def _webhook_target_policy(settings: Settings) -> WebhookTargetPolicy:
-    """Webhook 送信先から除外する自ホストのアドレスと内部サービスの host:port（同期 DNS）。"""
-    endpoints: list[tuple[str, int]] = [(settings.esl_host, settings.esl_port)]
+def _webhook_internal_ports(settings: Settings) -> frozenset[int]:
+    """非グローバル宛てで拒否する内部サービスのポート（docker proxy・ESL・core 自身）。"""
+    ports = set(WEBHOOK_INTERNAL_PORTS) | {settings.http_port, settings.esl_port}
     if settings.docker_proxy_url:
         proxy = urlsplit(settings.docker_proxy_url)
-        if proxy.hostname:
-            port = proxy.port or (443 if proxy.scheme == "https" else 80)
-            endpoints.append((proxy.hostname, port))
-    return build_webhook_policy(
-        local_ip_literals=[settings.sip_bind_ip, settings.sip_domain, settings.event_socket_ip],
-        internal_endpoints=endpoints,
-    )
+        with contextlib.suppress(ValueError):
+            ports.add(proxy.port or (443 if proxy.scheme == "https" else 80))
+    return frozenset(ports)
 
 
 @asynccontextmanager
@@ -262,10 +263,23 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
     settings.fax_dir.mkdir(parents=True, exist_ok=True)
 
     # Webhook 配信（issue #121）。ESL イベントと FAX 受信から fire-and-forget で送る。
+    # 送信先ポリシーは送信のたびに組み立てる（許可 CIDR は管理画面で変更可能、
+    # 自ホストのアドレスは net_guard が 30 秒キャッシュで列挙する）。
+    webhook_ports = _webhook_internal_ports(settings)
+
+    async def _webhook_policy() -> WebhookTargetPolicy:
+        effective_now = await app.state.settings_service.effective()
+        try:
+            allowed = parse_allowed_cidrs(effective_now.webhook_allowed_cidrs)
+        except ValueError:
+            logger.error("webhook_allowed_cidrs が不正なため無視します（許可なしとして扱う）")
+            allowed = ()
+        return WebhookTargetPolicy(allowed_cidrs=allowed, internal_ports=webhook_ports)
+
     webhook_dispatcher = WebhookDispatcher(
         app.state.sessionmaker,
         SecretBox(app.state.secrets.master_key),
-        target_policy=await asyncio.to_thread(_webhook_target_policy, settings),
+        policy_provider=_webhook_policy,
     )
     app.state.webhook_dispatcher = webhook_dispatcher
     fax_service = FaxService(
