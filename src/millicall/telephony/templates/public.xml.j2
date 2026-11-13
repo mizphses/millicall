@@ -30,7 +30,7 @@
 {% for trunk in trunks %}
 {% if trunk.inbound_extension %}
     <extension name="inbound_trunk_{{ trunk.name }}">
-      <condition field="destination_number" expression="^({{ trunk.username | re_escape }}{% if trunk.did_number and trunk.did_number != trunk.username %}|{{ trunk.did_number | re_escape }}{% endif %})$">
+      <condition field="destination_number" expression="^({{ trunk.username | re_escape_literal }}{% if trunk.did_number and trunk.did_number != trunk.username %}|{{ trunk.did_number | re_escape_literal }}{% endif %})$">
         <action application="log" data="INFO ===== INBOUND trunk {{ trunk.name }} -> ext {{ trunk.inbound_extension }} ====="/>
         <action application="transfer" data="{{ trunk.inbound_extension }} XML default"/>
       </condition>

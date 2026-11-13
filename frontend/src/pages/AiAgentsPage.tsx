@@ -1,3 +1,6 @@
+import { ObjectLink } from "../components/ObjectLink";
+import { useObjectSelection } from "../hooks/useObjectSelection";
+import { Field } from "../components/Field";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Trash2 } from "lucide-react";
@@ -109,7 +112,10 @@ export function AiAgentsPage() {
     [providersQuery.data],
   );
 
+  const selection = useObjectSelection(agentsQuery.data, openEdit, closePanel);
+
   function openCreate() {
+    selection.clear();
     setEditing(null);
     setForm(emptyForm());
     setFieldErrors({});
@@ -117,6 +123,7 @@ export function AiAgentsPage() {
   }
 
   function openEdit(agent: AiAgentRead) {
+    selection.select(agent.id);
     setEditing(agent);
     setForm(formFromAgent(agent));
     setFieldErrors({});
@@ -125,6 +132,7 @@ export function AiAgentsPage() {
 
   function closePanel() {
     setPanelOpen(false);
+    selection.clear();
   }
 
   const saveMutation = useMutation({
@@ -136,6 +144,7 @@ export function AiAgentsPage() {
       queryClient.invalidateQueries({ queryKey: AGENTS_KEY });
       toast.success(editing ? "AI エージェントを更新しました" : "AI エージェントを作成しました");
       setPanelOpen(false);
+    selection.clear();
     },
     onError: (err) => {
       if (err instanceof AgentNumberConflictError) {
@@ -168,6 +177,7 @@ export function AiAgentsPage() {
       if (Object.keys(payload).length === 0) {
         toast.show("変更はありません", "neutral");
         setPanelOpen(false);
+    selection.clear();
         return;
       }
     }
@@ -195,18 +205,21 @@ export function AiAgentsPage() {
     },
     {
       key: "llm_provider_id",
+      sortValue: row => providerMap.get(row.llm_provider_id)?.name ?? "",
       header: "LLM",
-      render: (row) => providerMap.get(row.llm_provider_id)?.name ?? `ID:${row.llm_provider_id}`,
+      render: (row) => <ObjectLink to="/providers" id={row.llm_provider_id}>{providerMap.get(row.llm_provider_id)?.name ?? `ID:${row.llm_provider_id}`}</ObjectLink>,
     },
     {
       key: "tts_provider_id",
+      sortValue: row => providerMap.get(row.tts_provider_id)?.name ?? "",
       header: "TTS",
-      render: (row) => providerMap.get(row.tts_provider_id)?.name ?? `ID:${row.tts_provider_id}`,
+      render: (row) => <ObjectLink to="/providers" id={row.tts_provider_id}>{providerMap.get(row.tts_provider_id)?.name ?? `ID:${row.tts_provider_id}`}</ObjectLink>,
     },
     {
       key: "stt_provider_id",
+      sortValue: row => providerMap.get(row.stt_provider_id)?.name ?? "",
       header: "STT",
-      render: (row) => providerMap.get(row.stt_provider_id)?.name ?? `ID:${row.stt_provider_id}`,
+      render: (row) => <ObjectLink to="/providers" id={row.stt_provider_id}>{providerMap.get(row.stt_provider_id)?.name ?? `ID:${row.stt_provider_id}`}</ObjectLink>,
     },
     {
       key: "actions",
@@ -247,12 +260,17 @@ export function AiAgentsPage() {
       <DataTable
         columns={columns}
         rows={agentsQuery.data ?? []}
+        searchText={agent => [agent.name, agent.number, providerMap.get(agent.llm_provider_id)?.name, providerMap.get(agent.tts_provider_id)?.name, providerMap.get(agent.stt_provider_id)?.name].join(" ")}
         rowKey={(row) => row.id}
         loading={agentsQuery.isLoading}
+        error={agentsQuery.error}
+        onRetry={() => void agentsQuery.refetch()}
+        searchable
         emptyMessage="AI エージェントがまだありません。右上の「エージェントを追加」から登録してください。"
       />
 
       <SlidePanel
+        busy={saveMutation.isPending}
         open={panelOpen}
         title={editing ? "AI エージェントを編集" : "AI エージェントを追加"}
         onClose={closePanel}
@@ -282,7 +300,7 @@ export function AiAgentsPage() {
           onSubmit={handleSubmit}
           className={css({ display: "flex", flexDirection: "column", gap: "4" })}
         >
-          <Field label="名前" error={fieldErrors.name}>
+          <Field required label="名前" error={fieldErrors.name}>
             <input
               className={input({ invalid: fieldErrors.name ? true : undefined })}
               value={form.name}
@@ -320,7 +338,9 @@ export function AiAgentsPage() {
             />
           </Field>
 
-          <Field label="LLM プロバイダ" error={fieldErrors.llm_provider_id}>
+          {providersQuery.isError && <p role="alert">プロバイダを取得できません。<button type="button" onClick={() => void providersQuery.refetch()}>再試行</button></p>}
+          <p className={css({ fontSize: "sm", color: "text.muted" })}>各種類のプロバイダが必要です。<ObjectLink to="/providers" newTab>プロバイダを登録・確認</ObjectLink></p>
+          <Field required label="LLM プロバイダ" error={fieldErrors.llm_provider_id}>
             <select
               className={input({ invalid: fieldErrors.llm_provider_id ? true : undefined })}
               value={form.llm_provider_id === null ? "" : String(form.llm_provider_id)}
@@ -338,7 +358,7 @@ export function AiAgentsPage() {
             </select>
           </Field>
 
-          <Field label="TTS プロバイダ（音声合成）" error={fieldErrors.tts_provider_id}>
+          <Field required label="TTS プロバイダ（音声合成）" error={fieldErrors.tts_provider_id}>
             <select
               className={input({ invalid: fieldErrors.tts_provider_id ? true : undefined })}
               value={form.tts_provider_id === null ? "" : String(form.tts_provider_id)}
@@ -356,7 +376,7 @@ export function AiAgentsPage() {
             </select>
           </Field>
 
-          <Field label="STT プロバイダ（音声認識）" error={fieldErrors.stt_provider_id}>
+          <Field required label="STT プロバイダ（音声認識）" error={fieldErrors.stt_provider_id}>
             <select
               className={input({ invalid: fieldErrors.stt_provider_id ? true : undefined })}
               value={form.stt_provider_id === null ? "" : String(form.stt_provider_id)}
@@ -374,7 +394,7 @@ export function AiAgentsPage() {
             </select>
           </Field>
 
-          <Field label="最大履歴（1〜50）" error={fieldErrors.max_history}>
+          <Field required label="最大履歴（1〜50）" error={fieldErrors.max_history}>
             <input
               type="number"
               className={input({ invalid: fieldErrors.max_history ? true : undefined })}
@@ -387,7 +407,7 @@ export function AiAgentsPage() {
             />
           </Field>
 
-          <Field label="無音検知 ms（200〜3000）" error={fieldErrors.silence_end_ms}>
+          <Field required label="無音検知 ms（200〜3000）" error={fieldErrors.silence_end_ms}>
             <input
               type="number"
               className={input({ invalid: fieldErrors.silence_end_ms ? true : undefined })}
@@ -440,28 +460,3 @@ export function AiAgentsPage() {
 /** フォーム 1 項目（ラベル + 入力 + インラインエラー）。
  * wrap 方式: label > span（テキスト）+ children（input 等）で関連付ける。
  * Task 3-8 が踏襲する標準形。 */
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className={css({ display: "block" })}>
-        <span
-          className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
-        >
-          {label}
-        </span>
-        {children}
-      </label>
-      {error ? (
-        <p className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>
-      ) : null}
-    </div>
-  );
-}

@@ -152,13 +152,13 @@ async def test_provider(
             # 現行 build_llm は全 kind で UnknownProviderKind を送出し、ここへ到達しない。
             from millicall.ai.llm.base import ChatMessage
 
-            llm = registry.build_llm(p.kind, config, api_key)
+            llm = await registry.build_llm_async(p.kind, config, api_key)
             agen = llm.stream_chat([ChatMessage(role="user", content="ping")])
             first = await agen.__anext__()
             await agen.aclose()
             detail = f"first token: {first[:20]!r}"
         elif p.type == ProviderType.TTS:
-            tts = registry.build_tts(p.kind, config, api_key)
+            tts = await registry.build_tts_async(p.kind, config, api_key)
             pcm = await tts.synthesize("テスト")
             detail = f"{len(pcm)} bytes pcm"
         else:

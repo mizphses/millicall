@@ -104,6 +104,14 @@ def validate_graph(
             if target not in node_map:
                 result.errors.append(f"goto node '{node.id}' targets unknown node '{target}'")
 
+    # time_condition: 開始 = 終了 は設定ミスとして拒否（実行時は不一致扱いで通話は落とさない）
+    for node in definition.nodes:
+        if node.type == "time_condition" and node.config.start_time == node.config.end_time:
+            result.errors.append(
+                f"time_condition node '{node.id}' has identical start_time and end_time "
+                f"('{node.config.start_time}'); start and end must differ"
+            )
+
     _detect_goto_cycles(definition, node_map, result)
 
     # (e) call_workflow self-recursion (cross-workflow cycles are DB-level / Task 2)

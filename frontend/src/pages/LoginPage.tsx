@@ -31,6 +31,8 @@ export function LoginPage() {
   const [step, setStep] = useState<LoginStep>({ kind: "credentials" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [notice] = useState(() => sessionStorage.getItem("millicall.authNotice"));
+  useEffect(() => { sessionStorage.removeItem("millicall.authNotice"); }, []);
 
   // ─── 認証情報ステップ ───
   const [username, setUsername] = useState("");
@@ -87,6 +89,8 @@ export function LoginPage() {
       // 通常ログイン成功: ロールに応じた遷移先へ（user はアカウントページ）
       await ensureCsrfCookie();
       router.navigate({ to: postLoginPath(body?.role) });
+    } catch {
+      setError("サーバーに接続できませんでした。接続を確認して、もう一度お試しください。入力内容は保持されています。");
     } finally {
       setBusy(false);
     }
@@ -121,6 +125,8 @@ export function LoginPage() {
       // TOTP ログイン成功: ロールに応じた遷移先へ（user はアカウントページ）
       await ensureCsrfCookie();
       router.navigate({ to: postLoginPath(data?.role) });
+    } catch {
+      setError("サーバーに接続できませんでした。接続を確認して、もう一度お試しください。入力内容は保持されています。");
     } finally {
       setBusy(false);
     }
@@ -142,14 +148,15 @@ export function LoginPage() {
           className={cx(panel(), css({ w: "loginCard", maxW: "100%", p: "8" }))}
         >
           <div className={css({ textAlign: "center", mb: "6" })}>
-            <div className={css({ fontSize: "xl", fontWeight: "600", color: "accent.text" })}>
+            <h1 className={css({ fontSize: "xl", fontWeight: "600", color: "accent.text" })}>
               millicall
-            </div>
+            </h1>
             <div className={css({ fontSize: "md", color: "text.muted", mt: "1" })}>
               管理コンソール
             </div>
           </div>
 
+          {notice && <p role="status" className={css({ color: "text.muted", fontSize: "sm", mb: "4" })}>{notice}</p>}
           <label className={css({ display: "block" })}>
             <span
               className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}
@@ -158,6 +165,9 @@ export function LoginPage() {
             </span>
             <input
               className={input()}
+              required
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "login-error" : undefined}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
@@ -173,6 +183,9 @@ export function LoginPage() {
             </span>
             <input
               className={input()}
+              required
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "login-error" : undefined}
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -181,7 +194,7 @@ export function LoginPage() {
           </label>
 
           {error ? (
-            <p className={css({ color: "danger.text", fontSize: "sm", mt: "3" })}>{error}</p>
+            <p id="login-error" role="alert" className={css({ color: "danger.text", fontSize: "sm", mt: "3" })}>{error}</p>
           ) : null}
 
           <button
@@ -221,9 +234,9 @@ export function LoginPage() {
           className={cx(panel(), css({ w: "loginCard", maxW: "100%", p: "8" }))}
         >
           <div className={css({ textAlign: "center", mb: "6" })}>
-            <div className={css({ fontSize: "xl", fontWeight: "600", color: "accent.text" })}>
+            <h1 className={css({ fontSize: "xl", fontWeight: "600", color: "accent.text" })}>
               millicall
-            </div>
+            </h1>
             <div className={css({ fontSize: "md", color: "text.muted", mt: "1" })}>
               2 段階認証
             </div>
@@ -243,10 +256,13 @@ export function LoginPage() {
             </span>
             <input
               className={input()}
+              required
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "login-error" : undefined}
               value={totpCode}
               onChange={(e) => setTotpCode(e.target.value)}
               inputMode={useRecovery ? "text" : "numeric"}
-              pattern={useRecovery ? undefined : "[0-9]*"}
+              pattern={useRecovery ? undefined : "[0-9]{6}"}
               maxLength={useRecovery ? 32 : 6}
               autoFocus
               autoComplete="one-time-code"
@@ -254,7 +270,7 @@ export function LoginPage() {
           </label>
 
           {error ? (
-            <p className={css({ color: "danger.text", fontSize: "sm", mt: "3" })}>{error}</p>
+            <p id="login-error" role="alert" className={css({ color: "danger.text", fontSize: "sm", mt: "3" })}>{error}</p>
           ) : null}
 
           <button
@@ -271,6 +287,7 @@ export function LoginPage() {
             type="button"
             className={cx(button({ variant: "ghost" }), css({ w: "100%", mt: "2" }))}
             style={{ height: "36px" }}
+            disabled={busy}
             onClick={() => {
               setUseRecovery((v) => !v);
               setTotpCode("");
@@ -285,6 +302,7 @@ export function LoginPage() {
             type="button"
             className={cx(button({ variant: "ghost" }), css({ w: "100%", mt: "1" }))}
             style={{ height: "36px" }}
+            disabled={busy}
             onClick={() => {
               setStep({ kind: "credentials" });
               setError(null);

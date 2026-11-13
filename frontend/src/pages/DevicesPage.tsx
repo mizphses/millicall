@@ -1,3 +1,5 @@
+import { useObjectSelection } from "../hooks/useObjectSelection";
+import { Field as ProvisionField } from "../components/Field";
 /**
  * デバイス管理ページ（Phase 5 Task 6）。
  *
@@ -21,6 +23,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import {
   RefreshCw,
@@ -214,6 +217,8 @@ export function DevicesPage() {
   // 削除確認
   const [deleteTarget, setDeleteTarget] = useState<DeviceRead | null>(null);
 
+  const selection = useObjectSelection(listQuery.data, openProvision, closeProvision);
+
   // ─── リース同期ミューテーション ───
   const syncMutation = useMutation({
     mutationFn: syncDevices,
@@ -237,7 +242,7 @@ export function DevicesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
       toast.success("内線を割り当てました");
-      setProvisionTarget(null);
+      setProvisionTarget(null); selection.clear();
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "内線割当に失敗しました");
@@ -315,13 +320,14 @@ export function DevicesPage() {
 
   // ─── 内線割当パネル制御 ───
   function openProvision(device: DeviceRead) {
+    selection.select(device.id);
     setProvisionTarget(device);
     setProvisionForm(emptyProvisionForm());
     setProvisionErrors({});
   }
 
   function closeProvision() {
-    setProvisionTarget(null);
+    setProvisionTarget(null); selection.clear();
   }
 
   function handleProvisionSubmit(e: React.FormEvent) {
@@ -391,9 +397,13 @@ export function DevicesPage() {
       render: (row) =>
         row.extension_number ? (
           <div>
-            <span className={css({ fontWeight: "600", fontSize: "sm" })}>
-              {row.extension_number}
-            </span>
+            {row.extension_id != null ? (
+              <Link to="/extensions" search={{ selected: String(row.extension_id) } as never}
+                aria-label={`内線 ${row.extension_number} の詳細を開く`}
+                className={css({ color: "accent.text", textDecoration: "underline", fontWeight: "600", fontSize: "sm" })}>
+                {row.extension_number}
+              </Link>
+            ) : <span className={css({ fontWeight: "600", fontSize: "sm" })}>{row.extension_number}</span>}
             {row.extension_display_name ? (
               <span className={css({ color: "text.muted", fontSize: "sm", ml: "1" })}>
                 {row.extension_display_name}
@@ -583,11 +593,15 @@ export function DevicesPage() {
         rows={listQuery.data ?? []}
         rowKey={(row) => row.id}
         loading={listQuery.isLoading}
+        error={listQuery.error}
+        onRetry={() => void listQuery.refetch()}
+        searchable
         emptyMessage="デバイスが見つかりません。「リース同期」で DHCP リースを取り込んでください。"
       />
 
       {/* 内線割当スライドパネル */}
       <SlidePanel
+        busy={provisionMutation.isPending}
         open={provisionTarget !== null}
         title="内線を割り当てる"
         onClose={closeProvision}
@@ -651,7 +665,7 @@ export function DevicesPage() {
               </div>
             </div>
 
-            <ProvisionField label="内線番号" error={provisionErrors.extension_number}>
+            <ProvisionField required label="内線番号" error={provisionErrors.extension_number}>
               <input
                 className={input({ invalid: provisionErrors.extension_number ? true : undefined })}
                 value={provisionForm.extension_number}
@@ -664,7 +678,7 @@ export function DevicesPage() {
               />
             </ProvisionField>
 
-            <ProvisionField label="表示名" error={provisionErrors.display_name}>
+            <ProvisionField required label="表示名" error={provisionErrors.display_name}>
               <input
                 className={input({ invalid: provisionErrors.display_name ? true : undefined })}
                 value={provisionForm.display_name}
@@ -881,26 +895,3 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 }
 
 /** フォーム 1 項目（ラベル + 入力 + インラインエラー）。ExtensionsPage と同パターン。 */
-function ProvisionField({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className={css({ display: "block" })}>
-        <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
-          {label}
-        </span>
-        {children}
-      </label>
-      {error ? (
-        <p className={css({ color: "danger.text", fontSize: "sm", mt: "1" })}>{error}</p>
-      ) : null}
-    </div>
-  );
-}

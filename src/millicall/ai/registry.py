@@ -15,8 +15,20 @@
   * anthropic / gemini / vertex_ai / whisper / google_stt / coefont: エンドポイントは
     コードでハードコードされているため SSRF ガード不要（coefont の 302 リダイレクト先は
     CoeFont が署名発行する音声 URL で、ユーザー入力由来ではない）。
+
+イベントループ非ブロック化 (issue #81)
+  * SSRF ガードの DNS 解決（socket.getaddrinfo）は同期でブロックするため、async 文脈からは
+    :func:`build_llm_async` / :func:`build_tts_async` を使う。DNS 解決を伴う kind のみ
+    同期 build を既定 executor（asyncio.to_thread）で実行する。workflow の api_call
+    （workflows/handlers/logic.py）が _resolve_and_check_ssrf を to_thread で呼ぶのと同じ流儀。
+  * DNS を伴わない kind はスレッドに移さずループ上でそのまま構築する（コンストラクタは
+    軽量で、スレッド上でのオブジェクト生成による挙動差を持ち込まないため）。
+  * 同期版 build_llm / build_tts は互換のため残す（テスト・同期呼び出し元向け）。
+    async 版は呼び出し時にモジュール属性の build_llm / build_tts を参照するため、
+    既存テストの monkeypatch もそのまま効く。
 """
 
+import asyncio
 from urllib.parse import urlparse
 
 from millicall.net_guard import (
@@ -80,6 +92,25 @@ def build_llm(kind: str, config: dict, api_key: str | None):
             temperature=config.get("temperature", 0.7),
         )
     raise UnknownProviderKind(kind)
+
+
+# SSRF ガードの DNS 解決を伴う kind（async 版はこれらだけスレッドで構築する）
+_LLM_KINDS_WITH_DNS = frozenset({"openai_compatible"})
+_TTS_KINDS_WITH_DNS = frozenset({"voicevox"})
+
+
+async def build_llm_async(kind: str, config: dict, api_key: str | None):
+    """:func:`build_llm` の async 版。DNS 解決がイベントループを止めない。"""
+    if kind in _LLM_KINDS_WITH_DNS:
+        return await asyncio.to_thread(build_llm, kind, config, api_key)
+    return build_llm(kind, config, api_key)
+
+
+async def build_tts_async(kind: str, config: dict, api_key: str | None):
+    """:func:`build_tts` の async 版。DNS 解決がイベントループを止めない。"""
+    if kind in _TTS_KINDS_WITH_DNS:
+        return await asyncio.to_thread(build_tts, kind, config, api_key)
+    return build_tts(kind, config, api_key)
 
 
 def build_tts(kind: str, config: dict, api_key: str | None):

@@ -3,12 +3,13 @@
  */
 
 import type { components } from "../../api/schema.d";
+import { parseUtcDate } from "../cdr/format";
 
 export type AuditLogRead = components["schemas"]["AuditLogRead"];
 
 /** ISO 日時を「YYYY-MM-DD HH:mm:ss」（ローカル）に整形する。 */
 export function formatTimestamp(iso: string): string {
-  const d = new Date(iso);
+  const d = parseUtcDate(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const pad = (n: number) => String(n).padStart(2, "0");
   return (

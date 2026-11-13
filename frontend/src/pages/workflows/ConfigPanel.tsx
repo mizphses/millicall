@@ -9,7 +9,20 @@ import { input } from "styled-system/recipes";
 
 import { api } from "../../api/client";
 import { AGENTS_KEY, PROVIDERS_KEY, WORKFLOWS_KEY } from "../../queryKeys";
-import type { AgentOption, ConfigSchemaField, ProviderOption, WorkflowOption } from "./types";
+import {
+  rowsFromValue,
+  rowsToValue,
+  validateKeyValueRows,
+  type ConfigDraft,
+  type ConfigDrafts,
+  type KeyValueRow,
+} from "./editorState";
+import type {
+  AgentOption,
+  ConfigSchemaField,
+  ProviderOption,
+  WorkflowOption,
+} from "./types";
 
 interface ConfigPanelProps {
   /** ノード ID（表示用）。 */
@@ -26,6 +39,38 @@ interface ConfigPanelProps {
   onDelete: () => void;
   /** 編集中のワークフロー ID（call_workflow の選択肢から自分自身を除外する）。 */
   currentWorkflowId: number;
+  drafts: ConfigDrafts;
+  onDraftChange: (key: string, draft: ConfigDraft) => void;
+}
+
+/** 時間条件ノード（start_time / end_time / days_of_week を持つ）かどうか。 */
+function isTimeConditionSchema(schema: ConfigSchemaField[]): boolean {
+  const keys = new Set(schema.map((f) => f.key));
+  return keys.has("start_time") && keys.has("end_time") && keys.has("days_of_week");
+}
+
+/** 時間条件ノードの設定説明と、開始=終了の入力エラー表示。 */
+function TimeConditionHint({ config }: { config: Record<string, unknown> }) {
+  const sameTime =
+    typeof config.start_time === "string" &&
+    config.start_time !== "" &&
+    config.start_time === config.end_time;
+  return (
+    <div className={css({ fontSize: "xs", color: "text.muted", lineHeight: "1.6" })}>
+      <ul className={css({ listStyle: "disc", pl: "4" })}>
+        <li>開始が終了より後の場合は、翌日までの区間として扱います（例: 22:00〜06:00）。</li>
+        <li>
+          曜日は営業開始日の曜日で判定します（金曜 22:00〜06:00 は土曜 06:00 の直前まで金曜の営業）。
+        </li>
+        <li>開始と終了を同じ時刻にすることはできません。</li>
+      </ul>
+      {sameTime && (
+        <p role="alert" className={css({ color: "danger.text", mt: "1" })}>
+          開始時刻と終了時刻が同じです。保存できません。
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function ConfigPanel({
@@ -36,6 +81,8 @@ export function ConfigPanel({
   onChange,
   onDelete,
   currentWorkflowId,
+  drafts,
+  onDraftChange,
 }: ConfigPanelProps) {
   const providersQuery = useQuery({
     queryKey: PROVIDERS_KEY,
@@ -67,11 +114,18 @@ export function ConfigPanel({
   const providers = providersQuery.data ?? [];
   const agents = agentsQuery.data ?? [];
   // 自己再帰を防ぐため、編集中のワークフロー自身は呼び出し先候補から外す。
-  const workflows = (workflowsQuery.data ?? []).filter((w) => w.id !== currentWorkflowId);
+  const workflows = (workflowsQuery.data ?? []).filter(
+    (w) => w.id !== currentWorkflowId,
+  );
 
   return (
     <div
-      className={css({ display: "flex", flexDirection: "column", gap: "1", height: "100%" })}
+      className={css({
+        display: "flex",
+        flexDirection: "column",
+        gap: "1",
+        height: "100%",
+      })}
     >
       {/* ノードヘッダ */}
       <div
@@ -83,18 +137,68 @@ export function ConfigPanel({
           borderBottomColor: "border",
         })}
       >
-        <p className={css({ fontSize: "lg", fontWeight: "600", color: "text" })}>{nodeLabel}</p>
-        <p className={css({ fontSize: "xs", color: "text.muted", fontFamily: "monospace", mt: "0.5" })}>
+        <p
+          className={css({ fontSize: "lg", fontWeight: "600", color: "text" })}
+        >
+          {nodeLabel}
+        </p>
+        <p
+          className={css({
+            fontSize: "xs",
+            color: "text.muted",
+            fontFamily: "monospace",
+            mt: "0.5",
+            overflowWrap: "anywhere",
+          })}
+        >
           {nodeId}
         </p>
       </div>
 
+      {[
+        { query: providersQuery, type: "provider_ref", name: "プロバイダー" },
+        { query: agentsQuery, type: "agent_ref", name: "AI エージェント" },
+        { query: workflowsQuery, type: "workflow_ref", name: "ワークフロー" },
+      ]
+        .filter(
+          ({ query, type }) =>
+            query.isError && schema.some((field) => field.type === type),
+        )
+        .map(({ query, name }) => (
+          <div
+            key={name}
+            role="alert"
+            className={css({ color: "danger.text", fontSize: "sm", mb: "3" })}
+          >
+            {name}の取得に失敗しました。{" "}
+            <button
+              type="button"
+              onClick={() => void query.refetch()}
+              className={css({ textDecoration: "underline" })}
+            >
+              再試行
+            </button>
+          </div>
+        ))}
       {/* 動的フィールド */}
-      <div className={css({ display: "flex", flexDirection: "column", gap: "4", flex: 1, overflowY: "auto" })}>
+      <div
+        className={css({
+          display: "flex",
+          flexDirection: "column",
+          gap: "4",
+          flex: 1,
+          overflowY: "auto",
+        })}
+      >
+        {isTimeConditionSchema(schema) && <TimeConditionHint config={config} />}
         {schema.map((field) => (
           <SchemaField
-            key={field.key}
+            key={`${nodeId}:${field.key}`}
             field={field}
+            draft={drafts[`${nodeId}:${field.key}`]}
+            onDraftChange={(draft) =>
+              onDraftChange(`${nodeId}:${field.key}`, draft)
+            }
             value={config[field.key]}
             onChange={(v) => onChange(field.key, v)}
             providers={providers}
@@ -103,7 +207,9 @@ export function ConfigPanel({
           />
         ))}
         {schema.length === 0 && (
-          <p className={css({ color: "text.muted", fontSize: "sm" })}>設定項目はありません。</p>
+          <p className={css({ color: "text.muted", fontSize: "sm" })}>
+            設定項目はありません。
+          </p>
         )}
       </div>
 
@@ -156,11 +262,29 @@ interface FieldProps {
   providers: ProviderOption[];
   agents: AgentOption[];
   workflows: WorkflowOption[];
+  draft?: ConfigDraft;
+  onDraftChange: (draft: ConfigDraft) => void;
 }
 
-function SchemaField({ field, value, onChange, providers, agents, workflows }: FieldProps) {
+function SchemaField({
+  field,
+  value,
+  onChange,
+  providers,
+  agents,
+  workflows,
+  draft,
+  onDraftChange,
+}: FieldProps) {
   const labelEl = (
-    <span className={css({ display: "block", fontSize: "sm", color: "text.muted", mb: "1" })}>
+    <span
+      className={css({
+        display: "block",
+        fontSize: "sm",
+        color: "text.muted",
+        mb: "1",
+      })}
+    >
       {field.label}
       {field.required && (
         <span className={css({ color: "danger.text", ml: "0.5" })}>*</span>
@@ -241,7 +365,9 @@ function SchemaField({ field, value, onChange, providers, agents, workflows }: F
             value={strVal}
             onChange={(e) => onChange(e.target.value)}
           >
-            {!field.required && <option value="">-- 選択してください --</option>}
+            {!field.required && (
+              <option value="">-- 選択してください --</option>
+            )}
             {(field.options ?? []).map((opt) => (
               <option key={opt} value={opt}>
                 {opt}
@@ -301,7 +427,9 @@ function SchemaField({ field, value, onChange, providers, agents, workflows }: F
           <select
             className={input()}
             value={numVal}
-            onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+            onChange={(e) =>
+              onChange(e.target.value === "" ? null : Number(e.target.value))
+            }
           >
             <option value="">-- 選択してください --</option>
             {filtered.map((p) => (
@@ -322,7 +450,9 @@ function SchemaField({ field, value, onChange, providers, agents, workflows }: F
           <select
             className={input()}
             value={numVal}
-            onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+            onChange={(e) =>
+              onChange(e.target.value === "" ? null : Number(e.target.value))
+            }
           >
             <option value="">-- 選択してください --</option>
             {agents.map((a) => (
@@ -343,7 +473,9 @@ function SchemaField({ field, value, onChange, providers, agents, workflows }: F
           <select
             className={input()}
             value={numVal}
-            onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+            onChange={(e) =>
+              onChange(e.target.value === "" ? null : Number(e.target.value))
+            }
           >
             <option value="">-- 選択してください --</option>
             {workflows.map((w) => (
@@ -357,111 +489,173 @@ function SchemaField({ field, value, onChange, providers, agents, workflows }: F
     }
 
     case "key_value_list": {
-      const obj = (typeof value === "object" && value !== null && !Array.isArray(value))
-        ? (value as Record<string, string>)
-        : {};
-      const entries = Object.entries(obj);
+      const rows = draft?.rows ?? rowsFromValue(value);
+      const error = draft?.error;
+      const updateRows = (next: KeyValueRow[]) => {
+        const validation = validateKeyValueRows(next);
+        onDraftChange({ rows: next, error: validation });
+        if (!validation) onChange(rowsToValue(next));
+      };
       return (
-        <div>
-          {labelEl}
-          <div className={css({ display: "flex", flexDirection: "column", gap: "2" })}>
-            {entries.map(([k, v], i) => (
-              <div key={i} className={css({ display: "flex", gap: "2", alignItems: "center" })}>
-                <input
-                  className={input()}
-                  value={k}
-                  placeholder="キー"
-                  style={{ flex: 1 }}
-                  onChange={(e) => {
-                    const newObj = Object.fromEntries(
-                      entries.map(([ek, ev], j) => (j === i ? [e.target.value, ev] : [ek, ev])),
-                    );
-                    onChange(newObj);
-                  }}
-                />
-                <input
-                  className={input()}
-                  value={v}
-                  placeholder="値"
-                  style={{ flex: 2 }}
-                  onChange={(e) => {
-                    const newObj = Object.fromEntries(
-                      entries.map(([ek, ev], j) => (j === i ? [ek, e.target.value] : [ek, ev])),
-                    );
-                    onChange(newObj);
-                  }}
-                />
+        <fieldset className={css({ minWidth: 0, border: "none", p: "0" })}>
+          <legend
+            className={css({ fontSize: "sm", fontWeight: "600", mb: "2" })}
+          >
+            {field.label}
+          </legend>
+          <div
+            className={css({
+              display: "flex",
+              flexDirection: "column",
+              gap: "3",
+            })}
+          >
+            {rows.map((row, index) => (
+              <div
+                key={row.id}
+                className={css({
+                  display: "grid",
+                  gap: "2",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  p: "2",
+                  borderWidth: "1px",
+                  borderColor: "border",
+                  borderRadius: "md",
+                })}
+              >
+                <label className={css({ fontSize: "sm", gridColumn: "1" })}>
+                  キー {index + 1}
+                  <input
+                    className={input({ invalid: Boolean(error) })}
+                    value={row.key}
+                    aria-invalid={Boolean(error)}
+                    aria-describedby={error ? `${field.key}-error` : undefined}
+                    onChange={(event) =>
+                      updateRows(
+                        rows.map((item) =>
+                          item.id === row.id
+                            ? { ...item, key: event.target.value }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
+                </label>
                 <button
                   type="button"
-                  onClick={() => {
-                    const newEntries = entries.filter((_, j) => j !== i);
-                    onChange(Object.fromEntries(newEntries));
-                  }}
+                  aria-label={`${index + 1}行目を削除`}
+                  onClick={() =>
+                    updateRows(rows.filter((item) => item.id !== row.id))
+                  }
                   className={css({
-                    flexShrink: 0,
-                    width: "28px",
-                    height: "28px",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "lg",
-                    color: "text.muted",
-                    bg: "transparent",
-                    border: "none",
+                    color: "danger.text",
                     cursor: "pointer",
-                    borderRadius: "sm",
-                    _hover: { bg: "danger.soft", color: "danger.text" },
+                    px: "2",
+                    alignSelf: "center",
                   })}
                 >
-                  ×
+                  削除
                 </button>
+                <label
+                  className={css({ fontSize: "sm", gridColumn: "1 / -1" })}
+                >
+                  値 {index + 1}
+                  <input
+                    className={input()}
+                    value={row.value}
+                    onChange={(event) =>
+                      updateRows(
+                        rows.map((item) =>
+                          item.id === row.id
+                            ? { ...item, value: event.target.value }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
+                </label>
               </div>
             ))}
+            {error && (
+              <p
+                id={`${field.key}-error`}
+                role="alert"
+                className={css({ color: "danger.text", fontSize: "sm" })}
+              >
+                {error}
+              </p>
+            )}
             <button
               type="button"
-              onClick={() => {
-                const newObj = { ...obj, "": "" };
-                onChange(newObj);
-              }}
+              onClick={() =>
+                updateRows([
+                  ...rows,
+                  { id: crypto.randomUUID(), key: "", value: "" },
+                ])
+              }
               className={css({
-                fontSize: "sm",
-                color: "text.muted",
-                bg: "transparent",
-                border: "none",
-                cursor: "pointer",
+                color: "accent.text",
                 textAlign: "left",
-                px: "0",
-                _hover: { color: "text" },
+                cursor: "pointer",
+                py: "2",
               })}
             >
-              + 行を追加
+              ＋ 行を追加
             </button>
           </div>
-        </div>
+        </fieldset>
       );
     }
 
     case "json": {
-      const jsonStr =
-        typeof value === "string"
+      const text =
+        draft?.text ??
+        (typeof value === "string"
           ? value
-          : JSON.stringify(value ?? {}, null, 2);
+          : JSON.stringify(value ?? {}, null, 2));
       return (
         <label className={css({ display: "block" })}>
           {labelEl}
           <textarea
-            className={input()}
-            value={jsonStr}
-            rows={4}
-            style={{ resize: "vertical", width: "100%", fontFamily: "monospace", fontSize: 12 }}
-            onChange={(e) => {
+            className={input({ invalid: Boolean(draft?.error) })}
+            value={text}
+            rows={6}
+            aria-invalid={Boolean(draft?.error)}
+            aria-describedby={draft?.error ? `${field.key}-error` : undefined}
+            style={{
+              resize: "vertical",
+              width: "100%",
+              fontFamily: "monospace",
+            }}
+            onChange={(event) => {
+              const next = event.target.value;
               try {
-                onChange(JSON.parse(e.target.value));
+                const parsed: unknown = JSON.parse(next);
+                onDraftChange({ text: next, error: null });
+                onChange(parsed);
               } catch {
-                onChange(e.target.value);
+                onDraftChange({
+                  text: next,
+                  error:
+                    "JSON の形式を確認してください。修正するまで保存されません。",
+                });
               }
             }}
           />
+          {draft?.error && (
+            <span
+              id={`${field.key}-error`}
+              role="alert"
+              className={css({
+                display: "block",
+                color: "danger.text",
+                fontSize: "sm",
+                mt: "1",
+              })}
+            >
+              {draft.error}
+            </span>
+          )}
         </label>
       );
     }
@@ -470,7 +664,11 @@ function SchemaField({ field, value, onChange, providers, agents, workflows }: F
       return (
         <label className={css({ display: "block" })}>
           {labelEl}
-          <input className={input()} value={strVal} onChange={(e) => onChange(e.target.value)} />
+          <input
+            className={input()}
+            value={strVal}
+            onChange={(e) => onChange(e.target.value)}
+          />
         </label>
       );
   }

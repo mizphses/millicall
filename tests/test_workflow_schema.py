@@ -514,3 +514,43 @@ def test_error_types_are_exceptions() -> None:
 def test_workflow_node_type_alias_exists() -> None:
     # WorkflowNode is the discriminated-union alias used by downstream tasks
     assert WorkflowNode is not None
+
+
+# --------------------------------------------------------------------------- #
+# time_condition: 開始 = 終了 は保存時に拒否（実行時のパースは通す）
+# --------------------------------------------------------------------------- #
+
+
+def _time_condition_defn(start: str, end: str) -> WorkflowDefinition:
+    return _defn(
+        [
+            {"id": "s", "type": "start"},
+            {
+                "id": "t",
+                "type": "time_condition",
+                "config": {"start_time": start, "end_time": end},
+            },
+            {"id": "e", "type": "end"},
+        ],
+        [
+            {"id": "e1", "source": "s", "target": "t", "sourceHandle": "out"},
+            {"id": "e2", "source": "t", "target": "e", "sourceHandle": "match"},
+        ],
+    )
+
+
+def test_time_condition_same_start_end_is_error() -> None:
+    result = validate_graph(_time_condition_defn("09:00", "09:00"))
+    assert any("time_condition" in e and "'t'" in e for e in result.errors)
+
+
+def test_time_condition_overnight_range_is_valid() -> None:
+    assert validate_graph(_time_condition_defn("22:00", "06:00")).errors == []
+
+
+def test_time_condition_same_start_end_rejected_by_validate_definition() -> None:
+    """保存 API が使う validate_definition は WorkflowValidationError（422）を送出する."""
+    from millicall.workflows.service import validate_definition
+
+    with pytest.raises(WorkflowValidationError):
+        validate_definition(_time_condition_defn("09:00", "09:00").model_dump(mode="json"))

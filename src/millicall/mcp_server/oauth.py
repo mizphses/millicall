@@ -1,7 +1,7 @@
 """MCP OAuth 2.1 プロバイダ（インメモリ）。
 
 旧実装 (`../millicall-pbx/src/millicall/mcp_server.py:63-240`) の `MillicallOAuthProvider`
-の仕様を v2 / mcp SDK 1.30 の型 (`AuthorizationCode` / `AccessToken` / `RefreshToken`) に
+の仕様を v2 / mcp SDK 2.x の型 (`AuthorizationCode` / `AccessToken` / `RefreshToken`) に
 載せ替えたもの。DCR(RFC7591) + PKCE(S256) をサポートし、クライアント登録・認可コード・
 トークンをすべてプロセス内 dict に保持する（再起動で全失効 — コントローラ裁定#4）。
 
@@ -25,9 +25,10 @@ from mcp.server.auth.provider import (
     OAuthAuthorizationServerProvider,
     RefreshToken,
     TokenError,
+    TokenVerifier,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
-from pydantic import AnyHttpUrl, AnyUrl
+from pydantic import AnyHttpUrl, AnyUrl, ValidationError
 
 from millicall.crypto import SecretBox
 
@@ -36,7 +37,7 @@ logger = logging.getLogger("millicall")
 _AUTH_CODE_TTL = 600  # 10 分
 _ACCESS_TTL = 86400  # 24 時間
 _REFRESH_TTL = 86400 * 30  # 30 日
-_LOGIN_TICKET_TTL = 600  # ログイン往復チケットの有効期限（10 分）
+LOGIN_TICKET_TTL = 600  # ログイン往復チケットの有効期限（10 分）
 
 
 def _mask(token: str) -> str:
@@ -112,7 +113,7 @@ class MillicallOAuthProvider(
         """
         if self._signer is None:
             raise RuntimeError("OAuth signer not configured")
-        return json.loads(self._signer.decrypt(token, ttl=_LOGIN_TICKET_TTL))
+        return json.loads(self._signer.decrypt(token, ttl=LOGIN_TICKET_TTL))
 
     # -- DCR (Dynamic Client Registration) --
 
@@ -375,3 +376,30 @@ class MillicallOAuthProvider(
         self._refresh_tokens.pop(token.token, None)
         self._token_epoch.pop(token.token, None)
         self._refresh_resource.pop(token.token, None)
+
+
+class ResourceBoundTokenVerifier(TokenVerifier):
+    """resource（RFC 8707）が本サーバー（issuer）宛のアクセストークンだけを受理する検証器。
+
+    mcp SDK 1.x の `AuthSettings.validate_token_resource=True`（BearerAuthBackend 内の
+    `_issued_for_this_resource`）は 2.x で廃止されたため、同じ比較規則（URL として正規化し、
+    末尾スラッシュ差を無視）をここで再実装する。provider は `load_access_token` で
+    期限・ユーザー有効性・epoch を検証済みのトークンを返す。
+    """
+
+    def __init__(self, provider: MillicallOAuthProvider, resource_server_url: str) -> None:
+        self._provider = provider
+        self._resource = str(AnyHttpUrl(resource_server_url)).removesuffix("/")
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        access = await self._provider.load_access_token(token)
+        if access is None:
+            return None
+        try:
+            token_resource = str(AnyHttpUrl(access.resource or ""))
+        except ValidationError:
+            return None
+        if token_resource.removesuffix("/") != self._resource:
+            logger.warning("MCP OAuth: rejected bearer token for another resource")
+            return None
+        return access

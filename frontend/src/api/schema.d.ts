@@ -335,6 +335,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cdr/{cdr_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Cdr */
+        get: operations["get_cdr_api_cdr__cdr_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/contacts": {
         parameters: {
             query?: never;
@@ -2800,6 +2817,8 @@ export interface components {
         };
         /** TrunkRead */
         TrunkRead: {
+            /** Apply Warning */
+            apply_warning?: string | null;
             /** Caller Id */
             caller_id: string;
             /** Did Number */
@@ -3179,6 +3198,10 @@ export interface operations {
             query?: {
                 limit?: number;
                 offset?: number;
+                q?: string;
+                since?: string | null;
+                until?: string | null;
+                order?: "newest" | "oldest";
             };
             header?: never;
             path?: never;
@@ -3549,6 +3572,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
                 direction?: string | null;
+                q?: string;
+                since?: string | null;
+                until?: string | null;
+                order?: "newest" | "oldest";
             };
             header?: never;
             path?: never;
@@ -3563,6 +3590,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CdrRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cdr_api_cdr__cdr_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cdr_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CdrRead"];
                 };
             };
             /** @description Validation Error */
