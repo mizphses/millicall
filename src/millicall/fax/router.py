@@ -9,17 +9,27 @@
 import contextlib
 from datetime import datetime
 from pathlib import Path
+from xml.etree.ElementTree import ParseError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
+from jinja2 import TemplateError
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from millicall.audit import get_client_ip, record_audit
 from millicall.config import Settings
-from millicall.deps import get_change_listener, get_session, get_settings_dep, require_admin
-from millicall.fax.service import resolve_inside
+from millicall.crypto import SecretBox
+from millicall.deps import (
+    get_change_listener,
+    get_current_user,
+    get_secret_box,
+    get_session,
+    get_settings_dep,
+    require_admin,
+)
+from millicall.fax.service import resolve_inside, verify_pdf_token
 from millicall.models import Fax, FaxReceiver, Trunk, User
 from millicall.numberplan import KIND_FAX, NumberConflictError, assert_number_free
 from millicall.telephony.hooks import ExtensionChangeListener
@@ -54,13 +64,46 @@ async def list_fax_receivers(session: AsyncSession = Depends(get_session)) -> li
     return list(await session.scalars(select(FaxReceiver).order_by(FaxReceiver.number)))
 
 
+async def _validate_pending(session: AsyncSession, listener: ExtensionChangeListener) -> None:
+    """コミット前に保留中の変更を含む電話設定全体を生成できるか検証する（トランク API と同様）。"""
+    await session.flush()
+    validate = getattr(listener, "validate", None)
+    if validate is None:
+        return
+    try:
+        await validate(session)
+    except (ValueError, ParseError, TemplateError):
+        await session.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail="電話設定を生成できません。入力内容を確認してください。変更は保存されていません。",
+        ) from None
+
+
+async def _audit(
+    session: AsyncSession, request: Request, user: User, action: str, target_id: int, detail: dict
+) -> None:
+    await record_audit(
+        session,
+        actor_user_id=user.id,
+        actor_label=user.username,
+        action=action,
+        target_type="fax_receiver",
+        target_id=str(target_id),
+        detail=detail,
+        ip_address=get_client_ip(request),
+    )
+
+
 @router.post(
     "/fax-receivers", response_model=FaxReceiverRead, status_code=status.HTTP_201_CREATED
 )
 async def create_fax_receiver(
     body: FaxReceiverUpsert,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
+    user: User = Depends(require_admin),
 ) -> FaxReceiver:
     try:
         await assert_number_free(session, body.number)
@@ -68,6 +111,11 @@ async def create_fax_receiver(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     receiver = FaxReceiver(number=body.number, name=body.name, enabled=body.enabled)
     session.add(receiver)
+    await _validate_pending(session, listener)
+    await _audit(
+        session, request, user, "fax_receiver.create", receiver.id,
+        {"number": body.number, "name": body.name, "enabled": body.enabled},
+    )
     await session.commit()
     await session.refresh(receiver)
     await listener.notify(session)
@@ -78,8 +126,10 @@ async def create_fax_receiver(
 async def update_fax_receiver(
     receiver_id: int,
     body: FaxReceiverUpsert,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
+    user: User = Depends(require_admin),
 ) -> FaxReceiver:
     receiver = await session.get(FaxReceiver, receiver_id)
     if receiver is None:
@@ -97,6 +147,12 @@ async def update_fax_receiver(
         trunks = await session.scalars(select(Trunk).where(Trunk.fax_route_number == old_number))
         for t in trunks:
             t.fax_route_number = body.number
+    await _validate_pending(session, listener)
+    await _audit(
+        session, request, user, "fax_receiver.update", receiver_id,
+        {"number": body.number, "old_number": old_number, "name": body.name,
+         "enabled": body.enabled},
+    )
     await session.commit()
     await session.refresh(receiver)
     await listener.notify(session)
@@ -106,8 +162,10 @@ async def update_fax_receiver(
 @router.delete("/fax-receivers/{receiver_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_fax_receiver(
     receiver_id: int,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
+    user: User = Depends(require_admin),
 ) -> None:
     receiver = await session.get(FaxReceiver, receiver_id)
     if receiver is None:
@@ -120,7 +178,10 @@ async def delete_fax_receiver(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"トランク {referenced} の FAX 自動検知の切替先に使われているため削除できません",
         )
+    number = receiver.number
     await session.delete(receiver)
+    await _validate_pending(session, listener)
+    await _audit(session, request, user, "fax_receiver.delete", receiver_id, {"number": number})
     await session.commit()
     await listener.notify(session)
 
@@ -198,22 +259,6 @@ async def get_fax(fax_id: int, session: AsyncSession = Depends(get_session)) -> 
     return _to_read(await _get_fax(session, fax_id))
 
 
-@router.get("/faxes/{fax_id}/pdf", response_class=FileResponse)
-async def download_fax_pdf(
-    fax_id: int,
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings_dep),
-) -> FileResponse:
-    fax = await _get_fax(session, fax_id)
-    path = _safe_path(settings, fax.pdf_path)
-    if path is None or not path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF がありません")
-    stamp = fax.received_at.strftime("%Y%m%d-%H%M%S")
-    return FileResponse(
-        path, media_type="application/pdf", filename=f"fax-{fax.id}-{stamp}.pdf"
-    )
-
-
 @router.delete("/faxes/{fax_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_fax(
     fax_id: int,
@@ -223,11 +268,7 @@ async def delete_fax(
     user: User = Depends(require_admin),
 ) -> None:
     fax = await _get_fax(session, fax_id)
-    for stored in (fax.pdf_path, fax.tiff_path):
-        path = _safe_path(settings, stored)
-        if path is not None:
-            with contextlib.suppress(FileNotFoundError):
-                path.unlink()
+    files = [fax.pdf_path, fax.tiff_path]
     await session.delete(fax)
     await record_audit(
         session,
@@ -239,4 +280,41 @@ async def delete_fax(
         detail={"from": fax.from_number, "to": fax.to_number},
         ip_address=get_client_ip(request),
     )
+    # DB を先に確定させてからファイルを消す（コミット失敗時にファイルだけ消えないように）。
     await session.commit()
+    for stored in files:
+        path = _safe_path(settings, stored)
+        if path is not None:
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
+
+
+# PDF ダウンロードは Webhook 受信側からも取得できるよう、ルーター単位の require_admin を
+# 外した別ルーターに置く。署名付きトークン（24 時間有効・fax id に束縛）があればセッション
+# 不要、無ければ従来どおり管理者セッションを要求する。
+pdf_router = APIRouter(prefix="/api", tags=["faxes"])
+
+
+@pdf_router.get("/faxes/{fax_id}/pdf", response_class=FileResponse)
+async def download_fax_pdf(
+    fax_id: int,
+    request: Request,
+    token: str | None = Query(default=None, max_length=2048),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+    box: SecretBox = Depends(get_secret_box),
+) -> FileResponse:
+    if token is not None:
+        if not verify_pdf_token(box, token, fax_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token")
+    else:
+        user = await get_current_user(request, session)
+        await require_admin(user)
+    fax = await _get_fax(session, fax_id)
+    path = _safe_path(settings, fax.pdf_path)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF がありません")
+    stamp = fax.received_at.strftime("%Y%m%d-%H%M%S")
+    return FileResponse(
+        path, media_type="application/pdf", filename=f"fax-{fax.id}-{stamp}.pdf"
+    )

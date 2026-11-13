@@ -17,6 +17,21 @@ FreeSWITCH ─ CUSTOM spandsp::rxfaxresult ─▶ core
 - 原本 TIFF は PDF と同じ場所（`data/fax/<uuid>.tif`）に残ります。PDF は `data/fax/<uuid>.pdf`。
 - 標準解像度（204×98 dpi）の FAX は縦横比を補正してから PDF にします。
 - FAX の API（`/api/faxes`・`/api/fax-receivers`）は他の管理 API と同様に **管理者ログインが必須** です。
+  例外として `GET /api/faxes/{id}/pdf` は、`fax.received` Webhook の `pdf_url` に付く署名付きトークン
+  （24 時間有効・その FAX 専用）でも取得できます。
+- 受信番号の追加・変更・削除と FAX の削除は監査ログに残ります。
+
+## 上限と保持
+
+| 項目 | 既定 | 設定 |
+|---|---|---|
+| 1 回の受信の上限時間（`sched_hangup ... ALLOTTED_TIMEOUT`） | 1800 秒 | `MILLICALL_FAX_MAX_DURATION_SEC` |
+| 保持日数（0 = 削除しない。1 以上なら日次で行と TIFF/PDF を削除） | 0 | `MILLICALL_FAX_RETENTION_DAYS` |
+| PDF 変換の上限: TIFF サイズ / ページ数 / 1 ページの画素数 | 50 MB / 100 / 3456×4800×2 | 固定 |
+| PDF 変換に必要な空き容量（未満なら変換をスキップし警告ログ） | 200 MB | 固定 |
+
+変換上限を超えた FAX は「失敗（PDF 変換を中止: ...）」として記録し、TIFF は残します。
+PDF はページを 1 枚ずつ書き出すため、ページ数が多くてもメモリ使用量は 1 ページ分に収まります。
 
 ## 設定手順
 
@@ -88,5 +103,6 @@ FreeSWITCH と core が同じ絶対パスで TIFF を共有するため、freesw
 |---|---|
 | 一覧に出ない | FreeSWITCH ログに `FAX RECEIVE <番号>` があるか。ESL が `CUSTOM spandsp::rxfaxresult` を購読しているか（core 再起動で再購読） |
 | 「失敗」になる | 結果欄の理由（spandsp の `fax_result_text`）。回線品質・相手機の ECM/V.17 設定 |
-| PDF が無い（成功なのに） | freeswitch に `./data/fax:/app/data/fax` がマウントされているか |
+| PDF が無い（成功なのに） | freeswitch に `./data/fax:/app/data/fax` がマウントされているか。core ログに「空き容量が不足」が出ていないか |
+| FAX 受信番号が効かない | core ログに「FAX 保存先パスに使用できない文字」が出ていないか（`data_dir` に空白・記号を含むと FAX extension を出力しません） |
 | 自動検知しない | トランクの切替先が有効な FAX 受信番号か。相手機が CNG を出しているか（自動送信のみ） |

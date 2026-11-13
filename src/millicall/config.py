@@ -160,6 +160,10 @@ class Settings(BaseSettings):
     # デフォルト: RFC1918 プライベート全帯域 + loopback。
     # HGW 192.168.1.1 は 192.168.0.0/16 に内包されているため、このデフォルトで実機着信を維持する。
     # WAN からの任意送信元は ACL default="deny" により FreeSWITCH レイヤでも拒否される（nftables に次ぐ第二層）。
+    # 1 回の FAX 受信の上限秒数（dialplan の sched_hangup。既定 30 分）。
+    fax_max_duration_sec: int = 1800
+    # 受信 FAX の保持日数。0 = 削除しない。1 以上なら日次で古い FAX（行 + TIFF/PDF）を削除する。
+    fax_retention_days: int = 0
     # Webhook の送信先として追加で許可する宛先（カンマ/改行区切りの CIDR）。管理画面で編集可。
     # 空でも RFC1918 の LAN 宛ては許可されるが、docker 既定レンジ 172.16.0.0/12・CGNAT
     # 100.64.0.0/10 と、非グローバル宛ての内部サービスポート（80/443/2375/2376/8021 等）は

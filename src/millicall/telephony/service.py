@@ -65,6 +65,7 @@ def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfi
         sip_trusted_cidrs=settings.sip_trusted_cidrs,
         sip_reject_anonymous=settings.sip_reject_anonymous,
         fax_dir=settings.fax_dir,
+        fax_max_duration_sec=settings.fax_max_duration_sec,
         # #123 の組み込み音声（core 起動時に tts_cache_dir/builtin へ同期される）。
         fax_announce_path=builtin_audio_path(FAX_RECEIVE_NOTICE_ID, settings.tts_cache_dir),
     )

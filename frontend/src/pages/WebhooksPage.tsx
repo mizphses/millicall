@@ -24,6 +24,7 @@ import {
   toggleEvent,
   validateWebhookForm,
   webhookEventLabel,
+  willSendUnsigned,
   type WebhookDeliveryRead,
   type WebhookFormValues,
   type WebhookRead,
@@ -355,6 +356,14 @@ export function WebhooksPage() {
               placeholder={editing?.has_secret ? "設定済み（空欄なら変更しません）" : "受信側で署名検証に使う共有鍵"}
             />
           </Field>
+          {willSendUnsigned(form, editing) && (
+            <p
+              role="note"
+              className={css({ color: "warn.text", fontSize: "sm" })}
+            >
+              シークレットが空のため署名なしで送信します。受信側で送信元を検証できないので、シークレットの設定を推奨します。
+            </p>
+          )}
           {editing?.has_secret && (
             <label className={checkboxRow}>
               <input

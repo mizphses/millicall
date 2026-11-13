@@ -61,6 +61,8 @@
         {#- 初版は G.711 パススルーのみ（ひかり電話 HGW は T.38 非対応） -#}
         <action application="set" data="fax_enable_t38=false"/>
         <action application="set" data="fax_verbose=false"/>
+        {#- 相手が切らない・回線不良で rxfax が終わらない場合の上限 -#}
+        <action application="sched_hangup" data="+{{ fax_max_duration_sec }} ALLOTTED_TIMEOUT"/>
         <action application="rxfax" data="{{ fax_dir }}/${uuid}.tif"/>
         <action application="hangup"/>
       </condition>

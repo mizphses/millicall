@@ -4,7 +4,6 @@ import uuid
 from pathlib import Path
 
 import defusedxml.ElementTree as ET  # noqa: N817
-import pytest
 from PIL import Image
 from sqlalchemy import select
 
@@ -110,11 +109,54 @@ def test_fax_detect_timeout_is_clamped(tmp_path):
     assert "XML default' 120 cng" in out
 
 
-def test_writer_rejects_unsafe_fax_dir(tmp_path):
-    with pytest.raises(ValueError):
-        FreeswitchConfigWriter(
-            output_dir=tmp_path, sip_domain="x", esl_password="e", fax_dir=tmp_path / "a b'"
-        )
+def test_unsafe_fax_dir_omits_fax_extensions_without_failing(tmp_path, caplog):
+    # 起動（writer 生成）は止めず、FAX extension だけ省いて ERROR ログを出す。
+    w = FreeswitchConfigWriter(
+        output_dir=tmp_path, sip_domain="x", esl_password="e", fax_dir=tmp_path / "a b'"
+    )
+    out = w.render_all(
+        [],
+        trunks=[_trunk(fax_detect_enabled=True, fax_route_number="300")],
+        fax_receivers=[FaxReceiverConfig(number="300")],
+    )
+    assert "rxfax" not in out["dialplan/default.xml"]
+    assert "spandsp_start_fax_detect" not in out["dialplan/public.xml"]
+    assert "FAX 保存先パス" in caplog.text
+
+
+def test_unsafe_announce_path_disables_only_announce(tmp_path, caplog):
+    w = FreeswitchConfigWriter(
+        output_dir=tmp_path / "fs",
+        sip_domain="x",
+        esl_password="e",
+        fax_dir=tmp_path / "fax",
+        fax_announce_path=tmp_path / "a b.wav",
+    )
+    out = w.render_all(
+        [],
+        trunks=[
+            _trunk(fax_detect_enabled=True, fax_route_number="300", fax_detect_announce=True)
+        ],
+        fax_receivers=[FaxReceiverConfig(number="300")],
+    )["dialplan/public.xml"]
+    assert "spandsp_start_fax_detect" in out
+    assert "playback" not in out
+    assert "案内" in caplog.text
+
+
+def test_fax_extension_has_sched_hangup_before_rxfax(tmp_path):
+    w = FreeswitchConfigWriter(
+        output_dir=tmp_path / "fs",
+        sip_domain="x",
+        esl_password="e",
+        fax_dir=tmp_path / "fax",
+        fax_max_duration_sec=900,
+    )
+    xml = w.render_all([], fax_receivers=[FaxReceiverConfig(number="300")])[
+        "dialplan/default.xml"
+    ]
+    assert '<action application="sched_hangup" data="+900 ALLOTTED_TIMEOUT"/>' in xml
+    assert xml.index("sched_hangup") < xml.index("rxfax")
 
 
 # --------------------------------------------------------------------------- TIFF→PDF

@@ -28,7 +28,8 @@ OWN_IPS = frozenset({"192.168.1.2", "172.17.0.1", "100.101.102.103", "fe80::1"})
 def _policy(allowed: str = "", own=OWN_IPS) -> WebhookTargetPolicy:
     return WebhookTargetPolicy(
         allowed_cidrs=parse_allowed_cidrs(allowed),
-        internal_ports=WEBHOOK_INTERNAL_PORTS | {8000},
+        internal_ports=WEBHOOK_INTERNAL_PORTS | {8022},
+        internal_endpoints=(("10.9.9.9", 9100), ("172.18.0.5", 2380)),
         local_addresses=lambda: own,
     )
 
@@ -71,27 +72,58 @@ def test_enumeration_failure_fails_closed():
         resolve_webhook_target("http://192.168.1.50:8080/hook", policy)
 
 
-# ----------------------------------------------------------------- 内部ポート
+# ----------------------------------------------------------------- 内部サービス
 
 
-def test_lan_internal_port_blocked_other_port_allowed():
+def test_lan_internal_port_blocked_other_ports_allowed():
     with pytest.raises(ValueError, match="内部サービス"):
         resolve_webhook_target("http://192.168.1.50:8021/", _policy())
     with pytest.raises(ValueError, match="内部サービス"):
         resolve_webhook_target("http://192.168.1.50:2375/", _policy())
     with pytest.raises(ValueError, match="内部サービス"):
-        resolve_webhook_target("http://192.168.1.50/", _policy())  # 80
-    with pytest.raises(ValueError, match="内部サービス"):
-        resolve_webhook_target("http://10.0.0.5:8000/", _policy())  # core http_port
+        resolve_webhook_target("http://10.0.0.5:8022/", _policy())  # 設定の ESL ポート
     assert resolve_webhook_target("http://192.168.1.50:8080/hook", _policy()) == "192.168.1.50"
-    assert resolve_webhook_target("http://10.0.0.5:9000/hook", _policy()) == "10.0.0.5"
 
 
-def test_internal_port_relaxed_only_for_allowlisted_cidr():
-    policy = _policy("192.168.1.50/32")
-    assert resolve_webhook_target("http://192.168.1.50/hook", policy) == "192.168.1.50"
-    with pytest.raises(ValueError, match="内部サービス"):
-        resolve_webhook_target("http://192.168.1.51/hook", policy)
+def test_lan_receiver_on_80_and_443_allowed_without_allowlist():
+    assert resolve_webhook_target("http://192.168.1.50/hook", _policy()) == "192.168.1.50"
+    assert resolve_webhook_target("https://10.0.0.5/hook", _policy()) == "10.0.0.5"
+    # 自ホストの 80/443 は拒否（core 自身の API）
+    with pytest.raises(ValueError, match="自ホスト"):
+        resolve_webhook_target("http://192.168.1.2/hook", _policy())
+
+
+def test_allowlist_never_unlocks_internal_services():
+    policy = _policy("172.16.0.0/12, 192.168.1.0/24, 10.0.0.0/8")
+    with pytest.raises(ValueError):
+        resolve_webhook_target("http://172.17.0.1:2375/", policy)  # docker proxy（自ホスト）
+    with pytest.raises(ValueError):
+        resolve_webhook_target("http://172.17.0.9:2375/", policy)  # 2375 は常に拒否
+    with pytest.raises(ValueError):
+        resolve_webhook_target("http://192.168.1.2:8021/", policy)  # ESL（自ホスト）
+    with pytest.raises(ValueError):
+        resolve_webhook_target("http://192.168.1.60:8021/", policy)
+    with pytest.raises(ValueError, match="内部サービスの接続先"):
+        resolve_webhook_target("http://10.9.9.9:9100/", policy)  # ESL 接続先そのもの
+    with pytest.raises(ValueError, match="内部サービスの接続先"):
+        resolve_webhook_target("http://172.18.0.5:2380/", policy)  # docker proxy 接続先
+    # 同じホストの別ポートは許可 CIDR 内なら可
+    assert resolve_webhook_target("http://172.18.0.5:8080/", policy) == "172.18.0.5"
+
+
+def test_internal_endpoint_hostname_is_resolved(monkeypatch):
+    def fake_getaddrinfo(host, port, type=0):  # noqa: A002
+        table = {"docker-proxy": "172.18.0.7", "hooks.lan": "172.18.0.7"}
+        return [(2, 1, 6, "", (table[host], port))]
+
+    monkeypatch.setattr(net_guard.socket, "getaddrinfo", fake_getaddrinfo)
+    policy = WebhookTargetPolicy(
+        allowed_cidrs=parse_allowed_cidrs("172.16.0.0/12"),
+        internal_endpoints=(("docker-proxy", 2390),),
+        local_addresses=lambda: frozenset(),
+    )
+    with pytest.raises(ValueError, match="内部サービスの接続先"):
+        resolve_webhook_target("http://hooks.lan:2390/", policy)
 
 
 def test_global_address_on_443_is_allowed():
@@ -250,3 +282,12 @@ async def test_webhook_allowed_cidrs_setting_is_validated(auth_client, app):
         "172.20.0.0/16",
         "100.64.0.0/10",
     ]
+
+
+async def test_pinned_transport_rejects_port_mismatch():
+    import httpx as _httpx
+
+    _ip, transport = net_guard.make_webhook_transport("http://192.168.1.50:8080/x", _policy())
+    async with _httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(ValueError, match="port"):
+            await client.post("http://192.168.1.50:8021/x")

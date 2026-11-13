@@ -3,7 +3,7 @@
 FreeSWITCH の rxfax は fax_<number> extension で ``<fax_dir>/<uuid>.tif`` に受信し、
 完了時に ``CUSTOM spandsp::rxfaxresult`` を発火する。本サービスはそのイベントを受けて
 
-1. TIFF を PDF に変換（Pillow。複数ページ・ファイン/標準の縦横解像度差を補正）
+1. TIFF を PDF に変換（Pillow。複数ページ・縦横解像度差の補正・サイズ/ページ/画素数の上限）
 2. faxes テーブルへ記録
 3. ``fax.received`` Webhook を発火
 
@@ -14,10 +14,16 @@ FreeSWITCH の rxfax は fax_<number> extension で ``<fax_dir>/<uuid>.tif`` に
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import re
+import shutil
+import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 from sqlalchemy import select
 
@@ -25,8 +31,11 @@ from millicall.models import Fax, Trunk
 from millicall.webhooks.dispatcher import EVENT_FAX_RECEIVED, utc_iso
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from millicall.crypto import SecretBox
     from millicall.webhooks.dispatcher import WebhookDispatcher
 
 logger = logging.getLogger("millicall.fax")
@@ -67,37 +76,79 @@ def resolve_inside(base: Path, candidate: Path) -> Path:
     return resolved
 
 
+# 変換の上限（悪意ある/壊れた TIFF によるメモリ・CPU 枯渇対策）。
+FAX_MAX_PIXELS = 3456 * 4800 * 2  # A3 スーパーファイン相当の 2 倍
+FAX_MAX_PAGES = 100
+FAX_MAX_TIFF_BYTES = 50 * 1024 * 1024
+# fax_dir の空きがこれ未満なら PDF 変換をスキップする（TIFF 受信用の余地を残す）。
+FAX_MIN_FREE_BYTES = 200 * 1024 * 1024
+# pdf_url に付けるダウンロードトークンの有効期間。
+PDF_TOKEN_TTL_SECONDS = 24 * 60 * 60
+_PDF_TOKEN_PURPOSE = "fax_pdf"
+
+
+class FaxConversionLimitError(ValueError):
+    """上限超過で PDF 変換を中止した（受信は失敗扱いにし TIFF は残す）。"""
+
+
 def tiff_to_pdf(tiff_path: Path, pdf_path: Path) -> int:
     """TIFF（複数ページ可）を PDF に変換し、ページ数を返す。
 
-    FAX の標準解像度は 204x98 dpi のように縦横で異なるため、縦方向を引き伸ばして
-    正方画素にしてから PDF にする（そのままだと縦に潰れて見える）。
+    - ファイルサイズ・ページ数・1 ページの画素数に上限を設け、超えたら
+      FaxConversionLimitError（DecompressionBombWarning もエラー扱い）。
+    - ページは 1 枚ずつ読み込んで書き出す（全フレームをメモリに保持しない）。
+    - FAX の標準解像度（204x98 dpi）のように縦横で異なる場合は PDF 側の dpi で
+      縦横比を補正する（画素は加工しない）。
+    - 一時ファイルは fax_dir 内に O_EXCL 相当（mkstemp）で作り、原子的に置き換える。
     """
-    from PIL import Image, ImageSequence
+    import warnings
 
-    pages: list[Image.Image] = []
-    resolution = 200.0
-    with Image.open(tiff_path) as im:
-        for frame in ImageSequence.Iterator(im):
-            page = frame.copy()
-            dpi = frame.info.get("dpi")
-            if dpi and len(dpi) == 2 and dpi[0] and dpi[1]:
-                xdpi, ydpi = float(dpi[0]), float(dpi[1])
-                resolution = xdpi
-                if abs(xdpi - ydpi) > 1:
-                    new_height = max(int(round(page.height * xdpi / ydpi)), 1)
-                    page = page.resize((page.width, new_height))
-            if page.mode not in ("1", "L", "RGB"):
-                page = page.convert("L")
-            pages.append(page)
-    if not pages:
-        raise ValueError("TIFF にページがありません")
-    tmp = pdf_path.with_suffix(".pdf.tmp")
-    pages[0].save(
-        tmp, "PDF", save_all=True, append_images=pages[1:], resolution=resolution
-    )
-    tmp.replace(pdf_path)
-    return len(pages)
+    from PIL import Image
+
+    size = tiff_path.stat().st_size
+    if size > FAX_MAX_TIFF_BYTES:
+        raise FaxConversionLimitError(f"TIFF が大きすぎます（{size} bytes）")
+    # Pillow はこのサービス（FAX 変換）専用の依存のため、上限をプロセス全体で設定してよい。
+    Image.MAX_IMAGE_PIXELS = FAX_MAX_PIXELS
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        try:
+            with Image.open(tiff_path) as im:
+                n_frames = int(getattr(im, "n_frames", 1))
+                if n_frames < 1:
+                    raise FaxConversionLimitError("TIFF にページがありません")
+                if n_frames > FAX_MAX_PAGES:
+                    raise FaxConversionLimitError(f"ページ数が上限を超えています（{n_frames}）")
+                # ヘッダだけでページごとの画素数を検証する（デコードしない）。
+                for i in range(n_frames):
+                    im.seek(i)
+                    if im.width * im.height > FAX_MAX_PIXELS:
+                        raise FaxConversionLimitError("ページの画素数が上限を超えています")
+                im.seek(0)
+                dpi = im.info.get("dpi")
+                if dpi and len(dpi) == 2 and dpi[0] and dpi[1]:
+                    xdpi, ydpi = float(dpi[0]), float(dpi[1])
+                else:
+                    xdpi = ydpi = 200.0
+                fd, tmp_name = tempfile.mkstemp(
+                    dir=pdf_path.parent, prefix=".fax-", suffix=".pdf.tmp"
+                )
+                tmp = Path(tmp_name)
+                try:
+                    with os.fdopen(fd, "wb") as fp:
+                        # save_all で TIFF の各フレームを 1 枚ずつ読み出して書き込む。
+                        im.save(fp, "PDF", save_all=True, dpi=(xdpi, ydpi))
+                    tmp.replace(pdf_path)
+                except BaseException:
+                    tmp.unlink(missing_ok=True)
+                    raise
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+            raise FaxConversionLimitError("ページの画素数が上限を超えています") from exc
+    return n_frames
+
+
+def _free_bytes(path: Path) -> int:
+    return shutil.disk_usage(path).free
 
 
 class FaxService:
@@ -108,11 +159,16 @@ class FaxService:
         *,
         dispatcher: WebhookDispatcher | None = None,
         public_base_url: str = "",
+        secret_box: SecretBox | None = None,
+        free_bytes: Callable[[Path], int] = _free_bytes,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._fax_dir = Path(fax_dir)
         self._dispatcher = dispatcher
         self._base_url = public_base_url.rstrip("/")
+        # pdf_url のダウンロードトークン署名用（None ならトークンなしの URL）。
+        self._box = secret_box
+        self._free_bytes = free_bytes
         self._tasks: set[asyncio.Task] = set()
 
     async def handle(self, event: dict[str, str]) -> None:
@@ -166,10 +222,26 @@ class FaxService:
             tiff_path = candidate
             target = candidate.with_suffix(".pdf")
             try:
-                pages = await asyncio.to_thread(tiff_to_pdf, candidate, target)
-                pdf_path = target
-            except Exception:  # noqa: BLE001 — 壊れた/途中までの TIFF でも記録は残す
-                logger.exception("FAX TIFF → PDF 変換に失敗しました uuid=%s", call_uuid)
+                free = self._free_bytes(self._fax_dir)
+            except OSError:
+                free = 0
+            if free < FAX_MIN_FREE_BYTES:
+                logger.warning(
+                    "FAX 保存先の空き容量が不足しているため PDF 変換をスキップします"
+                    "（空き %d bytes, uuid=%s）",
+                    free,
+                    call_uuid,
+                )
+            else:
+                try:
+                    pages = await asyncio.to_thread(tiff_to_pdf, candidate, target)
+                    pdf_path = target
+                except FaxConversionLimitError as exc:
+                    logger.warning("FAX の PDF 変換を中止しました uuid=%s: %s", call_uuid, exc)
+                    success = False
+                    result_text = f"PDF 変換を中止: {exc}"[:255]
+                except Exception:  # noqa: BLE001 — 壊れた/途中までの TIFF でも記録は残す
+                    logger.exception("FAX TIFF → PDF 変換に失敗しました uuid=%s", call_uuid)
         elif success:
             logger.warning("FAX 受信成功だが TIFF が見つかりません uuid=%s", call_uuid)
 
@@ -205,5 +277,49 @@ class FaxService:
             "success": fax.success,
             "result_text": fax.result_text,
             "received_at": utc_iso(fax.received_at),
-            "pdf_url": f"{self._base_url}/api/faxes/{fax.id}/pdf" if fax.pdf_path else None,
+            "pdf_url": self.pdf_url(fax) if fax.pdf_path else None,
         }
+
+    def pdf_url(self, fax: Fax) -> str:
+        url = f"{self._base_url}/api/faxes/{fax.id}/pdf"
+        if self._box is None:
+            return url
+        return f"{url}?{urlencode({'token': issue_pdf_token(self._box, fax.id)})}"
+
+    async def cleanup(self, retention_days: int, *, now: datetime | None = None) -> int:
+        """retention_days より古い FAX（行 + fax_dir 内の TIFF/PDF）を削除し、件数を返す。"""
+        if retention_days <= 0:
+            return 0
+        cutoff = (now or datetime.now(UTC).replace(tzinfo=None)) - timedelta(days=retention_days)
+        async with self._sessionmaker() as session:
+            old = (await session.scalars(select(Fax).where(Fax.received_at < cutoff))).all()
+            files = [p for f in old for p in (f.pdf_path, f.tiff_path) if p]
+            for f in old:
+                await session.delete(f)
+            await session.commit()
+        for stored in files:
+            try:
+                path = resolve_inside(self._fax_dir, Path(stored))
+            except (ValueError, OSError):
+                continue
+            path.unlink(missing_ok=True)
+        if old:
+            logger.info("保持期間（%d 日）を過ぎた FAX を %d 件削除しました", retention_days, len(old))
+        return len(old)
+
+
+def issue_pdf_token(box: SecretBox, fax_id: int) -> str:
+    """FAX PDF のダウンロードトークン（Fernet。発行時刻を内包し 24 時間で失効）。"""
+    return box.encrypt(json.dumps({"p": _PDF_TOKEN_PURPOSE, "fax_id": fax_id}))
+
+
+def verify_pdf_token(box: SecretBox, token: str, fax_id: int) -> bool:
+    try:
+        data = json.loads(box.decrypt(token, ttl=PDF_TOKEN_TTL_SECONDS))
+    except Exception:  # noqa: BLE001 — 改ざん・期限切れ・形式不正はすべて無効
+        return False
+    return (
+        isinstance(data, dict)
+        and data.get("p") == _PDF_TOKEN_PURPOSE
+        and data.get("fax_id") == fax_id
+    )

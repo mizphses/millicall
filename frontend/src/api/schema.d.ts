@@ -4818,7 +4818,9 @@ export interface operations {
     };
     download_fax_pdf_api_faxes__fax_id__pdf_get: {
         parameters: {
-            query?: never;
+            query?: {
+                token?: string | null;
+            };
             header?: never;
             path: {
                 fax_id: number;

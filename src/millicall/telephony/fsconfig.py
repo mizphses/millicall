@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -6,6 +7,8 @@ from xml.etree import ElementTree
 
 from jinja2 import Environment, PackageLoader
 from markupsafe import Markup
+
+logger = logging.getLogger("millicall.telephony.fsconfig")
 
 # 生成する FreeSWITCH 設定の権限（SIP/ESL パスワードを平文で含むため所有者のみ）。
 _CONFIG_FILE_MODE = 0o600
@@ -103,6 +106,17 @@ class TrunkConfig:
     fax_route_number: str | None = None
     # 検知中に案内音声を再生する（answer → 検知 → playback → transfer）。
     fax_detect_announce: bool = False
+
+
+def _safe_abs_path(path: Path | str) -> str | None:
+    """dialplan に埋め込める絶対パス文字列を返す（使えない文字を含むなら None）。"""
+    try:
+        resolved = str(Path(path).resolve())
+    except (OSError, RuntimeError):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_./-]+", resolved):
+        return None
+    return resolved
 
 
 # FAX 受信番号・切替先番号の形式（統一番号プランと同じ 2〜6 桁）。
@@ -256,14 +270,15 @@ class FreeswitchConfigWriter:
         # FAX 自動検知中の案内音声（issue #123 が core 起動時に配置する同梱 wav）の絶対パス。
         # FreeSWITCH の playback は相対パスに sound_prefix を前置するため絶対パスで渡す。
         fax_announce_path: Path | str = Path("data/freeswitch/tts/builtin/fax_receive_notice.wav"),
+        # 1 回の FAX 受信の上限秒数（sched_hangup で強制切断する）。
+        fax_max_duration_sec: int = 1800,
     ) -> None:
         self.output_dir = Path(output_dir)
-        resolved_fax_dir = str(Path(fax_dir).resolve())
-        # dialplan の data 属性に埋め込むため、空白・クォート・変数展開記号を含むパスは拒否する。
-        if not re.fullmatch(r"[A-Za-z0-9_./-]+", resolved_fax_dir):
-            raise ValueError(
-                f"FAX 保存先パスに使用できない文字が含まれています: {resolved_fax_dir!r}"
-            )
+        # dialplan の data 属性に埋め込むため、空白・クォート・変数展開記号を含むパスは使わない。
+        # 起動を止めないよう例外にはせず、描画時に FAX extension / 案内を省いて ERROR ログを出す。
+        resolved_fax_dir = _safe_abs_path(fax_dir)
+        if fax_max_duration_sec < 60:
+            fax_max_duration_sec = 60
         safe_prefixes: list[str] = international_allow_prefixes or []
         # 多層防御: __init__ 時点でプレフィックスを検証し、不正値を即座に拒否する
         # （service.py でも検証済みだが、このクラスは公開 API のため直接呼び出し時も保護する）
@@ -285,11 +300,7 @@ class FreeswitchConfigWriter:
             internal_bind_ip if internal_bind_ip is not None else sip_bind_ip
         )
         effective_internal_domain = internal_domain if internal_domain is not None else sip_domain
-        resolved_announce = str(Path(fax_announce_path).resolve())
-        if not re.fullmatch(r"[A-Za-z0-9_./-]+", resolved_announce):
-            raise ValueError(
-                f"FAX 案内音声のパスに使用できない文字が含まれています: {resolved_announce!r}"
-            )
+        resolved_announce = _safe_abs_path(fax_announce_path)
         self._base = {
             "sip_domain": sip_domain,
             "internal_bind_ip": effective_internal_bind_ip,
@@ -310,6 +321,7 @@ class FreeswitchConfigWriter:
             "sip_reject_anonymous": sip_reject_anonymous,
             "fax_dir": resolved_fax_dir,
             "fax_announce_path": resolved_announce,
+            "fax_max_duration_sec": int(fax_max_duration_sec),
         }
         self._env = Environment(
             loader=PackageLoader("millicall.telephony", "templates"),
@@ -427,6 +439,11 @@ class FreeswitchConfigWriter:
         ai_agents = ai_agents or []
         workflows = workflows or []
         fax_receivers = fax_receivers or []
+        if fax_receivers and self._base["fax_dir"] is None:
+            logger.error(
+                "FAX 保存先パスに使用できない文字が含まれるため FAX 受信番号を設定から除外します"
+            )
+            fax_receivers = []
         for trunk in trunks:
             if not _SAFE_TRUNK_NAME_RE.fullmatch(trunk.name):
                 raise ValueError("invalid stored trunk name")
@@ -447,11 +464,15 @@ class FreeswitchConfigWriter:
                 and trunk.inbound_extension not in fax_numbers
             ):
                 timeout = min(max(int(trunk.fax_detect_timeout_sec), 5), 120)
-                fax_detect[trunk.name] = (
-                    trunk.fax_route_number,
-                    timeout,
-                    bool(trunk.fax_detect_announce),
-                )
+                announce = bool(trunk.fax_detect_announce)
+                if announce and self._base["fax_announce_path"] is None:
+                    logger.error(
+                        "FAX 案内音声のパスに使用できない文字が含まれるため案内を省略します"
+                        "（trunk=%s）",
+                        trunk.name,
+                    )
+                    announce = False
+                fax_detect[trunk.name] = (trunk.fax_route_number, timeout, announce)
         source_ports = allocate_source_ports(
             trunks,
             external_sip_port=self._base["external_sip_port"],

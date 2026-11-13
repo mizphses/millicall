@@ -113,6 +113,15 @@ export function validateWebhookForm(
   return errors;
 }
 
+/** 保存すると署名なしで送信される状態か（シークレット未設定の警告表示に使う）。 */
+export function willSendUnsigned(
+  form: Pick<WebhookFormValues, "secret" | "clear_secret">,
+  original: Pick<WebhookRead, "has_secret"> | null,
+): boolean {
+  if (form.clear_secret) return true;
+  return form.secret === "" && !original?.has_secret;
+}
+
 /** 配信ログの結果表示。 */
 export function deliveryStatus(d: Pick<WebhookDeliveryRead, "success" | "status_code" | "error">): {
   label: string;

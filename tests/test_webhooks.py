@@ -393,3 +393,13 @@ async def test_test_endpoint_failure_is_single_attempt(auth_client, app):
 async def test_deliveries_404_for_missing_webhook(auth_client):
     assert (await auth_client.get("/api/webhooks/999/deliveries")).status_code == 404
     assert (await auth_client.post("/api/webhooks/999/test")).status_code == 404
+
+
+@pytest.mark.parametrize(("status", "expected"), [(400, 1), (401, 1), (404, 1), (408, 3), (429, 3)])
+async def test_4xx_is_not_retried_except_408_429(app, status, expected):
+    await _add_hook(app, events=["call.ended"])
+    rec = _Recorder([status])
+    d = _dispatcher(app, rec)
+    await d.handle(_hangup("u-9", "u-9"))
+    await d.drain()
+    assert len(rec.requests) == expected

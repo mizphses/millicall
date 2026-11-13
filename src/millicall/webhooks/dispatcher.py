@@ -292,6 +292,9 @@ class WebhookDispatcher:
             await self._record(webhook_id, delivery_id, event_name, attempt, status_code, success, error)
             if success:
                 return DeliveryResult(delivery_id, True, status_code, None, attempt)
+            # 4xx（408/429 を除く）は受信側が拒否した結果なので再送しても変わらない。
+            if status_code is not None and 400 <= status_code < 500 and status_code not in (408, 429):
+                break
             if attempt < max_attempts:
                 delay = self._retry_delays[min(attempt - 1, len(self._retry_delays) - 1)]
                 await asyncio.sleep(delay)

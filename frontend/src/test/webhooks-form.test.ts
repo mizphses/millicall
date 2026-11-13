@@ -15,6 +15,7 @@ import {
   toggleEvent,
   validateWebhookForm,
   webhookEventLabel,
+  willSendUnsigned,
   type WebhookRead,
 } from "../pages/webhooks/formPayload";
 
@@ -92,6 +93,16 @@ describe("webhook フォーム状態", () => {
     );
     expect(webhookEventLabel("webhook.test")).toBe("テスト送信");
     expect(webhookEventLabel("fax.received")).toBe("FAX 受信");
+  });
+});
+
+describe("署名なし送信の警告", () => {
+  it("新規でシークレット空、または削除指定なら警告する", () => {
+    expect(willSendUnsigned({ secret: "", clear_secret: false }, null)).toBe(true);
+    expect(willSendUnsigned({ secret: "k", clear_secret: false }, null)).toBe(false);
+    expect(willSendUnsigned({ secret: "", clear_secret: false }, { has_secret: true })).toBe(false);
+    expect(willSendUnsigned({ secret: "", clear_secret: true }, { has_secret: true })).toBe(true);
+    expect(willSendUnsigned({ secret: "", clear_secret: false }, { has_secret: false })).toBe(true);
   });
 });
 
