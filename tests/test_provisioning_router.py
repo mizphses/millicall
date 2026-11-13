@@ -1,6 +1,8 @@
 """LAN 制限・トークンゲート・known-device ゲートの結合テスト。
 
 ASGITransport の client パラメータで request.client.host を制御する。
+provision_mode（standard / strict）ごとのゲートの真理値表は
+test_provisioning_gate.py にまとめている。
 """
 
 from __future__ import annotations
@@ -8,6 +10,11 @@ from __future__ import annotations
 from httpx import ASGITransport, AsyncClient
 
 from millicall.models import Device, Extension, NetworkConfig
+from millicall.provisioning.service import hash_provision_token
+
+# 厳格モードのテスト用トークン（パス形式トークンの許容形式 16〜128 文字に合わせる）
+_TOKEN = "validtoken-0123456789abcdef"
+_WRONG = "wrongtoken-0123456789abcdef"
 
 # ---------------------------------------------------------------------------
 # ヘルパー: NetworkConfig・Device・Extension をDBに挿入する
@@ -58,8 +65,12 @@ async def _insert_device(
     provisioned: bool = True,
     provision_token: str | None = None,
     ip_address: str | None = "10.0.0.50",
+    provision_mode: str = "standard",
 ) -> int:
-    """テスト用 Device を DB に挿入し、その id を返す。"""
+    """テスト用 Device を DB に挿入し、その id を返す。
+
+    provision_token は平文で受け取り、DB にはハッシュを保存する（本番と同じ）。
+    """
     sm = app.state.sessionmaker
     async with sm() as session:
         device = Device(
@@ -69,7 +80,10 @@ async def _insert_device(
             provisioned=provisioned,
             active=True,
             extension_id=extension_id,
-            provision_token=provision_token,
+            provision_token=(
+                hash_provision_token(provision_token) if provision_token is not None else None
+            ),
+            provision_mode=provision_mode,
         )
         session.add(device)
         await session.commit()
@@ -189,7 +203,7 @@ async def test_panasonic_device_no_extension(app) -> None:
 
 
 async def test_panasonic_device_with_token_missing(app) -> None:
-    """provision_token 設定済みでトークンなしのリクエストは 404 を返す。"""
+    """厳格モードの端末は通常 URL（トークンなし）では 404 を返す。"""
     await _insert_network_config(app)
     ext_id = await _insert_extension(app)
     await _insert_device(
@@ -197,7 +211,8 @@ async def test_panasonic_device_with_token_missing(app) -> None:
         mac_address="AA:BB:CC:DD:EE:FF",
         extension_id=ext_id,
         provisioned=True,
-        provision_token="mytoken123",
+        provision_token=_TOKEN,
+        provision_mode="strict",
     )
 
     async with _make_client(app) as c:
@@ -207,7 +222,7 @@ async def test_panasonic_device_with_token_missing(app) -> None:
 
 
 async def test_panasonic_device_with_token_wrong(app) -> None:
-    """provision_token 設定済みで間違ったトークンは 404 を返す。"""
+    """厳格モードの端末で間違ったトークンの URL は 404 を返す。"""
     await _insert_network_config(app)
     ext_id = await _insert_extension(app)
     await _insert_device(
@@ -215,17 +230,18 @@ async def test_panasonic_device_with_token_wrong(app) -> None:
         mac_address="AA:BB:CC:DD:EE:FF",
         extension_id=ext_id,
         provisioned=True,
-        provision_token="correcttoken",
+        provision_token=_TOKEN,
+        provision_mode="strict",
     )
 
     async with _make_client(app) as c:
-        resp = await c.get("/provisioning/Panasonic/ConfigAABBCCDDEEFF.cfg?token=wrongtoken")
+        resp = await c.get(f"/provisioning/t/{_WRONG}/Panasonic/ConfigAABBCCDDEEFF.cfg")
 
     assert resp.status_code == 404
 
 
 async def test_panasonic_device_with_token_correct(app) -> None:
-    """正しいトークンで 200 を返し、トークンが消費される（token=None になり以降はトークン不要）。"""
+    """正しいトークン付き URL で 200 を返し、トークンは消費されない（以後も同じ URL で取得）。"""
     await _insert_network_config(app)
     ext_id = await _insert_extension(app)
     await _insert_device(
@@ -233,19 +249,19 @@ async def test_panasonic_device_with_token_correct(app) -> None:
         mac_address="AA:BB:CC:DD:EE:FF",
         extension_id=ext_id,
         provisioned=True,
-        provision_token="validtoken123",
+        provision_token=_TOKEN,
+        provision_mode="strict",
     )
 
     async with _make_client(app) as c:
-        # 正しいトークンで 200
-        resp1 = await c.get("/provisioning/Panasonic/ConfigAABBCCDDEEFF.cfg?token=validtoken123")
+        resp1 = await c.get(f"/provisioning/t/{_TOKEN}/Panasonic/ConfigAABBCCDDEEFF.cfg")
         assert resp1.status_code == 200
-
-        # トークン消費後: provision_token=None なのでトークンなしでもアクセス可能
-        resp2 = await c.get("/provisioning/Panasonic/ConfigAABBCCDDEEFF.cfg")
+        resp2 = await c.get(f"/provisioning/t/{_TOKEN}/Panasonic/ConfigAABBCCDDEEFF.cfg")
         assert resp2.status_code == 200
+        # 通常 URL は厳格モードでは引き続き 404
+        resp3 = await c.get("/provisioning/Panasonic/ConfigAABBCCDDEEFF.cfg")
+        assert resp3.status_code == 404
 
-    # DB の provision_token が None になっていることを確認
     sm = app.state.sessionmaker
     async with sm() as session:
         from sqlalchemy import select
@@ -254,7 +270,7 @@ async def test_panasonic_device_with_token_correct(app) -> None:
             select(Device).where(Device.mac_address == "AA:BB:CC:DD:EE:FF")
         )
         assert device is not None
-        assert device.provision_token is None
+        assert device.provision_token == hash_provision_token(_TOKEN)
 
 
 async def test_panasonic_device_no_token_required(app) -> None:
@@ -352,8 +368,8 @@ async def test_yealink_device_config_no_token(app) -> None:
     assert "3001" in resp.text
 
 
-async def test_yealink_device_token_consumed(app) -> None:
-    """Yealink デバイストークンは 1 回使用後に消費される（以降はトークン不要）。"""
+async def test_yealink_device_token_not_consumed(app) -> None:
+    """Yealink 厳格モードはトークン付き URL で何度でも取得でき、トークンは残る。"""
     await _insert_network_config(app)
     ext_id = await _insert_extension(app, number="3002")
     await _insert_device(
@@ -361,19 +377,17 @@ async def test_yealink_device_token_consumed(app) -> None:
         mac_address="11:22:33:44:55:77",
         extension_id=ext_id,
         provisioned=True,
-        provision_token="ylnktoken",
+        provision_token=_TOKEN,
+        provision_mode="strict",
     )
 
     async with _make_client(app) as c:
-        # 正しいトークンで 200
-        resp1 = await c.get("/provisioning/Yealink/112233445577.cfg?token=ylnktoken")
+        resp1 = await c.get(f"/provisioning/t/{_TOKEN}/Yealink/112233445577.cfg")
         assert resp1.status_code == 200
-
-        # トークン消費後: provision_token=None なのでトークンなしでもアクセス可能
-        resp2 = await c.get("/provisioning/Yealink/112233445577.cfg")
+        resp2 = await c.get(f"/provisioning/t/{_TOKEN}/Yealink/112233445577.cfg")
         assert resp2.status_code == 200
+        assert (await c.get("/provisioning/Yealink/112233445577.cfg")).status_code == 404
 
-    # DB の provision_token が None になっていることを確認
     sm = app.state.sessionmaker
     async with sm() as session:
         from sqlalchemy import select
@@ -382,7 +396,7 @@ async def test_yealink_device_token_consumed(app) -> None:
             select(Device).where(Device.mac_address == "11:22:33:44:55:77")
         )
         assert device is not None
-        assert device.provision_token is None
+        assert device.provision_token == hash_provision_token(_TOKEN)
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +517,7 @@ async def test_root_panasonic_device_config_unknown_mac(app) -> None:
 
 
 async def test_root_panasonic_device_config_token_wrong(app) -> None:
-    """provision_token 設定済みで間違ったトークンの直下 Config{mac}.cfg は 404 を返す。"""
+    """厳格モード端末の直下 Config{mac}.cfg は、間違ったトークン付き URL で 404 を返す。"""
     await _insert_network_config(app)
     ext_id = await _insert_extension(app)
     await _insert_device(
@@ -511,13 +525,18 @@ async def test_root_panasonic_device_config_token_wrong(app) -> None:
         mac_address="AA:BB:CC:DD:EE:FF",
         extension_id=ext_id,
         provisioned=True,
-        provision_token="correcttoken",
+        provision_token=_TOKEN,
+        provision_mode="strict",
     )
 
     async with _make_client(app) as c:
-        resp = await c.get("/provisioning/ConfigAABBCCDDEEFF.cfg?token=wrongtoken")
-
-    assert resp.status_code == 404
+        resp = await c.get(f"/provisioning/t/{_WRONG}/ConfigAABBCCDDEEFF.cfg")
+        assert resp.status_code == 404
+        # クエリのトークンは受け付けない（アクセスログに残るため）
+        resp_q = await c.get(f"/provisioning/ConfigAABBCCDDEEFF.cfg?token={_TOKEN}")
+        assert resp_q.status_code == 404
+        ok = await c.get(f"/provisioning/t/{_TOKEN}/ConfigAABBCCDDEEFF.cfg")
+        assert ok.status_code == 200
 
 
 async def test_root_yealink_device_config_no_token(app) -> None:
@@ -695,9 +714,12 @@ async def test_phonebook_lan_blocked(app) -> None:
 
 
 async def test_other_lan_device_cannot_fetch_sip_credentials(app):
+    """正しいトークンを知っていても、端末の IP 以外からは端末固有 cfg を取得できない。"""
     await _insert_network_config(app)
     ext_id = await _insert_extension(app)
-    device_id = await _insert_device(app, extension_id=ext_id, provision_token="one-use-token")
+    device_id = await _insert_device(
+        app, extension_id=ext_id, provision_token=_TOKEN, provision_mode="strict"
+    )
     async with _make_client(app, client_ip="10.0.0.51") as client:
         for route in (
             "/Yealink/AABBCCDDEEFF.cfg",
@@ -705,11 +727,14 @@ async def test_other_lan_device_cannot_fetch_sip_credentials(app):
             "/AABBCCDDEEFF.cfg",
             "/ConfigAABBCCDDEEFF.cfg",
         ):
-            response = await client.get("/provisioning" + route + "?token=one-use-token")
-            assert response.status_code == 404
-            assert "test_sip_pass" not in response.text
+            for prefix in ("/provisioning", f"/provisioning/t/{_TOKEN}"):
+                response = await client.get(prefix + route)
+                assert response.status_code == 404
+                assert "test_sip_pass" not in response.text
     async with app.state.sessionmaker() as session:
-        assert (await session.get(Device, device_id)).provision_token == "one-use-token"
+        device = await session.get(Device, device_id)
+        assert device.provision_token == hash_provision_token(_TOKEN)
+        assert device.last_config_fetch_at is None
 
 
 async def test_disabled_extension_credentials_not_provisioned(app):

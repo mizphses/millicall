@@ -47,6 +47,22 @@ def _provisioning_base(network_config: NetworkConfig, settings: Settings) -> str
     return f"http://{network_config.lan_ip}{http_port_suffix(settings.http_port)}"
 
 
+def provisioning_root_url(
+    network_config: NetworkConfig, settings: Settings, token: str | None = None
+) -> str:
+    """プロビジョニングファイル群のルート URL（``.../provisioning``）を返す。
+
+    厳格モード（issue #85）のトークン付き URL で取得された場合は
+    ``.../provisioning/t/<token>`` を返す。boot / common が電話機に設定する
+    取得先 URL もトークン付きのままにし、次回以降の取得でトークンが落ちないようにする。
+    token はサーバーが発行した URL セーフ文字列（router 側で照合済み）のみが渡る。
+    """
+    base = _provisioning_base(network_config, settings)
+    if token is None:
+        return f"{base}/provisioning"
+    return f"{base}/provisioning/t/{token}"
+
+
 # ---------------------------------------------------------------------------
 # Panasonic KX-HDV
 # ---------------------------------------------------------------------------
@@ -56,12 +72,14 @@ def render_panasonic_common(
     *,
     network_config: NetworkConfig,
     settings: Settings,
+    token: str | None = None,
 ) -> str:
     """ConfigCommon.cfg を生成する（全 Panasonic 機種共通設定）。
 
-    行区切りは CRLF（Panasonic 標準）。
+    行区切りは CRLF（Panasonic 標準）。token 指定時は取得先 URL をトークン付きにする。
     """
     base = _provisioning_base(network_config, settings)
+    root = provisioning_root_url(network_config, settings, token)
     lan_ip = network_config.lan_ip
     lines = [
         "# Panasonic SIP Phone Standard Format File #",
@@ -70,10 +88,12 @@ def render_panasonic_common(
         "# Millicall PBX - Common Configuration",
         "",
         "# Provisioning",
-        f'CFG_STANDARD_FILE_PATH="{base}/provisioning/Panasonic/Config{{MAC}}.cfg"',
-        f'CFG_MASTER_FILE_PATH="{base}/provisioning/Panasonic/ConfigCommon.cfg"',
+        f'CFG_STANDARD_FILE_PATH="{root}/Panasonic/Config{{MAC}}.cfg"',
+        f'CFG_MASTER_FILE_PATH="{root}/Panasonic/ConfigCommon.cfg"',
         'CFG_RESYNC_TIME="02:00"',
-        'CFG_RESYNC_FROM_SIP="Y"',
+        # SIP NOTIFY で再取得する Event ヘッダ値（Y/N ではなく文字列）。FreeSWITCH の
+        # check_sync が送る "check-sync" に合わせる。実機要確認（RUNBOOK 参照）。
+        'CFG_RESYNC_FROM_SIP="check-sync"',
         "",
         "# NTP",
         f'NTP_ADDR="{lan_ip}"',
@@ -179,6 +199,7 @@ def render_panasonic_model_file(
     *,
     network_config: NetworkConfig,
     settings: Settings,
+    token: str | None = None,
 ) -> str:
     """{MODEL}.cfg（プレプロビジョニング入口ファイル）を生成する。
 
@@ -188,9 +209,9 @@ def render_panasonic_model_file(
     そこから実設定（Config{MAC}.cfg・ConfigCommon.cfg）へ連鎖する。
 
     ``{MAC}`` は電話機側が置換するマクロのため、リテラル文字列としてそのまま出力する
-    （Python 側では展開しない）。行区切りは LF。
+    （Python 側では展開しない）。token 指定時は取得先 URL をトークン付きにする。
     """
-    base = _provisioning_base(network_config, settings)
+    root = provisioning_root_url(network_config, settings, token)
     lines = [
         # Panasonic は設定ファイル先頭にこのマジック行が必須。無いとフォーマット不正で
         # ファイル全体を破棄し、CFG_*_FILE_PATH も読まれず実設定へ連鎖しない（実機で発覚）。
@@ -198,8 +219,8 @@ def render_panasonic_model_file(
         "# DO NOT CHANGE THIS LINE!",
         "",
         "# Millicall PBX - Panasonic pre-provisioning (model entry)",
-        f'CFG_STANDARD_FILE_PATH="{base}/provisioning/Panasonic/Config{{MAC}}.cfg"',
-        f'CFG_MASTER_FILE_PATH="{base}/provisioning/Panasonic/ConfigCommon.cfg"',
+        f'CFG_STANDARD_FILE_PATH="{root}/Panasonic/Config{{MAC}}.cfg"',
+        f'CFG_MASTER_FILE_PATH="{root}/Panasonic/ConfigCommon.cfg"',
     ]
     # 他の Panasonic ファイルと同じく CRLF 区切り。
     return "\r\n".join(lines) + "\r\n"
@@ -214,17 +235,18 @@ def render_yealink_boot(
     *,
     network_config: NetworkConfig,
     settings: Settings,
+    token: str | None = None,
 ) -> str:
     """y000000000000.boot を生成する（全 Yealink 機種が起動時に取得するブートファイル）。
 
-    行区切りは LF。
+    行区切りは LF。token 指定時は include 先 URL をトークン付きにする。
     """
-    base = _provisioning_base(network_config, settings)
+    root = provisioning_root_url(network_config, settings, token)
     lines = [
         "#!version:1.0.0.1",
         "",
-        f"include:config <{base}/provisioning/Yealink/common.cfg>",
-        f"include:config <{base}/provisioning/Yealink/$MAC.cfg>",
+        f"include:config <{root}/Yealink/common.cfg>",
+        f"include:config <{root}/Yealink/$MAC.cfg>",
         "",
         "overwrite_mode = 1",
         "specific_model.excluded_mode = 0",
@@ -236,12 +258,15 @@ def render_yealink_common(
     *,
     network_config: NetworkConfig,
     settings: Settings,
+    token: str | None = None,
 ) -> str:
     """common.cfg を生成する（全 Yealink 機種共通設定）。
 
-    行区切りは LF。
+    行区切りは LF。token 指定時（厳格モード）は取得先 URL をトークン付きにし、
+    DHCP option による取得先の上書きを止める。
     """
     base = _provisioning_base(network_config, settings)
+    root = provisioning_root_url(network_config, settings, token)
     lan_ip = network_config.lan_ip
     lines = [
         "#!version:1.0.0.1",
@@ -249,11 +274,27 @@ def render_yealink_common(
         "## Millicall PBX - Yealink Common Configuration",
         "",
         "## Auto Provisioning",
-        f"static.auto_provision.server.url = {base}/provisioning/Yealink",
+        f"static.auto_provision.server.url = {root}/Yealink",
         "static.auto_provision.power_on = 1",
         "static.auto_provision.repeat.enable = 1",
         "static.auto_provision.repeat.minutes = 1440",
-        "",
+    ]
+    if token is not None:
+        # 厳格モード: DHCP option 66 の（トークンなし）URL が手入力のトークン付き URL より
+        # 優先されると端末固有 cfg が 404 になるため、DHCP option を使わせない。実機要確認。
+        lines.append("static.auto_provision.dhcp_option.enable = 0")
+    lines.append("")
+    if lan_ip:
+        # resync（Action URI ``/servlet?key=AutoP``）を PBX からのみ受け付けさせる。
+        # 資料上、limit_ip に無い送信元からの Action URI は拒否される（または画面で許可を
+        # 求められる）。PBX の LAN IP が取れない場合は出力しない。実機要確認。
+        lines += [
+            "## Action URI (remote resync from PBX)",
+            "features.action_uri.enable = 1",
+            f"features.action_uri_limit_ip = {lan_ip}",
+            "",
+        ]
+    lines += [
         "## NTP / Timezone (Asia/Tokyo, +9)",
         f"local_time.ntp_server1 = {lan_ip}",
         "local_time.ntp_server2 = ntp.nict.jp",
