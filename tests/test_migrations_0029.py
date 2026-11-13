@@ -27,7 +27,7 @@ def _tables(con) -> set[str]:
 
 def test_migration_0029_existing_trunks_get_defaults(tmp_path):
     cfg, db_path = _cfg(tmp_path)
-    upgrade(cfg, "0029-1")
+    upgrade(cfg, "0028")
     con = sqlite3.connect(db_path)
     con.execute(
         "INSERT INTO trunks (name, display_name, host, username) VALUES ('t', 'T', 'h', 'u')"
@@ -48,7 +48,7 @@ def test_migration_0029_existing_trunks_get_defaults(tmp_path):
 def test_migration_0029_downgrade_removes_tables_and_columns(tmp_path):
     cfg, db_path = _cfg(tmp_path)
     upgrade(cfg, "0029")
-    downgrade(cfg, "0029-1")
+    downgrade(cfg, "0028")
     con = sqlite3.connect(db_path)
     cols = {row[1] for row in con.execute("PRAGMA table_info(trunks)")}
     tables = _tables(con)
