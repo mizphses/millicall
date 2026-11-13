@@ -37,6 +37,7 @@ from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegis
 from millicall.media.tickets import MediaStreamTickets
 from millicall.network.client import NetdClient
 from millicall.network.router import router as network_router
+from millicall.process_lock import acquire_single_process_lock
 from millicall.providers.router import router as providers_router
 from millicall.provisioning.devices_router import router as devices_router
 from millicall.provisioning.router import router as provisioning_router
@@ -137,7 +138,20 @@ async def _reapply_network_config_on_startup(app: FastAPI, settings: Settings) -
 async def lifespan(app: FastAPI):
     settings: Settings = app.state.settings
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    # 認証状態は DB 共有だが、ESL 購読・メディア WS・MCP セッション等はプロセスローカルのため
+    # core は data_dir あたり 1 プロセスのみ対応（issue #86）。2 つ目の起動は拒否する。
+    # 起動途中の失敗や停止処理の例外でもロックが残らないよう、取得直後から必ず解放する。
+    process_lock = acquire_single_process_lock(settings.data_dir)
+    try:
+        async with _core_lifespan(app, settings):
+            yield
+    finally:
+        process_lock.release()
 
+
+@asynccontextmanager
+async def _core_lifespan(app: FastAPI, settings: Settings):
+    """core の起動〜停止本体（単一プロセスロックは呼び出し側 lifespan が保持する）。"""
     # alembic の fileConfig(disable_existing_loggers=True) によって millicall.* ロガーが
     # 無効化されることがある。upgrade_to_head 実行前に ERROR レベルを明示的に保証する。
     # basicConfig は呼ばず、既存のハンドラ（RichHandler 等）を破壊しない。

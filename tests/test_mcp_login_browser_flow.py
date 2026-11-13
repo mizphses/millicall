@@ -9,6 +9,7 @@
 JavaScript なしに本文だけでエラーと再試行導線を表示することを確認する。
 """
 
+import hashlib
 import html
 import re
 import urllib.parse
@@ -20,7 +21,7 @@ from sqlalchemy import func, select
 
 from millicall.auth.csrf import MCP_LOGIN_CSRF_COOKIE
 from millicall.main import create_app
-from millicall.models import LoginAttempt
+from millicall.models import LoginAttempt, McpOAuthCode
 from tests.conftest import CsrfAwareClient
 from tests.test_mcp_oauth import (
     _form,
@@ -83,8 +84,15 @@ def _login_csrf_set_cookie(r) -> str | None:
     return None
 
 
-def _no_codes(app):
-    return not app.state.mcp_oauth_provider._auth_codes
+async def _no_codes(app):
+    async with app.state.sessionmaker() as session:
+        return not await session.scalar(select(func.count()).select_from(McpOAuthCode))
+
+
+async def _code_issued(app, code):
+    digest = hashlib.sha256(code.encode()).hexdigest()
+    async with app.state.sessionmaker() as session:
+        return await session.get(McpOAuthCode, digest) is not None
 
 
 async def _failure_count(app, username):
@@ -153,7 +161,7 @@ async def _assert_successful_login(app, client, username, password):
     assert f"{location.scheme}://{location.netloc}{location.path}" == "https://claude.ai/cb"
     qs = urllib.parse.parse_qs(location.query)
     assert qs["state"] == ["st<&>"]
-    assert qs["code"][0] in app.state.mcp_oauth_provider._auth_codes
+    assert await _code_issued(app, qs["code"][0])
     # 認可完了でフォーム用 CSRF Cookie は破棄される。
     assert _login_csrf_set_cookie(r) is not None
     assert client.cookies.get(MCP_LOGIN_CSRF_COOKIE) is None
@@ -191,7 +199,7 @@ async def test_cross_site_post_with_session_cookie_rejected(mcp_app, browser):
         },
     )
     assert r.status_code == 403
-    assert _no_codes(mcp_app)
+    assert await _no_codes(mcp_app)
     assert await _failure_count(mcp_app, "xs1") == 0
 
 
@@ -206,7 +214,7 @@ async def test_cross_site_post_with_session_cookie_and_header_only_rejected(mcp_
         headers={"X-CSRF-Token": browser.cookies.get("millicall_csrf")},
     )
     assert r.status_code == 403
-    assert _no_codes(mcp_app)
+    assert await _no_codes(mcp_app)
 
 
 async def test_cross_site_post_without_any_cookie_rejected(mcp_app, browser):
@@ -226,7 +234,7 @@ async def test_cross_site_post_without_any_cookie_rejected(mcp_app, browser):
         assert r.status_code == 403
         _assert_csp_safe_html(r)
         assert "<form" not in r.text
-    assert _no_codes(mcp_app)
+    assert await _no_codes(mcp_app)
     # 偽造要求はレート制限カウンタにも影響しない（被害者アカウントのロックアウトに使えない）。
     assert await _failure_count(mcp_app, "xs3") == 0
 
@@ -245,7 +253,7 @@ async def test_csrf_missing_or_mismatch_shows_retry_link(mcp_app, browser):
         assert "ログイン画面からやり直してください" in r.text
         href = html.unescape(re.search(r'<a class="retry" href="([^"]*)"', r.text).group(1))
         assert href == "/mcp-login?" + urllib.parse.urlencode({"ticket": ticket})
-    assert _no_codes(mcp_app)
+    assert await _no_codes(mcp_app)
     # 再試行リンクからフォームを取り直せば成功できる（再試行導線）。
     client_id = await _register_client_via_app(mcp_app)
     ticket2 = _ticket(mcp_app, client_id=client_id)
@@ -271,7 +279,7 @@ async def test_login_csrf_with_attacker_form_token_rejected(mcp_app):
         assert victim.cookies.get(MCP_LOGIN_CSRF_COOKIE) != attacker_data["csrf_token"]
         r = await victim.post("/mcp-login/callback", data=attacker_data)
         assert r.status_code == 403
-    assert _no_codes(mcp_app)
+    assert await _no_codes(mcp_app)
 
 
 async def _register_client_via_app(app):
@@ -327,7 +335,7 @@ async def test_totp_mismatch_redisplays_form_with_error(mcp_app, browser):
         assert "認証コードを確認して再度お試しください" in r.text
         assert _CSRF_FIELD_RE.search(r.text).group(1) == data["csrf_token"]
         assert 'name="username" value="tt"' in r.text
-    assert _no_codes(mcp_app)
+    assert await _no_codes(mcp_app)
     ok = await browser.post("/mcp-login/callback", data={**data, "code": pyotp.TOTP(secret).now()})
     assert "code=" in _redirect_location(ok)
 
@@ -361,7 +369,7 @@ async def test_expired_ticket_at_callback(mcp_app, browser, monkeypatch):
     assert "不正または期限切れのログイン要求です" in r.text
     assert "<form" not in r.text
     assert 'class="retry"' not in r.text  # 期限切れ ticket では再試行リンクを出さない
-    assert _no_codes(mcp_app)
+    assert await _no_codes(mcp_app)
     assert await _failure_count(mcp_app, "ex") == 0
 
 
@@ -449,7 +457,7 @@ async def test_cross_site_fetch_metadata_rejected_even_with_matching_tokens(mcp_
         assert r.status_code == 403
         _assert_csp_safe_html(r)
         assert "ログイン画面からやり直してください" in r.text
-    assert _no_codes(mcp_app)
+    assert await _no_codes(mcp_app)
     assert await _failure_count(mcp_app, "fm") == 0
 
 
@@ -461,7 +469,7 @@ async def test_mismatched_origin_rejected_even_with_matching_tokens(mcp_app, bro
         r = await browser.post("/mcp-login/callback", data=data, headers={"Origin": origin})
         assert r.status_code == 403, origin
         _assert_csp_safe_html(r)
-    assert _no_codes(mcp_app)
+    assert await _no_codes(mcp_app)
 
 
 async def test_same_origin_submission_allowed(mcp_app, browser):

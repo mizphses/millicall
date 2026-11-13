@@ -134,6 +134,9 @@ millicallctl update
   適用される。従来ポートを維持したい場合は `MILLICALL_HTTP_PORT=8000` を `.env` に設定する。
 - **TLS フロント / cookie_secure**: Cloudflare Tunnel・Tailscale Serve 経由で公開する場合は
   `MILLICALL_COOKIE_SECURE=true` に。閉域（平文 LAN のみ）は `false` のまま。→ 「デプロイモード」節参照。
+- **MCP / SAML の認証状態が DB 保存になった**（#86）: この版への更新直後の 1 回だけ、
+  claude.ai などの MCP コネクタで「再認証」が必要（旧版のトークンはメモリ上にしか無いため）。
+  以降は core の再起動・更新で再認証は不要。
 - **ネットワーク設定の再適用**: netd 関連（DHCP/NAT/ファイアウォール）の設定を変更した場合は、
   更新後に管理 GUI の `/network` から「適用」を実行する（compose 更新だけでは host 側 nftables/
   dnsmasq は再適用されない）。
@@ -150,6 +153,10 @@ millicallctl version     # 稼働 digest を確認
 タグは immutable（`vX.Y.Z`）を推奨。`latest` は移動するためロールバック先には使わない。
 
 ## 4. バックアップ / リストア
+
+`data/` の DB には MCP OAuth の登録とトークンのハッシュ、SAML の消費済み ID も含まれる。
+ハッシュだけなのでバックアップから有効なトークンは取り出せない。古いバックアップに戻すと、
+それ以降に認可した MCP コネクタは再認証が必要になる。
 
 ```bash
 millicallctl backup      # ~/millicall/backups/millicall-<UTC>.tar.gz (data/ と .env)
@@ -170,7 +177,18 @@ tar xzf backups/millicall-<UTC>.tar.gz
 millicallctl up
 ```
 
-## 5. トラブルシュート
+## 5. 対応プロセス構成
+
+core は **1 つの data_dir につき 1 プロセス**で動かす（同梱の Dockerfile は `uvicorn` を
+`--workers` なしで起動する）。`--workers 2` 以上や、同じ `data/` を共有する 2 つ目の core
+コンテナは非対応。core は起動時に `data/core.lock` を排他ロックし、2 つ目のプロセスは
+「別の millicall core プロセスが同じ data_dir で稼働中です」と出して起動しない。
+認証状態（MCP OAuth・SAML）は DB で共有できるが、ESL イベント購読・音声 WebSocket・
+MCP セッションはプロセス内の状態のため。ロックは data_dir 単位なので、`MILLICALL_DATABASE_URL` で
+別々の data_dir から同じ DB を共有する構成は検出できない（これも非対応）。詳細は [セキュリティモデル](../security-model.md) の
+「認証状態の保存と対応プロセス構成」を参照。
+
+## 6. トラブルシュート
 
 - `millicallctl ps` / `millicallctl logs core` / `millicallctl logs freeswitch`
 - healthcheck: `curl http://127.0.0.1/healthz`（ポート 80）
