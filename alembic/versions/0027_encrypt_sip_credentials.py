@@ -19,7 +19,7 @@ data/ に <db>.compact-pending マーカーを残し、次回起動時の upgrad
 downgrade は鍵で復号して平文列へ戻す（鍵が無ければ失敗）。
 
 Revision ID: 0027
-Revises: 0023
+Revises: 0026
 Create Date: 2026-11-10
 """
 
@@ -32,8 +32,7 @@ from millicall.crypto import SecretBox
 from millicall.db_migrations import MASTER_KEY_ATTR, VACUUM_FLAG_ATTR
 
 revision: str = "0027"
-# NOTE: 0024（別セッション）・0025（#106）・0026（#107）のマージ後に down_revision を "0026" へ付け替えること。
-down_revision: str | None = "0023"
+down_revision: str | None = "0026"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

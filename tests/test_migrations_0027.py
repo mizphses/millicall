@@ -35,9 +35,9 @@ def _cfg(db_path: Path, master_key: str | None = _KEY) -> Config:
     return cfg
 
 
-def _seed_0023(db_path: Path) -> None:
-    """0023 時点の DB を WAL モードで作り、平文の内線/トランクを入れる。"""
-    upgrade(_cfg(db_path, None), "0023")
+def _seed_0026(db_path: Path) -> None:
+    """0026 時点の DB を WAL モードで作り、平文の内線/トランクを入れる。"""
+    upgrade(_cfg(db_path, None), "0026")
     con = sqlite3.connect(db_path)
     con.execute("PRAGMA journal_mode=WAL")
     con.execute(
@@ -72,7 +72,7 @@ def _raw_bytes(db_path: Path) -> bytes:
 
 def test_upgrade_encrypts_existing_rows(tmp_path):
     db = tmp_path / "m.db"
-    _seed_0023(db)
+    _seed_0026(db)
     upgrade(_cfg(db), "0027")
 
     assert "sip_password" not in _cols(db, "extensions")
@@ -92,7 +92,7 @@ def test_upgrade_encrypts_existing_rows(tmp_path):
 
 def test_upgrade_leaves_no_plaintext_in_db_or_wal(tmp_path):
     db = tmp_path / "m.db"
-    _seed_0023(db)
+    _seed_0026(db)
     # 前提確認: 移行前は平文がファイル上に見える（検査方法が有効であること）
     assert _EXT_PW.encode() in _raw_bytes(db)
 
@@ -105,21 +105,21 @@ def test_upgrade_leaves_no_plaintext_in_db_or_wal(tmp_path):
 
 def test_upgrade_without_key_fails_and_keeps_schema(tmp_path):
     db = tmp_path / "m.db"
-    _seed_0023(db)
+    _seed_0026(db)
     with pytest.raises(RuntimeError, match="master_key"):
         upgrade(_cfg(db, None), "0027")
-    # fail-closed: 何も変わっていない（旧列のまま、0023 のまま）
+    # fail-closed: 何も変わっていない（旧列のまま、0026 のまま）
     assert "sip_password" in _cols(db, "extensions")
     assert "sip_password_encrypted" not in _cols(db, "extensions")
     con = sqlite3.connect(db)
-    assert con.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0023"
+    assert con.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0026"
     con.close()
 
 
 def test_upgrade_completes_after_interrupted_run(tmp_path):
     """前回の実行が列追加の直後で中断していても（DDL のみ確定済み）、再実行で完走する。"""
     db = tmp_path / "m.db"
-    _seed_0023(db)
+    _seed_0026(db)
     con = sqlite3.connect(db)
     con.execute("ALTER TABLE extensions ADD COLUMN sip_password_encrypted TEXT")
     con.execute("ALTER TABLE trunks ADD COLUMN password_encrypted TEXT NOT NULL DEFAULT ''")
@@ -142,9 +142,9 @@ def test_upgrade_without_key_on_empty_db_succeeds(tmp_path):
 
 def test_downgrade_restores_plaintext(tmp_path):
     db = tmp_path / "m.db"
-    _seed_0023(db)
+    _seed_0026(db)
     upgrade(_cfg(db), "0027")
-    downgrade(_cfg(db), "0023")
+    downgrade(_cfg(db), "0026")
 
     assert "sip_password" in _cols(db, "extensions")
     assert "sip_password_encrypted" not in _cols(db, "extensions")
@@ -156,17 +156,17 @@ def test_downgrade_restores_plaintext(tmp_path):
 
 def test_downgrade_with_wrong_key_fails(tmp_path):
     db = tmp_path / "m.db"
-    _seed_0023(db)
+    _seed_0026(db)
     upgrade(_cfg(db), "0027")
     with pytest.raises(Exception):  # noqa: B017 — InvalidToken（平文列を空で残さない）
-        downgrade(_cfg(db, "w" * 48), "0023")
+        downgrade(_cfg(db, "w" * 48), "0026")
     assert "sip_password_encrypted" in _cols(db, "extensions")
 
 
 def test_cli_secrets_file_x_argument(tmp_path):
     """alembic CLI 経路: -x secrets_file=... で secrets.json から鍵を読む。"""
     db = tmp_path / "m.db"
-    _seed_0023(db)
+    _seed_0026(db)
     secrets_file = tmp_path / "secrets.json"
     secrets_file.write_text(json.dumps({"master_key": _KEY}), encoding="utf-8")
     cfg = _cfg(db, None)
@@ -204,7 +204,7 @@ def test_busy_checkpoint_is_detected_and_retried_on_next_start(tmp_path, caplog,
     from millicall.db_migrations import compaction_marker
 
     db = tmp_path / "m.db"
-    _seed_0023(db)
+    _seed_0026(db)
     reader = _open_reader(db)
     upgrade(_cfg(db), "0027")
     assert "DB の圧縮（VACUUM / wal_checkpoint）を完了できませんでした" in caplog.text
@@ -226,6 +226,6 @@ def test_compaction_success_leaves_no_marker(tmp_path):
     from millicall.db_migrations import compaction_marker
 
     db = tmp_path / "m.db"
-    _seed_0023(db)
+    _seed_0026(db)
     upgrade(_cfg(db), "0027")
     assert not compaction_marker(db).exists()
