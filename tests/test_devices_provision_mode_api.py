@@ -14,6 +14,7 @@ from sqlalchemy import select
 from millicall.models import AuditLog, Device, Extension, NetworkConfig
 from millicall.provisioning import service
 from millicall.provisioning.service import hash_provision_token
+from tests.sip_helpers import encrypt_for_test
 
 DEVICE_IP = "10.0.0.100"
 
@@ -38,7 +39,11 @@ async def _setup(app, *, provisioned: bool = True, with_nc: bool = True) -> int:
             )
         ext_id = None
         if provisioned:
-            ext = Extension(number="1001", display_name="Alice", sip_password="api_sip_pass_1234")
+            ext = Extension(
+                number="1001",
+                display_name="Alice",
+                sip_password_encrypted=encrypt_for_test("api_sip_pass_1234", app=app),
+            )
             session.add(ext)
             await session.flush()
             ext_id = ext.id

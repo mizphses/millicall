@@ -28,6 +28,7 @@ from millicall.provisioning.router import (
     redact_provisioning_token,
 )
 from millicall.provisioning.service import hash_provision_token
+from tests.sip_helpers import encrypt_for_test
 
 TOKEN = "Tok3n-for-strict-mode_0123456789abcdefABCD"
 OTHER = "0ther-token-for-strict_0123456789abcdefABCD"
@@ -61,7 +62,11 @@ async def _setup(app, *, mode: str, token: str | None) -> int:
                 tailscale_enabled=False,
             )
         )
-        ext = Extension(number="1001", display_name="Alice", sip_password="gate_sip_pass_1234")
+        ext = Extension(
+            number="1001",
+            display_name="Alice",
+            sip_password_encrypted=encrypt_for_test("gate_sip_pass_1234", app=app),
+        )
         session.add(ext)
         await session.flush()
         device = Device(

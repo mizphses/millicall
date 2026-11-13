@@ -727,7 +727,7 @@ async def test_lock_released_when_startup_fails(tmp_path, monkeypatch):
     """ロック取得後〜yield 前の起動失敗でもロックが残らず、同一プロセスで再起動できる。"""
     import millicall.main as main_module
 
-    def broken_upgrade(url):
+    def broken_upgrade(url, master_key=None):
         raise RuntimeError("migration failed")
 
     monkeypatch.setattr(main_module, "upgrade_to_head", broken_upgrade)
