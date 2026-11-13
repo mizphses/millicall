@@ -47,7 +47,7 @@ class RingGroupRead(BaseModel):
 
 class NumberPlanEntryRead(BaseModel):
     number: str
-    kind: str  # extension | ai_agent | workflow | ring_group
+    kind: str  # extension | ai_agent | workflow | ring_group | fax
     id: int
     label: str
     enabled: bool

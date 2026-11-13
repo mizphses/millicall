@@ -160,6 +160,15 @@ class Settings(BaseSettings):
     # デフォルト: RFC1918 プライベート全帯域 + loopback。
     # HGW 192.168.1.1 は 192.168.0.0/16 に内包されているため、このデフォルトで実機着信を維持する。
     # WAN からの任意送信元は ACL default="deny" により FreeSWITCH レイヤでも拒否される（nftables に次ぐ第二層）。
+    # 1 回の FAX 受信の上限秒数（dialplan の sched_hangup。既定 30 分）。
+    fax_max_duration_sec: int = 1800
+    # 受信 FAX の保持日数。0 = 削除しない。1 以上なら日次で古い FAX（行 + TIFF/PDF）を削除する。
+    fax_retention_days: int = 0
+    # Webhook の送信先として追加で許可する宛先（カンマ/改行区切りの CIDR）。管理画面で編集可。
+    # 空でも RFC1918 の LAN 宛ては許可されるが、docker 既定レンジ 172.16.0.0/12・CGNAT
+    # 100.64.0.0/10 と、非グローバル宛ての内部サービスポート（80/443/2375/2376/8021 等）は
+    # ここに含めたときだけ許可される。自ホスト・loopback は常に拒否（net_guard 参照）。
+    webhook_allowed_cidrs: str = ""
     sip_trusted_cidrs: list[str] = [
         "10.0.0.0/8",
         "172.16.0.0/12",
@@ -232,6 +241,27 @@ class Settings(BaseSettings):
         # FreeSWITCH は相対パスに sound_prefix を前置するため、必ず絶対パスで渡す。
         # 相対パスが渡された場合は cwd（本番: /app）基準で解決する。
         return v.resolve()
+
+    @property
+    def fax_dir(self) -> Path:
+        """受信 FAX（TIFF/PDF）の保存先の絶対パス（data_dir/fax）。
+
+        FreeSWITCH の rxfax にこの絶対パスをそのまま渡すため、FreeSWITCH コンテナにも
+        同一パスで bind mount する（compose の ./data/fax:/app/data/fax）。
+        """
+        return (self.data_dir / "fax").resolve()
+
+    @property
+    def public_base_url(self) -> str:
+        """外部（Webhook 受信側など）から core を指す URL のベース。
+
+        mcp_issuer_url が既定値（http://localhost）以外ならそれを、そうでなければ
+        http://<sip_domain> を使う。末尾スラッシュは除く。
+        """
+        issuer = self.mcp_issuer_url.strip().rstrip("/")
+        if issuer and issuer not in ("http://localhost", "http://127.0.0.1"):
+            return issuer
+        return f"http://{self.sip_domain}{http_port_suffix(self.http_port)}"
 
     @field_validator("media_ws_base_url", mode="after")
     @classmethod

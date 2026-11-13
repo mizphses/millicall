@@ -22,6 +22,8 @@ dependencies = [
     "pyotp>=2.10.0",
     "signxml>=5.1.0",
     "defusedxml>=0.7",
+    "pillow>=11",
+    "ifaddr>=0.2",
 ]
 
 [project.optional-dependencies]

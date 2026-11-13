@@ -28,6 +28,13 @@ class TrunkCreate(BaseModel):
     inbound_cidrs: list[str] = Field(default_factory=list)
     # OPTIONS キープアライブ間隔（秒）。0 = 無効（OPTIONS に応答しない事業者向け）。
     options_ping_seconds: int = Field(default=30, ge=0, le=3600)
+    # FAX 自動検知（CNG）。有効時は fax_route_number（FAX 受信番号）が必須。
+    fax_detect_enabled: bool = False
+    fax_detect_timeout_sec: int = Field(default=20, ge=5, le=120)
+    # CNG 検知時の切替先 FAX 受信番号。null / "" = 未設定。
+    fax_route_number: str | None = Field(default=None, pattern=r"^(\d{2,6})?$")
+    # 検知中に案内音声を再生する（応答してから検知・案内 → 通常の着信先へ）。
+    fax_detect_announce: bool = False
     enabled: bool = True
 
 
@@ -50,6 +57,11 @@ class TrunkUpdate(BaseModel):
     inbound_cidrs: list[str] | None = None
     # None = 変更しない / 0 = OPTIONS キープアライブ無効。
     options_ping_seconds: int | None = Field(default=None, ge=0, le=3600)
+    fax_detect_enabled: bool | None = None
+    fax_detect_timeout_sec: int | None = Field(default=None, ge=5, le=120)
+    # 未指定 = 変更しない / null または "" = 未設定に戻す（model_fields_set で区別）。
+    fax_route_number: str | None = Field(default=None, pattern=r"^(\d{2,6})?$")
+    fax_detect_announce: bool | None = None
     enabled: bool | None = None
 
 
@@ -71,6 +83,10 @@ class TrunkRead(BaseModel):
     inbound_cidrs: list[str]
     # OPTIONS キープアライブ間隔（秒）。0 = 無効。
     options_ping_seconds: int
+    fax_detect_enabled: bool
+    fax_detect_timeout_sec: int
+    fax_route_number: str | None
+    fax_detect_announce: bool
     enabled: bool
     has_password: bool
     # Mutation responses distinguish persistence from live telephony application.
@@ -91,6 +107,10 @@ class TrunkRead(BaseModel):
             trunk_type=t.trunk_type,  # type: ignore[arg-type]
             inbound_cidrs=[c for c in t.inbound_cidrs.split(",") if c],
             options_ping_seconds=t.options_ping_seconds,
+            fax_detect_enabled=t.fax_detect_enabled,
+            fax_detect_timeout_sec=t.fax_detect_timeout_sec,
+            fax_route_number=t.fax_route_number,
+            fax_detect_announce=t.fax_detect_announce,
             enabled=t.enabled,
             has_password=bool(t.password_encrypted),
         )

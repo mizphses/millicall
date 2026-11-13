@@ -30,6 +30,8 @@ const ProvidersPage = lazyRouteComponent(() => import("../pages/ProvidersPage"),
 const AiAgentsPage = lazyRouteComponent(() => import("../pages/AiAgentsPage"), "AiAgentsPage");
 const ContactsPage = lazyRouteComponent(() => import("../pages/ContactsPage"), "ContactsPage");
 const CdrPage = lazyRouteComponent(() => import("../pages/CdrPage"), "CdrPage");
+const FaxesPage = lazyRouteComponent(() => import("../pages/FaxesPage"), "FaxesPage");
+const WebhooksPage = lazyRouteComponent(() => import("../pages/WebhooksPage"), "WebhooksPage");
 const WorkflowsPage = lazyRouteComponent(() => import("../pages/WorkflowsPage"), "WorkflowsPage");
 const WorkflowEditorPage = lazyRouteComponent(
   () => import("../pages/WorkflowEditorPage"),
@@ -148,6 +150,18 @@ const cdrRoute = createRoute({
   component: CdrPage,
 });
 
+const faxesRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: "/faxes",
+  component: FaxesPage,
+});
+
+const webhooksRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: "/webhooks",
+  component: WebhooksPage,
+});
+
 const workflowsRoute = createRoute({
   getParentRoute: () => adminLayoutRoute,
   path: "/workflows",
@@ -234,6 +248,8 @@ const routeTree = rootRoute.addChildren([
       aiAgentsRoute,
       contactsRoute,
       cdrRoute,
+      faxesRoute,
+      webhooksRoute,
       workflowsRoute,
       workflowEditorRoute,
       networkRoute,

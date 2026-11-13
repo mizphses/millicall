@@ -60,6 +60,8 @@ millicall は **フレッツ光電話（NTT HGW）に特化したローカル PB
 | [SSO 設定](sso.md) | SAML SP と SCIM プロビジョニング |
 | [プロバイダ追加](providers.md) | LLM / TTS / STT プロバイダの登録方法 |
 | [ワークフロー作成](workflows.md) | IVR・AI フローの構築 |
+| [FAX 受信](fax.md) | FAX 受信番号・PDF 保存・音声/FAX 併用回線の自動検知 |
+| [Webhook](webhooks.md) | 着信・通話終了・FAX 受信の外部通知と署名検証 |
 | [MCP 利用](mcp.md) | claude.ai カスタムコネクタと 15 ツール |
 | [Tailscale](tailscale.md) | tailnet 接続と内線利用 |
 | [Cloudflare Tunnel 公開](cloudflare.md) | 管理 UI の外部公開 |

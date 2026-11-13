@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -32,12 +34,20 @@ from millicall.crypto import SecretBox
 from millicall.db import create_db_engine
 from millicall.db_migrations import sqlite_path, upgrade_to_head
 from millicall.extensions.router import router as extensions_router
+from millicall.fax.router import pdf_router as fax_pdf_router
+from millicall.fax.router import router as fax_router
+from millicall.fax.service import RXFAX_SUBCLASS, FaxService
 from millicall.mcp_server.ephemeral import EphemeralAgentStore
 from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
 from millicall.media.dtmf import DtmfCollector
 from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
 from millicall.media.tickets import MediaStreamTickets
+from millicall.net_guard import (
+    WEBHOOK_INTERNAL_PORTS,
+    WebhookTargetPolicy,
+    parse_allowed_cidrs,
+)
 from millicall.network.client import NetdClient
 from millicall.network.router import router as network_router
 from millicall.process_lock import acquire_single_process_lock
@@ -60,6 +70,8 @@ from millicall.telephony.service import (
 from millicall.trunks.router import router as trunks_router
 from millicall.tts_cache.router import router as tts_cache_router
 from millicall.users.router import router as users_router
+from millicall.webhooks.dispatcher import WebhookDispatcher
+from millicall.webhooks.router import router as webhooks_router
 from millicall.workflows.errors import WorkflowValidationError
 from millicall.workflows.router import router as workflows_router
 from millicall.workflows.runner import WorkflowRunner
@@ -136,6 +148,26 @@ async def _reapply_network_config_on_startup(app: FastAPI, settings: Settings) -
             "起動時のネットワーク設定再適用に失敗しました（core 起動は継続します）",
             exc_info=True,
         )
+
+
+def _webhook_internal_targets(
+    settings: Settings,
+) -> tuple[frozenset[int], tuple[tuple[str, int], ...]]:
+    """Webhook で常に拒否する内部サービスのポートと接続先（ESL・docker proxy）。
+
+    core の 80/443/http_port は自ホストのアドレス拒否（全ポート）で塞がるためここには含めない。
+    """
+    ports = set(WEBHOOK_INTERNAL_PORTS) | {settings.esl_port}
+    endpoints: list[tuple[str, int]] = [(settings.esl_host, settings.esl_port)]
+    if settings.docker_proxy_url:
+        proxy = urlsplit(settings.docker_proxy_url)
+        with contextlib.suppress(ValueError):
+            proxy_port = proxy.port or (443 if proxy.scheme == "https" else 80)
+            if proxy_port not in (80, 443):  # LAN の 80/443 受信サーバーは塞がない
+                ports.add(proxy_port)
+            if proxy.hostname:
+                endpoints.append((proxy.hostname, proxy_port))
+    return frozenset(ports), tuple(endpoints)
 
 
 @asynccontextmanager
@@ -238,6 +270,58 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
         sync_builtin_audio(settings.tts_cache_dir)
     except Exception:
         logger.exception("組み込み音声の同期に失敗しました")
+    # 受信 FAX の保存先（FreeSWITCH の rxfax と同一絶対パスを共有する）。
+    # 失敗しても起動は止めない（FAX の PDF 化ができないだけで済む）。
+    try:
+        settings.fax_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.exception("FAX 保存先ディレクトリを作成できません: %s", settings.fax_dir)
+
+    # Webhook 配信（issue #121）。ESL イベントと FAX 受信から fire-and-forget で送る。
+    # 送信先ポリシーは送信のたびに組み立てる（許可 CIDR は管理画面で変更可能、
+    # 自ホストのアドレスは net_guard が 30 秒キャッシュで列挙する）。
+    webhook_ports, webhook_endpoints = _webhook_internal_targets(settings)
+
+    async def _webhook_policy() -> WebhookTargetPolicy:
+        effective_now = await app.state.settings_service.effective()
+        try:
+            allowed = parse_allowed_cidrs(effective_now.webhook_allowed_cidrs)
+        except ValueError:
+            logger.error("webhook_allowed_cidrs が不正なため無視します（許可なしとして扱う）")
+            allowed = ()
+        return WebhookTargetPolicy(
+            allowed_cidrs=allowed,
+            internal_ports=webhook_ports,
+            internal_endpoints=webhook_endpoints,
+        )
+
+    webhook_dispatcher = WebhookDispatcher(
+        app.state.sessionmaker,
+        SecretBox(app.state.secrets.master_key),
+        policy_provider=_webhook_policy,
+    )
+    app.state.webhook_dispatcher = webhook_dispatcher
+    fax_service = FaxService(
+        app.state.sessionmaker,
+        settings.fax_dir,
+        dispatcher=webhook_dispatcher,
+        public_base_url=settings.public_base_url,
+        secret_box=SecretBox(app.state.secrets.master_key),
+    )
+    app.state.fax_service = fax_service
+
+    async def _fax_retention_loop() -> None:
+        # 保持日数を過ぎた FAX を日次で削除する（fax_retention_days=0 なら何もしない）。
+        while True:
+            try:
+                await fax_service.cleanup(settings.fax_retention_days)
+            except Exception:
+                logger.exception("FAX の保持期間クリーンアップに失敗しました")
+            await asyncio.sleep(24 * 60 * 60)
+
+    fax_retention_task = (
+        asyncio.create_task(_fax_retention_loop()) if settings.fax_retention_days > 0 else None
+    )
     app.state.session_registry = SessionRegistry()
     # 発信オーケストレーション（MCP dial/converse）の応答待ちレジストリ。
     # MediaEventRouter が CHANNEL_ANSWER で解決する。
@@ -319,6 +403,9 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
     async def _compose_handler(event: dict) -> None:
         await recorder.handle(event)
         await media_router.handle(event)
+        # どちらも配信/変換をタスクへ逃がして即座に戻る（ESL 処理をブロックしない）。
+        await webhook_dispatcher.handle(event)
+        await fax_service.handle(event)
 
     def _make_event_client(handler):
         return ESLClient(
@@ -327,7 +414,16 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
 
     event_listener = EslEventListener(
         _make_event_client,
-        ["CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_HANGUP_COMPLETE", "PLAYBACK_STOP", "DTMF"],
+        # CUSTOM のサブクラスは CUSTOM の後ろに並べる（mod_event_socket の仕様上、末尾に置く）。
+        [
+            "CHANNEL_CREATE",
+            "CHANNEL_ANSWER",
+            "CHANNEL_HANGUP_COMPLETE",
+            "PLAYBACK_STOP",
+            "DTMF",
+            "CUSTOM",
+            RXFAX_SUBCLASS,
+        ],
         _compose_handler,
     )
     await event_listener.start()
@@ -339,6 +435,11 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
             yield
         finally:
             await event_listener.stop()
+            await webhook_dispatcher.close()
+            if fax_retention_task is not None:
+                fax_retention_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await fax_retention_task
             await esl_command.close()
             await engine.dispose()
             # Argon2 専用 executor を停止し、未開始の計算を取り消す（issue #81）
@@ -417,6 +518,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(scim_router)
     app.include_router(system_router)
     app.include_router(users_router)
+    app.include_router(fax_router)
+    app.include_router(fax_pdf_router)
+    app.include_router(webhooks_router)
 
     @app.exception_handler(WorkflowValidationError)
     async def _workflow_validation_handler(_request, exc: WorkflowValidationError):

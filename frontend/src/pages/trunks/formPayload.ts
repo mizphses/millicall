@@ -38,6 +38,14 @@ export interface TrunkFormValues {
    * 数値文字列で保持し、payload 変換時に number へ写す。
    */
   options_ping_seconds: string;
+  /** 音声・FAX 併用回線の FAX 自動検知（CNG）。 */
+  fax_detect_enabled: boolean;
+  /** CNG 検知窓（秒）。数値文字列で保持（5〜120）。 */
+  fax_detect_timeout_sec: string;
+  /** CNG 検知時の切替先 FAX 受信番号。空 = 未設定。 */
+  fax_route_number: string;
+  /** 検知中に案内音声を再生する。 */
+  fax_detect_announce: boolean;
   enabled: boolean;
 }
 
@@ -64,6 +72,10 @@ export function emptyForm(): TrunkFormValues {
     trunk_type: "hgw",
     inbound_cidrs: "",
     options_ping_seconds: "30",
+    fax_detect_enabled: false,
+    fax_detect_timeout_sec: "20",
+    fax_route_number: "",
+    fax_detect_announce: false,
     enabled: true,
   };
 }
@@ -83,6 +95,10 @@ export function formFromTrunk(trunk: TrunkRead): TrunkFormValues {
     trunk_type: trunk.trunk_type,
     inbound_cidrs: trunk.inbound_cidrs.join("\n"),
     options_ping_seconds: String(trunk.options_ping_seconds),
+    fax_detect_enabled: trunk.fax_detect_enabled,
+    fax_detect_timeout_sec: String(trunk.fax_detect_timeout_sec),
+    fax_route_number: trunk.fax_route_number ?? "",
+    fax_detect_announce: trunk.fax_detect_announce,
     enabled: trunk.enabled,
   };
 }
@@ -103,6 +119,11 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
     trunk_type: form.trunk_type,
     inbound_cidrs: parseCidrs(form.inbound_cidrs),
     options_ping_seconds: parseOptionsPing(form.options_ping_seconds),
+    fax_detect_enabled: form.fax_detect_enabled,
+    fax_detect_timeout_sec: Number(form.fax_detect_timeout_sec.trim()),
+    // 自動検知が無効なら切替先は送らない（未設定）。
+    fax_route_number: form.fax_detect_enabled ? form.fax_route_number.trim() || null : null,
+    fax_detect_announce: form.fax_detect_enabled ? form.fax_detect_announce : false,
     enabled: form.enabled,
   };
 }
@@ -195,6 +216,23 @@ export function buildUpdatePayload(
     payload.options_ping_seconds = optionsPing;
   }
 
+  if (form.fax_detect_enabled !== original.fax_detect_enabled) {
+    payload.fax_detect_enabled = form.fax_detect_enabled;
+  }
+  const timeout = Number(form.fax_detect_timeout_sec.trim());
+  if (timeout !== original.fax_detect_timeout_sec) {
+    payload.fax_detect_timeout_sec = timeout;
+  }
+  // 自動検知を切ったら切替先もクリアする（無効時はセレクトを表示しないため）。
+  const route = form.fax_detect_enabled ? form.fax_route_number.trim() || null : null;
+  if (route !== (original.fax_route_number ?? null)) {
+    payload.fax_route_number = route;
+  }
+  const announce = form.fax_detect_enabled ? form.fax_detect_announce : false;
+  if (announce !== original.fax_detect_announce) {
+    payload.fax_detect_announce = announce;
+  }
+
   if (form.enabled !== original.enabled) {
     payload.enabled = form.enabled;
   }
@@ -277,6 +315,15 @@ export function validateForm(
     if (invalid.length > 0) {
       errors.inbound_cidrs = `CIDR 表記が不正です: ${invalid.join(", ")}（例: 203.0.113.0/24）`;
     }
+  }
+
+  // FAX 自動検知: 有効なら切替先必須。検知窓は 5〜120 秒の整数。
+  if (form.fax_detect_enabled && form.fax_route_number.trim() === "") {
+    errors.fax_route_number = "切替先の FAX 受信番号を選択してください";
+  }
+  const timeout = Number(form.fax_detect_timeout_sec.trim());
+  if (!Number.isInteger(timeout) || timeout < 5 || timeout > 120) {
+    errors.fax_detect_timeout_sec = "検知時間は 5〜120 秒の整数で入力してください";
   }
 
   return errors;

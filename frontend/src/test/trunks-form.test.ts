@@ -21,6 +21,10 @@ const original: TrunkRead = {
   trunk_type: "hgw",
   inbound_cidrs: [],
   options_ping_seconds: 30,
+  fax_detect_enabled: false,
+  fax_detect_timeout_sec: 20,
+  fax_route_number: null,
+  fax_detect_announce: false,
   enabled: true,
   has_password: true,
 };
@@ -39,6 +43,10 @@ function formOf(overrides: Partial<TrunkFormValues>): TrunkFormValues {
     trunk_type: "hgw",
     inbound_cidrs: "",
     options_ping_seconds: "30",
+    fax_detect_enabled: false,
+    fax_detect_timeout_sec: "20",
+    fax_route_number: "",
+    fax_detect_announce: false,
     enabled: true,
     ...overrides,
   };
@@ -301,5 +309,65 @@ describe("validateForm（着信許可 CIDR）", () => {
       "create",
     );
     expect(errors.inbound_cidrs).toBeUndefined();
+  });
+});
+
+describe("FAX 自動検知", () => {
+  it("未変更なら PATCH に含めない", () => {
+    expect(buildUpdatePayload(formOf({}), original)).toEqual({});
+  });
+
+  it("有効化すると切替先・検知時間・案内音声を送る", () => {
+    const payload = buildUpdatePayload(
+      formOf({
+        fax_detect_enabled: true,
+        fax_route_number: "300",
+        fax_detect_timeout_sec: "30",
+        fax_detect_announce: true,
+      }),
+      original,
+    );
+    expect(payload).toEqual({
+      fax_detect_enabled: true,
+      fax_route_number: "300",
+      fax_detect_timeout_sec: 30,
+      fax_detect_announce: true,
+    });
+  });
+
+  it("無効化すると切替先と案内音声もクリアする", () => {
+    const enabled: TrunkRead = {
+      ...original,
+      fax_detect_enabled: true,
+      fax_route_number: "300",
+      fax_detect_announce: true,
+    };
+    const payload = buildUpdatePayload(
+      formOf({ fax_detect_enabled: false, fax_route_number: "300", fax_detect_announce: true }),
+      enabled,
+    );
+    expect(payload).toEqual({
+      fax_detect_enabled: false,
+      fax_route_number: null,
+      fax_detect_announce: false,
+    });
+  });
+
+  it("作成 payload は無効時に切替先を null にする", () => {
+    const payload = buildCreatePayload(formOf({ fax_route_number: "300", password: "p" }));
+    expect(payload.fax_detect_enabled).toBe(false);
+    expect(payload.fax_route_number).toBeNull();
+    expect(payload.fax_detect_timeout_sec).toBe(20);
+  });
+
+  it("有効なのに切替先が無いとエラー、検知時間は 5〜120", () => {
+    expect(validateForm(formOf({ fax_detect_enabled: true }), "edit").fax_route_number).toBeTruthy();
+    expect(
+      validateForm(formOf({ fax_detect_enabled: true, fax_route_number: "300" }), "edit")
+        .fax_route_number,
+    ).toBeUndefined();
+    expect(validateForm(formOf({ fax_detect_timeout_sec: "4" }), "edit").fax_detect_timeout_sec).toBeTruthy();
+    expect(validateForm(formOf({ fax_detect_timeout_sec: "121" }), "edit").fax_detect_timeout_sec).toBeTruthy();
+    expect(validateForm(formOf({ fax_detect_timeout_sec: "120" }), "edit").fax_detect_timeout_sec).toBeUndefined();
   });
 });

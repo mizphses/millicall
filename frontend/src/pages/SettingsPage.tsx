@@ -35,6 +35,7 @@ import {
   Shield,
   ShieldCheck,
   Wifi,
+  Webhook,
 } from "lucide-react";
 
 import { css, cx } from "styled-system/css";
@@ -307,6 +308,21 @@ const SECTIONS: SectionDef[] = [
         label: "Tailscale Serve で HTTPS 公開する",
         type: "boolean",
         help: "有効にすると、次回の Tailscale 接続時に tailnet 上で管理画面を HTTPS 公開します。",
+      },
+    ],
+  },
+  {
+    id: "webhooks",
+    title: "Webhook",
+    description: "Webhook の送信先として追加で許可する宛先",
+    icon: <Webhook size={18} />,
+    fields: [
+      {
+        key: "webhook_allowed_cidrs",
+        label: "Webhook 許可 CIDR（改行またはカンマ区切り）",
+        type: "textarea",
+        placeholder: "172.20.0.0/16\n100.64.0.0/10",
+        help: "空でも LAN（192.168.0.0/16・10.0.0.0/8）の受信サーバーには送れます。docker/子 LAN（172.16.0.0/12）・tailnet（100.64.0.0/10）宛ては、ここに含めたときだけ許可します。millicall 自身のアドレス・loopback・ESL/docker proxy と 2375/2376/8021 番ポートはここに含めても常に拒否します。",
       },
     ],
   },

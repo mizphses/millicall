@@ -640,6 +640,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fax-receivers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Fax Receivers */
+        get: operations["list_fax_receivers_api_fax_receivers_get"];
+        put?: never;
+        /** Create Fax Receiver */
+        post: operations["create_fax_receiver_api_fax_receivers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fax-receivers/{receiver_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Fax Receiver */
+        delete: operations["delete_fax_receiver_api_fax_receivers__receiver_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Fax Receiver */
+        patch: operations["update_fax_receiver_api_fax_receivers__receiver_id__patch"];
+        trace?: never;
+    };
+    "/api/faxes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Faxes */
+        get: operations["list_faxes_api_faxes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/faxes/{fax_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Fax */
+        get: operations["get_fax_api_faxes__fax_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Fax */
+        delete: operations["delete_fax_api_faxes__fax_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/faxes/{fax_id}/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Fax Pdf */
+        get: operations["download_fax_pdf_api_faxes__fax_id__pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/network": {
         parameters: {
             query?: never;
@@ -1165,6 +1253,80 @@ export interface paths {
         put?: never;
         /** Reset Password */
         post: operations["reset_password_api_users__user_id__reset_password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Webhooks */
+        get: operations["list_webhooks_api_webhooks_get"];
+        put?: never;
+        /** Create Webhook */
+        post: operations["create_webhook_api_webhooks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/webhooks/{webhook_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Webhook */
+        get: operations["get_webhook_api_webhooks__webhook_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Webhook */
+        delete: operations["delete_webhook_api_webhooks__webhook_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Webhook */
+        patch: operations["update_webhook_api_webhooks__webhook_id__patch"];
+        trace?: never;
+    };
+    "/api/webhooks/{webhook_id}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Deliveries */
+        get: operations["list_deliveries_api_webhooks__webhook_id__deliveries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/webhooks/{webhook_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Webhook
+         * @description webhook.test イベントを 1 回だけ（再試行なし）送り、結果を返す。
+         */
+        post: operations["test_webhook_api_webhooks__webhook_id__test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2367,6 +2529,62 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
         };
+        /** FaxList */
+        FaxList: {
+            /** Items */
+            items: components["schemas"]["FaxRead"][];
+            /** Total */
+            total: number;
+        };
+        /** FaxRead */
+        FaxRead: {
+            /** Call Uuid */
+            call_uuid: string;
+            /** From Number */
+            from_number: string;
+            /** Has Pdf */
+            has_pdf: boolean;
+            /** Id */
+            id: number;
+            /** Pages */
+            pages: number;
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
+            /** Remote Station Id */
+            remote_station_id: string;
+            /** Result Text */
+            result_text: string;
+            /** Success */
+            success: boolean;
+            /** To Number */
+            to_number: string;
+        };
+        /** FaxReceiverRead */
+        FaxReceiverRead: {
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Number */
+            number: string;
+        };
+        /** FaxReceiverUpsert */
+        FaxReceiverUpsert: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Name */
+            name: string;
+            /** Number */
+            number: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -2820,6 +3038,23 @@ export interface components {
              * @default true
              */
             enabled: boolean;
+            /**
+             * Fax Detect Announce
+             * @default false
+             */
+            fax_detect_announce: boolean;
+            /**
+             * Fax Detect Enabled
+             * @default false
+             */
+            fax_detect_enabled: boolean;
+            /**
+             * Fax Detect Timeout Sec
+             * @default 20
+             */
+            fax_detect_timeout_sec: number;
+            /** Fax Route Number */
+            fax_route_number?: string | null;
             /** Host */
             host: string;
             /** Inbound Cidrs */
@@ -2861,6 +3096,14 @@ export interface components {
             display_name: string;
             /** Enabled */
             enabled: boolean;
+            /** Fax Detect Announce */
+            fax_detect_announce: boolean;
+            /** Fax Detect Enabled */
+            fax_detect_enabled: boolean;
+            /** Fax Detect Timeout Sec */
+            fax_detect_timeout_sec: number;
+            /** Fax Route Number */
+            fax_route_number: string | null;
             /** Has Password */
             has_password: boolean;
             /** Host */
@@ -2909,6 +3152,14 @@ export interface components {
             display_name?: string | null;
             /** Enabled */
             enabled?: boolean | null;
+            /** Fax Detect Announce */
+            fax_detect_announce?: boolean | null;
+            /** Fax Detect Enabled */
+            fax_detect_enabled?: boolean | null;
+            /** Fax Detect Timeout Sec */
+            fax_detect_timeout_sec?: number | null;
+            /** Fax Route Number */
+            fax_route_number?: string | null;
             /** Host */
             host?: string | null;
             /** Inbound Cidrs */
@@ -2997,6 +3248,91 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** WebhookCreate */
+        WebhookCreate: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Events */
+            events?: ("call.inbound" | "call.ended" | "fax.received")[];
+            /** Name */
+            name: string;
+            /**
+             * Secret
+             * @default
+             */
+            secret: string;
+            /** Url */
+            url: string;
+        };
+        /** WebhookDeliveryRead */
+        WebhookDeliveryRead: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Delivery Id */
+            delivery_id: string;
+            /** Error */
+            error: string | null;
+            /** Event */
+            event: string;
+            /** Id */
+            id: number;
+            /** Status Code */
+            status_code: number | null;
+            /** Success */
+            success: boolean;
+        };
+        /** WebhookRead */
+        WebhookRead: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Events */
+            events: string[];
+            /** Has Secret */
+            has_secret: boolean;
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+        };
+        /** WebhookTestResult */
+        WebhookTestResult: {
+            /** Delivery Id */
+            delivery_id: string;
+            /** Error */
+            error: string | null;
+            /** Status Code */
+            status_code: number | null;
+            /** Success */
+            success: boolean;
+        };
+        /** WebhookUpdate */
+        WebhookUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Events */
+            events?: ("call.inbound" | "call.ended" | "fax.received")[] | null;
+            /** Name */
+            name?: string | null;
+            /** Secret */
+            secret?: string | null;
+            /** Url */
+            url?: string | null;
         };
         /** WorkflowGenerateRequest */
         WorkflowGenerateRequest: {
@@ -4271,6 +4607,246 @@ export interface operations {
             };
         };
     };
+    list_fax_receivers_api_fax_receivers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxReceiverRead"][];
+                };
+            };
+        };
+    };
+    create_fax_receiver_api_fax_receivers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FaxReceiverUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxReceiverRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_fax_receiver_api_fax_receivers__receiver_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                receiver_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_fax_receiver_api_fax_receivers__receiver_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                receiver_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FaxReceiverUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxReceiverRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_faxes_api_faxes_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fax_api_faxes__fax_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fax_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_fax_api_faxes__fax_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fax_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_fax_pdf_api_faxes__fax_id__pdf_get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                fax_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_network_config_api_network_get: {
         parameters: {
             query?: never;
@@ -5250,6 +5826,218 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_webhooks_api_webhooks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookRead"][];
+                };
+            };
+        };
+    };
+    create_webhook_api_webhooks_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_webhook_api_webhooks__webhook_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_webhook_api_webhooks__webhook_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_webhook_api_webhooks__webhook_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_deliveries_api_webhooks__webhook_id__deliveries_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDeliveryRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_webhook_api_webhooks__webhook_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookTestResult"];
                 };
             };
             /** @description Validation Error */

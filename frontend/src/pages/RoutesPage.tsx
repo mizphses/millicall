@@ -26,6 +26,7 @@ import {
   type RingGroupFormValues,
   type RingGroupRead,
 } from "./routes/formPayload";
+import { FaxReceiversSection } from "./routes/FaxReceiversSection";
 
 type ExtensionRead = components["schemas"]["ExtensionRead"];
 
@@ -92,6 +93,8 @@ function kindBadgeTone(kind: string): "accent" | "success" | "warn" | "neutral" 
       return "success";
     case "workflow":
       return "warn";
+    case "fax":
+      return "accent";
     default:
       // ring_group ほか
       return "neutral";
@@ -289,7 +292,7 @@ export function RoutesPage() {
         <section>
           <SectionHeading
             title="番号プラン"
-            description="内線・AI エージェント・ワークフロー・グループが共有する番号空間"
+            description="内線・AI エージェント・ワークフロー・グループ・FAX 受信が共有する番号空間"
           />
           <DataTable
             columns={planColumns}
@@ -337,6 +340,8 @@ export function RoutesPage() {
             emptyMessage="グループ着信がまだありません。「グループを追加」から登録してください。"
           />
         </section>
+
+        <FaxReceiversSection />
       </div>
 
       <SlidePanel

@@ -27,6 +27,14 @@ import {
 } from "./trunks/formPayload";
 import { numberPlanKindLabel } from "./routes/formPayload";
 
+const checkboxRow = css({
+  display: "flex",
+  alignItems: "center",
+  gap: "2",
+  fontSize: "md",
+  cursor: "pointer",
+});
+
 type NumberPlanEntryRead = components["schemas"]["NumberPlanEntryRead"];
 
 /** トランク名の重複（409）を型で区別するためのエラー。フォームのインライン表示に使う。 */
@@ -130,6 +138,8 @@ export function TrunksPage() {
   // 着信先内線番号 select の選択肢（統一番号プラン）。
   const numberPlanQuery = useQuery({ queryKey: NUMBER_PLAN_KEY, queryFn: fetchNumberPlan });
   const numberPlan = numberPlanQuery.data ?? [];
+  // FAX 自動検知の切替先候補（番号プランの FAX 受信番号）。
+  const faxNumbers = numberPlan.filter((entry) => entry.kind === "fax");
 
   const [editing, setEditing] = useState<TrunkRead | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -483,6 +493,75 @@ export function TrunksPage() {
               </p>
             </Field>
           )}
+
+          <fieldset
+            className={css({
+              display: "flex",
+              flexDirection: "column",
+              gap: "3",
+              borderWidth: "1px",
+              borderColor: "border",
+              borderRadius: "md",
+              p: "3",
+            })}
+          >
+            <legend className={css({ fontSize: "sm", color: "text.muted", px: "1" })}>
+              FAX 自動検知（音声・FAX 併用回線）
+            </legend>
+            <label className={checkboxRow}>
+              <input
+                type="checkbox"
+                checked={form.fax_detect_enabled}
+                onChange={(e) => setForm((f) => ({ ...f, fax_detect_enabled: e.target.checked }))}
+              />
+              FAX の呼出音（CNG）を検知したら FAX 受信に切り替える
+            </label>
+            {form.fax_detect_enabled && (
+              <>
+                <Field
+                  required
+                  label="切替先の FAX 受信番号"
+                  error={fieldErrors.fax_route_number}
+                  help={<ObjectLink to="/routes" newTab>FAX 受信番号を登録</ObjectLink>}
+                >
+                  <select
+                    className={input({ invalid: fieldErrors.fax_route_number ? true : undefined })}
+                    value={form.fax_route_number}
+                    onChange={(e) => setForm((f) => ({ ...f, fax_route_number: e.target.value }))}
+                  >
+                    <option value="">（選択してください）</option>
+                    {faxNumbers.map((entry) => (
+                      <option key={entry.id} value={entry.number}>
+                        {entry.number} — {entry.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="検知時間（秒・5〜120）" error={fieldErrors.fax_detect_timeout_sec}>
+                  <input
+                    className={input({ invalid: fieldErrors.fax_detect_timeout_sec ? true : undefined })}
+                    type="number"
+                    inputMode="numeric"
+                    min={5}
+                    max={120}
+                    value={form.fax_detect_timeout_sec}
+                    onChange={(e) => setForm((f) => ({ ...f, fax_detect_timeout_sec: e.target.value }))}
+                  />
+                </Field>
+                <label className={checkboxRow}>
+                  <input
+                    type="checkbox"
+                    checked={form.fax_detect_announce}
+                    onChange={(e) => setForm((f) => ({ ...f, fax_detect_announce: e.target.checked }))}
+                  />
+                  検知中に案内音声を再生
+                </label>
+                <p className={css({ fontSize: "sm", color: "fg.muted" })}>
+                  手動送信など CNG を出さない FAX 機は検知できません。専用の FAX 受信番号への着信も併用してください。
+                </p>
+              </>
+            )}
+          </fieldset>
 
           <label
             className={css({

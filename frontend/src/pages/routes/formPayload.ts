@@ -10,6 +10,7 @@ export const NUMBER_PLAN_KIND_LABELS: Record<string, string> = {
   ai_agent: "AI",
   workflow: "ワークフロー",
   ring_group: "グループ",
+  fax: "FAX 受信",
 };
 
 /** kind の日本語ラベルを引く（未知の kind はそのまま返す）。 */
@@ -77,5 +78,44 @@ export function validateForm(
     errors.name = "名前は 1〜100 文字で入力してください";
   }
 
+  return errors;
+}
+
+// ─────────────────────────────────────────────────────────
+// FAX 受信番号（番号プランの kind="fax"）
+// ─────────────────────────────────────────────────────────
+
+export type FaxReceiverRead = components["schemas"]["FaxReceiverRead"];
+export type FaxReceiverUpsert = components["schemas"]["FaxReceiverUpsert"];
+
+export interface FaxReceiverFormValues {
+  number: string;
+  name: string;
+  enabled: boolean;
+}
+
+export function emptyFaxReceiverForm(): FaxReceiverFormValues {
+  return { number: "", name: "", enabled: true };
+}
+
+export function faxReceiverFormFrom(receiver: FaxReceiverRead): FaxReceiverFormValues {
+  return { number: receiver.number, name: receiver.name, enabled: receiver.enabled };
+}
+
+export function buildFaxReceiverPayload(form: FaxReceiverFormValues): FaxReceiverUpsert {
+  return { number: form.number.trim(), name: form.name.trim(), enabled: form.enabled };
+}
+
+export function validateFaxReceiverForm(
+  form: FaxReceiverFormValues,
+): Partial<Record<keyof FaxReceiverFormValues, string>> {
+  const errors: Partial<Record<keyof FaxReceiverFormValues, string>> = {};
+  if (!NUMBER_PATTERN.test(form.number.trim())) {
+    errors.number = "番号は数字 2〜6 桁で入力してください";
+  }
+  const name = form.name.trim();
+  if (name.length < 1 || name.length > 100) {
+    errors.name = "名前は 1〜100 文字で入力してください";
+  }
   return errors;
 }

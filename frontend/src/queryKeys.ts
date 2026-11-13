@@ -19,6 +19,16 @@ export const RING_GROUPS_KEY = ["ring-groups"] as const;
 export const CONTACTS_KEY = ["contacts"] as const;
 export const CDR_KEY = ["cdr"] as const;
 export const CALL_MESSAGES_KEY = ["call-messages"] as const;
+/** FAX 受信番号（番号プラン kind="fax"）。 */
+export const FAX_RECEIVERS_KEY = ["fax-receivers"] as const;
+/** 受信 FAX 一覧（ページネーション付き）。 */
+export const faxesKey = (limit: number, offset: number) => ["faxes", limit, offset] as const;
+/** 受信 FAX の invalidate 用プレフィックス。 */
+export const FAXES_KEY = ["faxes"] as const;
+/** Webhook 一覧。 */
+export const WEBHOOKS_KEY = ["webhooks"] as const;
+/** Webhook 配信ログ（webhook ごと）。 */
+export const webhookDeliveriesKey = (id: number) => ["webhooks", id, "deliveries"] as const;
 
 // ─────────────────────────────────────────────────────────
 // Dashboard 専用キー（number / 最新 N 件を返す。一覧キーと別トップレベル）

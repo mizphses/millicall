@@ -24,10 +24,18 @@ provisioning/service.py・ai/registry.py 等の外部 HTTP 発信箇所で再利
 from __future__ import annotations
 
 import ipaddress
+import logging
+import re
 import socket
+import time
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # --------------------------------------------------------------------------- #
 # IP 正規化・分類
@@ -209,14 +217,26 @@ class _PinnedTransport(httpx.AsyncHTTPTransport):
     元のホスト名を保持するため、正当な仮想ホスト/証明書もそのまま機能する。
     """
 
-    def __init__(self, pinned_host: str, pinned_ip: str, **kwargs: object) -> None:
+    def __init__(
+        self,
+        pinned_host: str,
+        pinned_ip: str,
+        pinned_port: int | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(**kwargs)  # type: ignore[arg-type]
         self._pinned_host = pinned_host
         self._pinned_ip = pinned_ip
+        # 検証時のポート（指定時のみ照合）。ポリシーがポートで判定する Webhook 用。
+        self._pinned_port = pinned_port
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if request.url.host != self._pinned_host:
             raise ValueError("Request host does not match validated SSRF destination")
+        if self._pinned_port is not None:
+            port = request.url.port or (443 if request.url.scheme == "https" else 80)
+            if port != self._pinned_port:
+                raise ValueError("Request port does not match validated SSRF destination")
         if request.url.host == self._pinned_host:
             request.extensions = {
                 **request.extensions,
@@ -246,3 +266,234 @@ def make_pinned_transport(url: str, *, lan_allowed: bool = False) -> tuple[str, 
     else:
         pinned_ip = _resolve_and_check_ssrf(url)
     return pinned_ip, _PinnedTransport(host, pinned_ip)
+
+
+
+
+# --------------------------------------------------------------------------- #
+# Webhook 送信先ポリシー（issue #121）
+# --------------------------------------------------------------------------- #
+#
+# Webhook の送信先は管理者が任意に設定でき、core は network_mode: host で動くため、
+# ローカル専用サービス（docker socket-proxy :2375、ESL :8021、core 自身の API 等）への
+# 踏み台にならないよう次の規則で検証する（送信のたびに評価する）:
+#
+#   1. 常に拒否: loopback（127/8, ::1）・0.0.0.0/8・link-local（メタデータ含む）・
+#      multicast・reserved・unspecified
+#   2. 常に拒否: 自ホストの全インターフェースのアドレス（全ポート。ifaddr で列挙、30 秒
+#      キャッシュ）。列挙自体に失敗したら fail-closed で拒否する。core の 80/443/http_port
+#      はこの規則で塞がる。
+#   3. 常に拒否: 内部サービスの接続先そのもの（ESL の esl_host:esl_port、docker proxy の
+#      host:port）と、非グローバルアドレス上の 2375/2376/8021（+ 設定の ESL/proxy ポート）。
+#   4. 既定で拒否: docker 既定レンジ 172.16.0.0/12 と CGNAT 100.64.0.0/10（tailnet）。
+#      webhook_allowed_cidrs はこの規則 4 だけを解除する（規則 1〜3 は解除できない）。
+#   5. それ以外の RFC1918（192.168/16・10/8。80/443 を含む）とグローバルアドレスは許可する。
+
+_WEBHOOK_LOCAL_TTL = 30.0
+_DOCKER_NET = ipaddress.ip_network("172.16.0.0/12")
+_CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+WEBHOOK_INTERNAL_PORTS: frozenset[int] = frozenset({2375, 2376, 8021})
+
+_logger = logging.getLogger("millicall.net_guard")
+
+
+class LocalAddressError(RuntimeError):
+    """自ホストのアドレス列挙に失敗した（fail-closed の判断に使う）。"""
+
+
+def enumerate_local_addresses() -> frozenset[str]:
+    """自ホストの全インターフェースの IP アドレス（正規化済み文字列）を返す。"""
+    import ifaddr
+
+    try:
+        adapters = ifaddr.get_adapters()
+    except Exception as exc:  # noqa: BLE001 — 列挙失敗はすべて fail-closed
+        raise LocalAddressError(str(exc)) from exc
+    out: set[str] = set()
+    for adapter in adapters:
+        for ip in adapter.ips:
+            raw = ip.ip[0] if isinstance(ip.ip, tuple) else ip.ip
+            norm = _normalized_str(str(raw))
+            if norm is not None:
+                out.add(norm)
+    return frozenset(out)
+
+
+class LocalAddressCache:
+    """enumerate_local_addresses の結果を短時間（既定 30 秒）キャッシュする。
+
+    IP 変更（DHCP 更新・tailscale 接続・docker ネットワーク追加）を 30 秒以内に反映する。
+    列挙に失敗した場合はキャッシュせず LocalAddressError を送出する。
+    """
+
+    def __init__(
+        self,
+        enumerate_fn: Callable[[], frozenset[str]] = enumerate_local_addresses,
+        ttl: float = _WEBHOOK_LOCAL_TTL,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._enumerate = enumerate_fn
+        self._ttl = ttl
+        self._clock = clock
+        self._value: frozenset[str] | None = None
+        self._at = 0.0
+
+    def get(self) -> frozenset[str]:
+        now = self._clock()
+        if self._value is not None and now - self._at < self._ttl:
+            return self._value
+        try:
+            value = frozenset(self._enumerate())
+        except LocalAddressError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise LocalAddressError(str(exc)) from exc
+        self._value, self._at = value, now
+        return value
+
+
+_DEFAULT_LOCAL_CACHE = LocalAddressCache()
+
+
+def _normalized_str(ip_str: str) -> str | None:
+    try:
+        return str(_normalize_ip(ipaddress.ip_address(ip_str.split("%", 1)[0])))
+    except ValueError:
+        return None
+
+
+def parse_allowed_cidrs(
+    raw: str | list[str] | None,
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """webhook_allowed_cidrs（カンマ/改行区切り）を解析する。不正な要素は ValueError。"""
+    if not raw:
+        return ()
+    items = raw if isinstance(raw, list) else re.split(r"[,\s]+", raw)
+    nets = []
+    for item in items:
+        item = item.strip()
+        if item:
+            nets.append(ipaddress.ip_network(item, strict=False))
+    return tuple(nets)
+
+
+@dataclass(frozen=True)
+class WebhookTargetPolicy:
+    """Webhook 送信先の検証ポリシー。
+
+    allowed_cidrs: 管理者が明示許可した宛先。docker/CGNAT レンジの拒否（規則 4）だけを解除する。
+    internal_ports: 非グローバルアドレス上で常に拒否するポート（WEBHOOK_INTERNAL_PORTS + 設定値）。
+    internal_endpoints: 常に拒否する内部サービスの (host, port)。host は検証時に名前解決する。
+    local_addresses: 自ホストのアドレス列挙（既定は 30 秒キャッシュ付きの ifaddr 列挙）。
+    """
+
+    allowed_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = ()
+    internal_ports: frozenset[int] = WEBHOOK_INTERNAL_PORTS
+    internal_endpoints: tuple[tuple[str, int], ...] = ()
+    local_addresses: Callable[[], frozenset[str]] = field(
+        default=_DEFAULT_LOCAL_CACHE.get, compare=False
+    )
+
+
+def _is_blocked_ip_webhook(ip_str: str) -> bool:
+    """規則 1（常に拒否するアドレス種別）に当たるか。"""
+    try:
+        raw = ipaddress.ip_address(ip_str.split("%", 1)[0])
+    except ValueError:
+        return True
+    # ::1 は IPv4-compatible の範囲に入り _normalize_ip で 0.0.0.1 に畳まれるため、
+    # 正規化前にも loopback を判定する。
+    if raw.is_loopback:
+        return True
+    ip = _normalize_ip(raw)
+    return (
+        ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        # 0.0.0.0/8（"this network"）は多くの OS で自ホスト宛として扱われる
+        or (ip.version == 4 and int(ip) >> 24 == 0)
+    )
+
+
+def check_webhook_ip(ip_str: str, port: int, policy: WebhookTargetPolicy) -> None:
+    """解決済み IP:port が Webhook 送信先として許可されるか検証する（拒否は ValueError）。"""
+    if _is_blocked_ip_webhook(ip_str):
+        raise ValueError(
+            f"SSRF ブロック: {ip_str} はループバック/リンクローカル等のため送信できません"
+        )
+    norm = _normalized_str(ip_str)
+    if norm is None:
+        raise ValueError(f"SSRF ブロック: 不正なアドレス {ip_str!r}")
+    try:
+        local = policy.local_addresses()
+    except Exception as exc:  # noqa: BLE001 — 列挙失敗は fail-closed
+        _logger.error("自ホストのアドレスを列挙できないため Webhook 送信を拒否します: %s", exc)
+        raise ValueError(
+            "SSRF ブロック: 自ホストのアドレスを確認できないため送信を拒否しました"
+        ) from exc
+    if norm in local:
+        raise ValueError(f"SSRF ブロック: {ip_str} は自ホストのアドレスです")
+    ip = ipaddress.ip_address(norm)
+    # 規則 3: 内部サービス（許可 CIDR でも解除しない）
+    if not ip.is_global and port in policy.internal_ports:
+        raise ValueError(f"SSRF ブロック: {ip_str}:{port} は内部サービスのポートです")
+    for host, ep_port in policy.internal_endpoints:
+        if ep_port == port and norm in _resolve_endpoint(host, ep_port):
+            raise ValueError(f"SSRF ブロック: {ip_str}:{port} は内部サービスの接続先です")
+    # 規則 4: docker/CGNAT レンジ（許可 CIDR で解除可）
+    allowed = any(ip in net for net in policy.allowed_cidrs if net.version == ip.version)
+    if (ip in _DOCKER_NET or ip in _CGNAT_NET) and not allowed:
+        raise ValueError(
+            f"SSRF ブロック: {ip_str} は docker/CGNAT レンジです"
+            "（送信するには Webhook 許可 CIDR に追加してください）"
+        )
+
+
+def _resolve_endpoint(host: str, port: int) -> set[str]:
+    """内部サービスの host を正規化済み IP 集合に解決する（失敗時は host が IP ならそれ）。"""
+    literal = _normalized_str(host)
+    if literal is not None:
+        return {literal}
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError):
+        return set()
+    out: set[str] = set()
+    for *_rest, sockaddr in infos:
+        norm = _normalized_str(str(sockaddr[0]))
+        if norm is not None:
+            out.add(norm)
+    return out
+
+
+def resolve_webhook_target(url: str, policy: WebhookTargetPolicy | None = None) -> str:
+    """Webhook URL を解決し、全解決結果を検証して接続に固定する IP を返す（拒否は ValueError）。"""
+    policy = policy or WebhookTargetPolicy()
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"URL からホスト名を解析できません: {url!r}")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        results = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"DNS 解決失敗 ({host!r}): {exc}") from exc
+    resolved = [str(sockaddr[0]) for *_rest, sockaddr in results]
+    if not resolved:
+        raise ValueError(f"DNS 解決結果が空です ({host!r})")
+    for ip_str in resolved:
+        check_webhook_ip(ip_str, port, policy)
+    return resolved[0]
+
+
+def make_webhook_transport(
+    url: str, policy: WebhookTargetPolicy | None = None
+) -> tuple[str, _PinnedTransport]:
+    """Webhook 用: 検証済み IP に固定したトランスポートを返す（リダイレクト追従は呼び出し側で禁止）。"""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    pinned_ip = resolve_webhook_target(url, policy)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return pinned_ip, _PinnedTransport(host, pinned_ip, pinned_port=port)

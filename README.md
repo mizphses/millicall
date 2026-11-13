@@ -16,6 +16,7 @@
 - **音声 AI パイプライン**: WebRTC VAD + ストリーミング STT（Google Speech-to-Text）+ 文分割 TTS（VoiceVox または OpenJTalk）+ バージイン（再生中の割り込み検知）。LLM は Anthropic / OpenAI / Gemini / Vertex AI に対応。TTS は VoiceVox / OpenJTalk 対応。STT は Google Cloud Speech-to-Text / Whisper 対応。プロバイダカタログは管理画面から切り替え可能
 - **MCPエージェント**: MCP over HTTP サーバ（`converse` を含む 15 ツール）を標準搭載。`dial` / `say` / `listen` / `hangup` 等の電話プリミティブと、`converse`（自律会話）、電話帳 CRUD、内線・トランク一覧など。OAuth2.1 による認証済み外部エージェント連携対応
 - **ワークフロー（IVR + AI ノード）**: xyflow ベースのビジュアルエディタで IVR フロー・AI 分岐ノードを構築。React SPA から設定・プレビューが可能
+- **FAX 受信 + Webhook**: FAX 受信番号への着信を rxfax（G.711）で受け PDF 保存・管理画面から一覧/ダウンロード。音声・FAX 併用回線は CNG 検知で FAX へ自動切替。着信 / 通話終了 / FAX 受信を HMAC-SHA256 署名付き Webhook で外部通知
 - **ゼロタッチプロビジョニング + netd**: SIP 電話機向け自動設定配布（ZTP）。`netd` コンテナが dnsmasq（DHCP/DNS）・nftables NAT・Tailscale を管理し、フレッツ環境の NW 設定をコアから API 経由で制御
 - **認証強化**: TOTP 2FA、SAML SP（シングルサインオン）、SCIM プロビジョニング、操作監査ログ、レート制限、CSRF 保護、内線ごとの発信権限制御、SIP 多層防御、Docker socket-proxy（`docker.sock` は proxy コンテナのみに read-only マウント）
 - **ワンライナー導入 + GHCR プリビルドイメージ**: `install.sh` が compose・`.env` 生成・イメージ pull・起動を一括実施。イメージは GHCR（amd64 / arm64 マルチアーチ）で公開。更新は `millicallctl update` 一発
@@ -70,6 +71,8 @@ millicallctl update
 | [docs/ops/deployment.md](docs/ops/deployment.md) | デプロイ・更新・ロールバック・バックアップ |
 | [docs/sso.md](docs/sso.md) | SAML SP / SCIM 設定 |
 | [docs/workflows.md](docs/workflows.md) | ワークフロー（IVR + AI ノード）の使い方 |
+| [docs/fax.md](docs/fax.md) | FAX 受信（PDF 保存・自動検知） |
+| [docs/webhooks.md](docs/webhooks.md) | Webhook（イベント・payload・署名検証） |
 | [docs/mcp.md](docs/mcp.md) | MCP エージェント API リファレンス |
 | [docs/security-model.md](docs/security-model.md) | セキュリティモデル（認証・防御・権限設計）|
 | [docs/troubleshooting.md](docs/troubleshooting.md) | よくあるトラブルと解決策 |

@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -6,6 +7,8 @@ from xml.etree import ElementTree
 
 from jinja2 import Environment, PackageLoader
 from markupsafe import Markup
+
+logger = logging.getLogger("millicall.telephony.fsconfig")
 
 # 生成する FreeSWITCH 設定の権限（SIP/ESL パスワードを平文で含むため所有者のみ）。
 _CONFIG_FILE_MODE = 0o600
@@ -63,6 +66,14 @@ class WorkflowConfig:
     ring_count: int = 0
 
 
+@dataclass(frozen=True)
+class FaxReceiverConfig:
+    """FAX 受信番号（default コンテキストで answer → rxfax する）。"""
+
+    number: str
+    name: str = ""
+
+
 # トランク名（= sofia gateway 名 / プロファイル名の一部 / ファイル名の一部）に
 # 許可する文字。ファイル名インジェクション・XML/シェル混入を防ぐため厳格に制限する。
 _SAFE_TRUNK_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
@@ -88,6 +99,28 @@ class TrunkConfig:
     inbound_cidrs: list[str] = field(default_factory=list)
     # gateway の OPTIONS キープアライブ間隔（秒）。0 = ping param を出さない（無効）。
     options_ping_seconds: int = 30
+    # FAX 自動検知（CNG）。有効かつ fax_route_number が有効な FAX 受信番号のときだけ
+    # public.xml に spandsp_start_fax_detect を出力する。
+    fax_detect_enabled: bool = False
+    fax_detect_timeout_sec: int = 20
+    fax_route_number: str | None = None
+    # 検知中に案内音声を再生する（answer → 検知 → playback → transfer）。
+    fax_detect_announce: bool = False
+
+
+def _safe_abs_path(path: Path | str) -> str | None:
+    """dialplan に埋め込める絶対パス文字列を返す（使えない文字を含むなら None）。"""
+    try:
+        resolved = str(Path(path).resolve())
+    except (OSError, RuntimeError):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_./-]+", resolved):
+        return None
+    return resolved
+
+
+# FAX 受信番号・切替先番号の形式（統一番号プランと同じ 2〜6 桁）。
+_FAX_NUMBER_RE = re.compile(r"^\d{2,6}$")
 
 
 def allocate_source_ports(
@@ -231,8 +264,21 @@ class FreeswitchConfigWriter:
         # どちらも None のときは従来動作（sip_bind_ip / sip_domain へフォールバック）。
         internal_bind_ip: str | None = None,
         internal_domain: str | None = None,
+        # 受信 FAX（TIFF）の保存先。FreeSWITCH の rxfax にそのまま渡すため絶対パスにする
+        # （FreeSWITCH コンテナにも同一パスで bind mount する）。
+        fax_dir: Path | str = Path("data/fax"),
+        # FAX 自動検知中の案内音声（issue #123 が core 起動時に配置する同梱 wav）の絶対パス。
+        # FreeSWITCH の playback は相対パスに sound_prefix を前置するため絶対パスで渡す。
+        fax_announce_path: Path | str = Path("data/freeswitch/tts/builtin/fax_receive_notice.wav"),
+        # 1 回の FAX 受信の上限秒数（sched_hangup で強制切断する）。
+        fax_max_duration_sec: int = 1800,
     ) -> None:
         self.output_dir = Path(output_dir)
+        # dialplan の data 属性に埋め込むため、空白・クォート・変数展開記号を含むパスは使わない。
+        # 起動を止めないよう例外にはせず、描画時に FAX extension / 案内を省いて ERROR ログを出す。
+        resolved_fax_dir = _safe_abs_path(fax_dir)
+        if fax_max_duration_sec < 60:
+            fax_max_duration_sec = 60
         safe_prefixes: list[str] = international_allow_prefixes or []
         # 多層防御: __init__ 時点でプレフィックスを検証し、不正値を即座に拒否する
         # （service.py でも検証済みだが、このクラスは公開 API のため直接呼び出し時も保護する）
@@ -254,6 +300,7 @@ class FreeswitchConfigWriter:
             internal_bind_ip if internal_bind_ip is not None else sip_bind_ip
         )
         effective_internal_domain = internal_domain if internal_domain is not None else sip_domain
+        resolved_announce = _safe_abs_path(fax_announce_path)
         self._base = {
             "sip_domain": sip_domain,
             "internal_bind_ip": effective_internal_bind_ip,
@@ -272,6 +319,9 @@ class FreeswitchConfigWriter:
             if sip_trusted_cidrs is not None
             else _default_cidrs,
             "sip_reject_anonymous": sip_reject_anonymous,
+            "fax_dir": resolved_fax_dir,
+            "fax_announce_path": resolved_announce,
+            "fax_max_duration_sec": int(fax_max_duration_sec),
         }
         self._env = Environment(
             loader=PackageLoader("millicall.telephony", "templates"),
@@ -381,15 +431,48 @@ class FreeswitchConfigWriter:
         ring_groups: list["RingGroupConfig"] | None = None,
         ai_agents: list["AiAgentConfig"] | None = None,
         workflows: list["WorkflowConfig"] | None = None,
+        fax_receivers: list["FaxReceiverConfig"] | None = None,
     ) -> dict[str, str]:
         """Render and validate the entire candidate configuration without I/O."""
         trunks = trunks or []
         ring_groups = ring_groups or []
         ai_agents = ai_agents or []
         workflows = workflows or []
+        fax_receivers = fax_receivers or []
+        if fax_receivers and self._base["fax_dir"] is None:
+            logger.error(
+                "FAX 保存先パスに使用できない文字が含まれるため FAX 受信番号を設定から除外します"
+            )
+            fax_receivers = []
         for trunk in trunks:
             if not _SAFE_TRUNK_NAME_RE.fullmatch(trunk.name):
                 raise ValueError("invalid stored trunk name")
+        for fax in fax_receivers:
+            if not _FAX_NUMBER_RE.fullmatch(fax.number):
+                raise ValueError("invalid stored fax receiver number")
+        fax_numbers = {f.number for f in fax_receivers}
+        # FAX 自動検知は切替先が有効な FAX 受信番号のときだけ出力する（参照切れは黙って無効化）。
+        fax_detect: dict[str, tuple[str, int, bool]] = {}
+        for trunk in trunks:
+            if (
+                trunk.fax_detect_enabled
+                and trunk.fax_route_number
+                and trunk.fax_route_number in fax_numbers
+                and _FAX_NUMBER_RE.fullmatch(trunk.fax_route_number)
+                # 着信先がそもそも FAX 受信番号なら検知不要（rxfax 中の CNG で
+                # 自分自身へ再 transfer して受信をやり直すのを防ぐ）。
+                and trunk.inbound_extension not in fax_numbers
+            ):
+                timeout = min(max(int(trunk.fax_detect_timeout_sec), 5), 120)
+                announce = bool(trunk.fax_detect_announce)
+                if announce and self._base["fax_announce_path"] is None:
+                    logger.error(
+                        "FAX 案内音声のパスに使用できない文字が含まれるため案内を省略します"
+                        "（trunk=%s）",
+                        trunk.name,
+                    )
+                    announce = False
+                fax_detect[trunk.name] = (trunk.fax_route_number, timeout, announce)
         source_ports = allocate_source_ports(
             trunks,
             external_sip_port=self._base["external_sip_port"],
@@ -413,9 +496,12 @@ class FreeswitchConfigWriter:
         rendered["dialplan/default.xml"] = self._render(
             "dialplan_default.xml.j2",
             {"outbound_trunk": outbound_trunk, "extensions": extensions,
-             "ring_groups": ring_groups, "ai_agents": ai_agents, "workflows": workflows},
+             "ring_groups": ring_groups, "ai_agents": ai_agents, "workflows": workflows,
+             "fax_receivers": fax_receivers},
         )
-        rendered["dialplan/public.xml"] = self._render("public.xml.j2", {"trunks": trunks})
+        rendered["dialplan/public.xml"] = self._render(
+            "public.xml.j2", {"trunks": trunks, "fax_detect": fax_detect}
+        )
         rendered["autoload_configs/event_socket.conf.xml"] = self._render("event_socket.xml.j2")
         rendered["autoload_configs/acl.conf.xml"] = self._render("acl.conf.xml.j2", {"trunks": trunks})
         for content in rendered.values():
@@ -431,8 +517,11 @@ class FreeswitchConfigWriter:
         ring_groups: list["RingGroupConfig"] | None = None,
         ai_agents: list["AiAgentConfig"] | None = None,
         workflows: list["WorkflowConfig"] | None = None,
+        fax_receivers: list["FaxReceiverConfig"] | None = None,
     ) -> list[Path]:
-        rendered = self.render_all(extensions, trunks, ring_groups, ai_agents, workflows)
+        rendered = self.render_all(
+            extensions, trunks, ring_groups, ai_agents, workflows, fax_receivers
+        )
         # Do not clear the active configuration until every template validates.
         (self.output_dir / "directory" / "default").mkdir(parents=True, exist_ok=True)
         (self.output_dir / "sip_profiles").mkdir(parents=True, exist_ok=True)
