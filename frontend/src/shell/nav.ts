@@ -53,7 +53,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: "/ai-agents",  label: "AI エージェント", icon: React.createElement(Bot,       { size: ICON_SIZE }) },
       { path: "/workflows",  label: "ワークフロー",    icon: React.createElement(GitBranch, { size: ICON_SIZE }) },
       { path: "/contacts",   label: "電話帳",          icon: React.createElement(BookUser,  { size: ICON_SIZE }) },
-      { path: "/faxes",      label: "受信 FAX",        icon: React.createElement(Printer,   { size: ICON_SIZE }) },
+      { path: "/faxes",      label: "FAX",             icon: React.createElement(Printer,   { size: ICON_SIZE }) },
     ],
   },
   {

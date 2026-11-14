@@ -10,6 +10,8 @@
 | `call.inbound` | 外線トランクからの着信チャネル作成時（`CHANNEL_CREATE`、トランクの `external_<name>` プロファイルの inbound レグ） |
 | `call.ended` | 通話終了時（`CHANNEL_HANGUP_COMPLETE`、通話履歴と同じ値）。**1 通話につき 1 回**、呼の代表レグ（A レグ）だけを通知します（下記「call.ended のレグ」）。内線同士の通話も含みます |
 | `fax.received` | FAX 受信処理の完了時（成功・失敗とも。`success` で判別） |
+| `fax.sent` | FAX 送信の成功時（[FAX 送信](fax.md#fax-送信)） |
+| `fax.failed` | FAX 送信の最終失敗時（自動再試行を使い切った・再試行しない理由で失敗した・core 再起動で結果不明になった）。再試行待ちの途中経過では送りません |
 | `webhook.test` | 管理画面の「テスト」ボタン（購読設定に関係なく 1 回だけ送信・再試行なし） |
 
 ## リクエスト
@@ -72,6 +74,17 @@ millicall は次の規則で **A レグ（呼の代表）だけ** を通知し�
         "pages":3,"success":true,"result_text":"OK","received_at":"2026-11-14T01:05:00Z",
         "pdf_url":"https://pbx.example.com/api/faxes/12/pdf"}}
 ```
+
+```json
+{"event":"fax.sent","id":"...","occurred_at":"...",
+ "fax":{"id":7,"direction":"outbound","to":"0312345678","trunk":"Flets02","pages":2,"success":true,
+        "result_text":"OK","error":null,"remote_station_id":"+81 3 1234 5678","attempts":1,
+        "finished_at":"2026-11-14T01:08:00Z",
+        "pdf_url":"https://pbx.example.com/api/faxes/outbox/7/pdf?token=..."}}
+```
+
+`fax.failed` も同じ形で、`success` が `false`、`error` に失敗理由（例: `応答なし（NO_ANSWER）`）が入ります。
+`pdf_url` は送信した元 PDF です。
 
 `pdf_url` は `MILLICALL_MCP_ISSUER_URL`（既定 `http://localhost` 以外を設定している場合）、なければ
 `http://<MILLICALL_SIP_DOMAIN>` を基準に組み立てます。URL には **24 時間有効・その FAX にだけ使える署名付き

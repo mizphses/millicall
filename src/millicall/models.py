@@ -341,6 +341,58 @@ class Fax(Base):
     )
 
 
+class FaxOutbox(Base):
+    """FAX 送信ジョブ（issue #141）。PDF をアップロード → TIFF に変換 → txfax で送信する。
+
+    pdf_path / tiff_path は fax_dir/out 配下の絶対パス（ファイル名はサーバー採番の <id>.pdf/.tif）。
+    status: converting（PDF 変換中）/ queued（送信待ち・再試行待ち）/ sending / sent / failed /
+    cancelled。
+    call_uuid は直近の試行で originate に渡した origination_uuid（結果イベントとの対応付け）。
+    """
+
+    __tablename__ = "fax_outbox"
+    # 削除後に id を再利用しない（PDF ダウンロードトークンの多層防御。受信側と同じ）。
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    to_number: Mapped[str] = mapped_column(String(30), nullable=False)
+    trunk_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tiff_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="queued", server_default="queued", index=True
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3"
+    )
+    # 手動の再送の回数（上限を超えた再送は拒否する）。
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_error: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    result_text: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    remote_station_id: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", server_default=""
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 次に送信してよい時刻（再試行の待ち合わせ。NULL = すぐ送信してよい）。
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    call_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+
 class Webhook(Base):
     """外部システムへのイベント通知先（issue #121）。secret_encrypted は repr/ログに出さない。"""
 
