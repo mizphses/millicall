@@ -721,6 +721,8 @@ export interface paths {
         /**
          * List Send Trunks
          * @description 送信フォームのトランク選択肢（/api/trunks は管理者専用のため、送信者向けに名前だけ返す）。
+         *
+         *     発信に使うトランク（outbound_enabled）だけを返し、既定の発信トランクに is_default を付ける。
          */
         get: operations["list_send_trunks_api_faxes_outbox_trunks_get"];
         put?: never;
