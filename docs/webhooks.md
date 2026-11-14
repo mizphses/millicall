@@ -109,6 +109,80 @@ app.post("/millicall/webhook", express.raw({ type: "application/json" }), (req, 
 });
 ```
 
+## チャットサービスへ通知する
+
+Webhook の **形式** を `Discord` / `Slack` / `Microsoft Teams` にすると、millicall JSON の代わりに各サービスの
+Webhook がそのまま受け付ける本文を送ります（受信サーバーを用意せずにチャンネルへ通知できます）。
+既定の形式は `millicall JSON`（API の `format: "generic"`）で、既存の Webhook はこの形式のままです。
+
+| 形式 | API の `format` | Webhook URL の取得 | 成功とみなす応答 |
+|---|---|---|---|
+| Discord | `discord` | チャンネルの **設定 → 連携サービス → ウェブフック → 新しいウェブフック** で作成し、「ウェブフック URL をコピー」（`https://discord.com/api/webhooks/...`） | `204 No Content` |
+| Slack | `slack` | Slack アプリを作成して **Incoming Webhooks** を有効にし、投稿先チャンネルを選んで URL を発行（`https://hooks.slack.com/services/...`） | `200` |
+| Microsoft Teams | `teams` | Teams の **ワークフロー**（Power Automate）で「Webhook 要求を受信したらチャネルに投稿する」テンプレートからフローを作り、表示される URL をコピー | `200` / `202` |
+
+- 本文はイベントごとに日本語のタイトルと項目（発信元・着信先・トランク、通話時間・切断理由、ページ数・成否など）で
+  構成します。値が空の項目は省きます。各サービスの長さ制限に収まるよう長い値は切り詰めます。
+- 発信者名・番号・結果メッセージなど外部から届く値は、Discord / Slack ではインラインコード、Teams では
+  Markdown 記号のエスケープで表示し、リンクや装飾・メンションとして解釈させません。リンクになるのは
+  millicall が生成した FAX の PDF URL だけです。
+- **チャット形式は署名しません**（`X-Millicall-Signature` を付けません。`X-Millicall-Event` / `X-Millicall-Delivery` は付きます）。
+  Webhook URL を知っていれば誰でもそのチャンネルに投稿できるため、URL は秘密情報として扱ってください。
+  シークレットは画面に表示されず、API で指定しても使われません（`generic` に戻したときに使われます）。
+- Teams は **ワークフロー（Power Automate）を推奨** します。廃止予定の旧 Incoming Webhook コネクタ（Office 365 コネクタ）の
+  URL にも同じ本文（Adaptive Card 添付の `message`）がそのまま通ります。
+- 再試行・配信ログ・送信先の制限（下記「セキュリティ」）は millicall JSON 形式と共通です。「テスト」ボタンも選んだ形式で送ります。
+- **FAX の PDF リンクについて**: チャット通知の PDF リンクは `pdf_url` と同じ **署名付きトークン付き URL** です。
+  チャンネルを閲覧できる人は誰でも、ログインなしで **24 時間** その PDF をダウンロードできます。
+  閲覧できる人を限定したい場合は、チャンネルの閲覧権限で制御するか、リンクをチャットに出さない
+  `millicall JSON` 形式で自前の受信サーバーに送ってください。Slack ではリンクのプレビュー展開
+  （`unfurl_links` / `unfurl_media`）を無効にして送ります。
+
+### Discord の本文例（`fax.received`）
+
+```json
+{"content":"📠 FAX 受信: `0312345678`（3 ページ・成功）",
+ "embeds":[{"title":"📠 FAX 受信","color":2278750,"timestamp":"2026-11-14T01:05:00Z",
+            "footer":{"text":"millicall · fax.received"},
+            "url":"https://pbx.example.com/api/faxes/12/pdf?token=...",
+            "fields":[{"name":"発信元","value":"`0312345678`","inline":true},
+                      {"name":"着信先","value":"`0445895784`","inline":true},
+                      {"name":"ページ数","value":"3 ページ","inline":true},
+                      {"name":"結果","value":"成功","inline":true},
+                      {"name":"PDF","value":"[PDF を開く](https://pbx.example.com/api/faxes/12/pdf?token=...)","inline":false}]}],
+ "allowed_mentions":{"parse":[]}}
+```
+
+### Slack の本文例（`call.ended`）
+
+```json
+{"text":"☎️ 通話終了: `07012345678`（1分0秒）",
+ "blocks":[{"type":"header","text":{"type":"plain_text","text":"☎️ 通話終了","emoji":true}},
+           {"type":"section","fields":[{"type":"mrkdwn","text":"*種別*\n着信"},
+                                       {"type":"mrkdwn","text":"*発信元*\n`07012345678`"},
+                                       {"type":"mrkdwn","text":"*着信先*\n`0445895782`"},
+                                       {"type":"mrkdwn","text":"*トランク*\n`Flets01`"},
+                                       {"type":"mrkdwn","text":"*通話時間*\n1分0秒"},
+                                       {"type":"mrkdwn","text":"*切断理由*\n`NORMAL_CLEARING`"}]},
+           {"type":"context","elements":[{"type":"mrkdwn","text":"millicall · call.ended · <!date^1794618188^{date_num} {time_secs}|2026-11-14T01:03:08Z>"}]}],
+ "unfurl_links":false,"unfurl_media":false}
+```
+
+### Microsoft Teams の本文例（`call.inbound`）
+
+```json
+{"type":"message",
+ "attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","contentUrl":null,
+   "content":{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json","type":"AdaptiveCard","version":"1.4",
+     "body":[{"type":"TextBlock","text":"📞 着信","weight":"Bolder","size":"Medium","wrap":true},
+             {"type":"FactSet","facts":[{"title":"発信元","value":"07012345678"},
+                                        {"title":"着信先","value":"0445895782"},
+                                        {"title":"トランク","value":"Flets01"}]},
+             {"type":"TextBlock","text":"millicall · call.inbound · 2026-11-14T01:02:03Z","size":"Small","isSubtle":true,"wrap":true}]}}]}
+```
+
+`fax.received` で PDF がある場合は `content.actions` に `Action.OpenUrl`（「PDF を開く」）が付きます。
+
 ## セキュリティ
 
 - URL は `http://` / `https://` のみ。`user:pass@` を含む URL は拒否します。
