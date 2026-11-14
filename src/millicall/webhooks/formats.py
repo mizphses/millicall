@@ -6,12 +6,17 @@ Webhook の ``format`` が ``discord`` / ``slack`` / ``teams`` のとき、milli
 
 1. :func:`describe_event` でイベントを形式に依存しない :class:`ChatMessage`（タイトル・
    1 行要約・項目・リンク）にする。値が None / 空の項目は落とす。
+   発信者名・番号・result_text など外部由来の値は形式ごとのエスケーパで無害化する
+   （Discord / Slack はインラインコード、Teams は Markdown 記号のバックスラッシュエスケープ）。
+   リンクにするのはサーバーが生成した pdf_url だけ。
 2. :func:`build_chat_message` が形式ごとの JSON（dict）へ変換する。文字列は各サービスの
    長さ制限に収まるよう切り詰める。
 """
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -82,6 +87,44 @@ def truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: max(limit - 1, 0)] + "…"
 
 
+# 外部由来の値 1 つあたりの上限（エスケープ・囲みで伸びても各サービスの項目上限に収まるように）。
+EXTERNAL_VALUE_MAX = 500
+
+Escaper = Callable[[str], str]
+
+
+def _plain(text: str) -> str:
+    return text
+
+
+def _one_line(text: str) -> str:
+    return truncate(" ".join(text.split()), EXTERNAL_VALUE_MAX)
+
+
+def discord_code(text: str) -> str:
+    """インラインコードで囲む（Markdown・リンク・メンションとして解釈させない）。"""
+    return f"`{_one_line(text.replace('`', "'"))}`"
+
+
+def slack_escape(text: str) -> str:
+    """Slack mrkdwn の制御文字（& < >）をエスケープする（<!channel> 等の注入防止）。"""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def slack_code(text: str) -> str:
+    """& < > をエスケープしてインラインコードで囲む。"""
+    return f"`{slack_escape(_one_line(text.replace('`', "'")))}`"
+
+
+# CommonMark でバックスラッシュエスケープできる ASCII 記号すべて（: や . も含めて自動リンク化を防ぐ）。
+_TEAMS_MARKDOWN = re.compile(r"([!-/:-@\[-`{-~])")
+
+
+def teams_escape(text: str) -> str:
+    """Adaptive Card の Markdown（TextBlock / FactSet）として解釈させないようエスケープする。"""
+    return _TEAMS_MARKDOWN.sub(r"\\\1", _one_line(text))
+
+
 def _text(value: Any) -> str | None:
     if value is None:
         return None
@@ -89,10 +132,9 @@ def _text(value: Any) -> str | None:
     return text or None
 
 
-def _add(fields: list[ChatField], name: str, value: Any, *, inline: bool = True) -> None:
-    text = _text(value)
-    if text is not None:
-        fields.append(ChatField(name, text, inline))
+def _add(fields: list[ChatField], name: str, value: str | None, *, inline: bool = True) -> None:
+    if value:
+        fields.append(ChatField(name, value, inline))
 
 
 def _party(number: Any, name: Any) -> str | None:
@@ -127,32 +169,44 @@ def _dict(data: dict[str, Any], key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def describe_event(event_name: str, data: dict[str, Any]) -> ChatMessage:
-    """Webhook イベントを人が読める日本語の通知内容にする。"""
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def describe_event(event_name: str, data: dict[str, Any], esc: Escaper = _plain) -> ChatMessage:
+    """Webhook イベントを人が読める日本語の通知内容にする。
+
+    esc は外部由来の値（番号・発信者名・トランク名・切断理由・result_text など）に適用する。
+    """
+
+    def ext(value: Any) -> str | None:
+        text = _text(value)
+        return esc(text) if text is not None else None
+
     if event_name == "call.inbound":
         call = _dict(data, "call")
-        caller = _party(call.get("from"), call.get("caller_name")) or "番号非通知"
+        caller = ext(_party(call.get("from"), call.get("caller_name"))) or "番号非通知"
+        to = ext(call.get("to"))
         fields: list[ChatField] = []
         _add(fields, "発信元", caller)
-        _add(fields, "着信先", call.get("to"))
-        _add(fields, "トランク", call.get("trunk"))
-        to = _text(call.get("to"))
+        _add(fields, "着信先", to)
+        _add(fields, "トランク", ext(call.get("trunk")))
         summary = f"📞 着信: {caller}" + (f" → {to}" if to else "")
         return ChatMessage("📞 着信", summary, fields=fields, color=COLOR_INBOUND)
 
     if event_name == "call.ended":
         call = _dict(data, "call")
-        caller = _party(call.get("from"), call.get("caller_name"))
+        caller = ext(_party(call.get("from"), call.get("caller_name")))
         direction = _text(call.get("direction"))
         fields = []
-        _add(fields, "種別", _DIRECTION_LABELS.get(direction or "", direction))
+        _add(fields, "種別", _DIRECTION_LABELS.get(direction or "") or ext(direction))
         _add(fields, "発信元", caller)
-        _add(fields, "着信先", call.get("to"))
-        _add(fields, "トランク", call.get("trunk"))
+        _add(fields, "着信先", ext(call.get("to")))
+        _add(fields, "トランク", ext(call.get("trunk")))
         answered = call.get("answered_at") is not None
         talk = format_duration(call.get("billsec_seconds")) if answered else "未応答"
         _add(fields, "通話時間", talk)
-        _add(fields, "切断理由", call.get("hangup_cause"))
+        _add(fields, "切断理由", ext(call.get("hangup_cause")))
         summary = "☎️ 通話終了"
         if caller:
             summary += f": {caller}"
@@ -163,19 +217,20 @@ def describe_event(event_name: str, data: dict[str, Any]) -> ChatMessage:
     if event_name == "fax.received":
         fax = _dict(data, "fax")
         success = bool(fax.get("success"))
-        pages = fax.get("pages")
+        pages = _int(fax.get("pages"))
+        sender = ext(fax.get("from"))
         fields = []
-        _add(fields, "発信元", fax.get("from"))
-        _add(fields, "着信先", fax.get("to"))
-        _add(fields, "送信元局 ID", fax.get("remote_station_id"))
+        _add(fields, "発信元", sender)
+        _add(fields, "着信先", ext(fax.get("to")))
+        _add(fields, "送信元局 ID", ext(fax.get("remote_station_id")))
         _add(fields, "ページ数", f"{pages} ページ" if pages is not None else None)
         result = "成功" if success else "失敗"
-        detail = _text(fax.get("result_text"))
+        detail = ext(fax.get("result_text"))
         if not success and detail:
             result += f"（{detail}）"
         _add(fields, "結果", result)
+        # リンクにするのはサーバーが生成した署名付き URL だけ。
         pdf_url = _text(fax.get("pdf_url"))
-        sender = _text(fax.get("from"))
         summary = "📠 FAX 受信" + (f": {sender}" if sender else "")
         summary += (
             f"（{pages} ページ・{'成功' if success else '失敗'}）" if pages is not None else ""
@@ -191,7 +246,8 @@ def describe_event(event_name: str, data: dict[str, Any]) -> ChatMessage:
     if event_name == "webhook.test":
         test = _dict(data, "test")
         fields = []
-        _add(fields, "Webhook ID", test.get("webhook_id"))
+        webhook_id = _int(test.get("webhook_id"))
+        _add(fields, "Webhook ID", str(webhook_id) if webhook_id is not None else None)
         return ChatMessage(
             "🔔 Webhook テスト",
             "🔔 millicall Webhook のテスト送信です",
@@ -239,11 +295,6 @@ def _discord(msg: ChatMessage, event_name: str, occurred_at: str) -> dict[str, A
     }
 
 
-def slack_escape(text: str) -> str:
-    """Slack mrkdwn の制御文字（& < >）をエスケープする（<!channel> 等の注入防止）。"""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def _slack_date(occurred_at: str) -> str:
     try:
         epoch = int(datetime.fromisoformat(occurred_at.replace("Z", "+00:00")).timestamp())
@@ -276,7 +327,7 @@ def _slack(msg: ChatMessage, event_name: str, occurred_at: str) -> dict[str, Any
     items = [
         {
             "type": "mrkdwn",
-            "text": truncate(f"*{slack_escape(f.name)}*\n{slack_escape(f.value)}", SLACK_FIELD_MAX),
+            "text": truncate(f"*{slack_escape(f.name)}*\n{f.value}", SLACK_FIELD_MAX),
         }
         for f in msg.fields
     ]
@@ -297,7 +348,13 @@ def _slack(msg: ChatMessage, event_name: str, occurred_at: str) -> dict[str, Any
             ],
         }
     )
-    return {"text": truncate(slack_escape(msg.summary), SLACK_TEXT_MAX), "blocks": blocks}
+    return {
+        "text": truncate(msg.summary, SLACK_TEXT_MAX),
+        "blocks": blocks,
+        # 署名付き PDF URL を Slack 側に取得・展開させない。
+        "unfurl_links": False,
+        "unfurl_media": False,
+    }
 
 
 def _teams(msg: ChatMessage, event_name: str, occurred_at: str) -> dict[str, Any]:
@@ -356,6 +413,11 @@ def _teams(msg: ChatMessage, event_name: str, occurred_at: str) -> dict[str, Any
 
 
 _BUILDERS = {FORMAT_DISCORD: _discord, FORMAT_SLACK: _slack, FORMAT_TEAMS: _teams}
+_ESCAPERS: dict[str, Escaper] = {
+    FORMAT_DISCORD: discord_code,
+    FORMAT_SLACK: slack_code,
+    FORMAT_TEAMS: teams_escape,
+}
 
 
 def build_chat_message(
@@ -368,4 +430,4 @@ def build_chat_message(
     builder = _BUILDERS.get(fmt)
     if builder is None:
         raise ValueError(f"チャット形式ではありません: {fmt}")
-    return builder(describe_event(event_name, data), event_name, occurred_at)
+    return builder(describe_event(event_name, data, _ESCAPERS[fmt]), event_name, occurred_at)

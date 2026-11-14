@@ -513,10 +513,11 @@ def test_discord_body_structure():
     assert embed["title"] == "📞 着信"
     assert embed["timestamp"] == _OCCURRED
     assert isinstance(embed["color"], int)
+    # 外部由来の値はインラインコードで囲む
     assert {f["name"]: f["value"] for f in embed["fields"]} == {
-        "発信元": "0701234567（TARO）",
-        "着信先": "0445895782",
-        "トランク": "Flets01",
+        "発信元": "`0701234567（TARO）`",
+        "着信先": "`0445895782`",
+        "トランク": "`Flets01`",
     }
     assert all(set(f) == {"name", "value", "inline"} for f in embed["fields"])
 
@@ -534,7 +535,7 @@ def test_discord_fax_pdf_link_present_only_with_url():
     assert "url" not in embed
     values = {f["name"]: f["value"] for f in embed["fields"]}
     assert "PDF" not in values
-    assert values["結果"] == "失敗（通信エラー）"
+    assert values["結果"] == "失敗（`通信エラー`）"
 
 
 def test_discord_truncates_long_values():
@@ -555,7 +556,10 @@ def test_slack_body_structure():
     assert blocks[-1]["type"] == "context"
     fields = next(b["fields"] for b in blocks if "fields" in b)
     assert {"type": "mrkdwn", "text": "*通話時間*\n1分5秒"} in fields
-    assert {"type": "mrkdwn", "text": "*切断理由*\nNORMAL_CLEARING"} in fields
+    assert {"type": "mrkdwn", "text": "*切断理由*\n`NORMAL_CLEARING`"} in fields
+    # 署名付き PDF URL などを Slack 側で展開させない
+    assert body["unfurl_links"] is False
+    assert body["unfurl_media"] is False
 
 
 def test_slack_fax_link_and_escaping():
@@ -596,6 +600,64 @@ def test_teams_body_structure():
     assert "actions" not in body["attachments"][0]["content"]
 
 
+_EVIL_NAME = "[x](https://evil.example) *bold* `tick` <!channel>"
+
+
+def _evil_inbound():
+    return {"call": {**_INBOUND["call"], "caller_name": _EVIL_NAME}}
+
+
+def test_discord_external_values_are_not_markdown():
+    body = build_chat_message("discord", "call.inbound", _evil_inbound(), _OCCURRED)
+    caller = body["embeds"][0]["fields"][0]["value"]
+    # 全体が 1 つのインラインコード（値中のバッククォートは置換）なのでリンク・装飾にならない
+    assert caller.startswith("`") and caller.endswith("`")
+    assert caller.count("`") == 2
+    assert "[x](https://evil.example) *bold* 'tick'" in caller
+    content = body["content"]
+    assert content.count("`") % 2 == 0
+    assert "`0701234567（[x](https://evil.example)" in content
+    # content に URL を出さない（Discord の自動埋め込み防止）。PDF は embed.url / 項目のリンクのみ
+    fax_body = build_chat_message("discord", "fax.received", _fax(), _OCCURRED)
+    assert "http" not in fax_body["content"]
+
+
+def test_slack_external_values_are_not_markdown():
+    body = build_chat_message("slack", "call.inbound", _evil_inbound(), _OCCURRED)
+    fields = next(b["fields"] for b in body["blocks"] if "fields" in b)
+    caller = fields[0]["text"].split("\n", 1)[1]
+    assert caller.startswith("`") and caller.endswith("`")
+    assert caller.count("`") == 2
+    assert "<" not in caller and ">" not in caller
+    assert "&lt;!channel&gt;" in caller
+    assert body["text"].count("`") % 2 == 0
+    assert "<!channel>" not in body["text"]
+
+
+def test_teams_external_values_are_escaped():
+    body = build_chat_message("teams", "call.inbound", _evil_inbound(), _OCCURRED)
+    card = body["attachments"][0]["content"]
+    facts = next(b["facts"] for b in card["body"] if b["type"] == "FactSet")
+    caller = facts[0]["value"]
+    for raw in ("[x]", "(https://", "*bold*", "`tick`", "<!channel>"):
+        assert raw not in caller
+    assert r"\[x\]\(https\:\/\/evil\.example\) \*bold\* \`tick\` \<\!channel\>" in caller
+    # リンクになるのはサーバー生成の pdf_url（Action.OpenUrl）だけ
+    assert "actions" not in card
+
+
+@pytest.mark.parametrize("fmt", CHAT_FORMATS)
+def test_external_result_text_is_escaped(fmt):
+    data = _fax(None, False)
+    data["fax"]["result_text"] = "[click](https://evil.example)"
+    body = build_chat_message(fmt, "fax.received", data, _OCCURRED)
+    dumped = json.dumps(body, ensure_ascii=False)
+    if fmt == "teams":
+        assert "[click](https://evil.example)" not in dumped
+    else:
+        assert "（`[click](https://evil.example)`）" in dumped
+
+
 @pytest.mark.parametrize("fmt", CHAT_FORMATS)
 def test_webhook_test_message_for_each_format(fmt):
     body = build_chat_message(fmt, "webhook.test", _TEST, _OCCURRED)
@@ -604,7 +666,7 @@ def test_webhook_test_message_for_each_format(fmt):
 
 _FORMAT_ROOT_KEYS = {
     "discord": {"content", "embeds", "allowed_mentions"},
-    "slack": {"text", "blocks"},
+    "slack": {"text", "blocks", "unfurl_links", "unfurl_media"},
     "teams": {"type", "attachments"},
 }
 
