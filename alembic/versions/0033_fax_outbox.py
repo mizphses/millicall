@@ -3,7 +3,8 @@
 管理画面からアップロードした PDF を TIFF に変換し、外線トランク経由で txfax 送信する。
 
   - fax_outbox : 送信ジョブ（宛先・トランク・PDF/TIFF の保存先・状態・試行回数・結果）
-    status は queued / sending / sent / failed / cancelled。
+    status は converting / queued / sending / sent / failed / cancelled。
+    retry_count は手動の再送の回数（上限超過の再送は拒否する）。
     next_attempt_at は再試行の待ち合わせ時刻（NULL = すぐ送信してよい）。
 
 Revision ID: 0033
@@ -34,6 +35,7 @@ def upgrade() -> None:
         sa.Column("status", sa.String(20), nullable=False, server_default="queued"),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("max_attempts", sa.Integer(), nullable=False, server_default="3"),
+        sa.Column("retry_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("last_error", sa.String(255), nullable=False, server_default=""),
         sa.Column("result_text", sa.String(255), nullable=False, server_default=""),
         sa.Column("remote_station_id", sa.String(100), nullable=False, server_default=""),

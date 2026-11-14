@@ -345,7 +345,8 @@ class FaxOutbox(Base):
     """FAX 送信ジョブ（issue #141）。PDF をアップロード → TIFF に変換 → txfax で送信する。
 
     pdf_path / tiff_path は fax_dir/out 配下の絶対パス（ファイル名はサーバー採番の <id>.pdf/.tif）。
-    status: queued（送信待ち・再試行待ち）/ sending / sent / failed / cancelled。
+    status: converting（PDF 変換中）/ queued（送信待ち・再試行待ち）/ sending / sent / failed /
+    cancelled。
     call_uuid は直近の試行で originate に渡した origination_uuid（結果イベントとの対応付け）。
     """
 
@@ -365,6 +366,10 @@ class FaxOutbox(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     max_attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, default=3, server_default="3"
+    )
+    # 手動の再送の回数（上限を超えた再送は拒否する）。
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
     last_error: Mapped[str] = mapped_column(
         String(255), nullable=False, default="", server_default=""

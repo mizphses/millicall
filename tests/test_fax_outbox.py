@@ -1,7 +1,9 @@
 """FAX 送信（issue #141）: PDF→TIFF 変換・originate 文字列・結果反映・再試行・API・Webhook。"""
 
+import asyncio
 import io
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -23,6 +25,7 @@ from millicall.fax.outbox import (
     FaxOutboxService,
     FaxSendError,
     build_originate,
+    is_domestic_fax_number,
     issue_outbox_pdf_token,
     verify_outbox_pdf_token,
 )
@@ -279,6 +282,14 @@ async def _job(app, job_id: int) -> FaxOutbox:
         return await s.get(FaxOutbox, job_id)
 
 
+async def _submit(app, svc, **kw) -> FaxOutbox:
+    """登録して、バックグラウンドの変換が終わった状態のジョブを返す。"""
+    job = await svc.submit(**kw)
+    assert job.status == "converting"
+    await svc.drain()
+    return await _job(app, job.id)
+
+
 def _hangup(call_uuid: str, **kw) -> dict[str, str]:
     ev = {"Event-Name": "CHANNEL_HANGUP_COMPLETE", "Unique-ID": call_uuid}
     ev.update(kw)
@@ -287,7 +298,7 @@ def _hangup(call_uuid: str, **kw) -> dict[str, str]:
 
 async def test_submit_converts_and_stores_with_server_names(app, outbox):
     svc, _esl, _disp, _clock = outbox
-    job = await svc.submit(
+    job = await _submit(app, svc,
         data=_pdf_bytes([(595, 842), (595, 842)]), to_number="0312345678", trunk_name=None,
         user_id=None,
     )
@@ -326,7 +337,7 @@ async def test_submit_rejects_disabled_trunk_and_low_disk(app, outbox):
 
 async def test_send_success_updates_job_and_fires_webhook(app, outbox):
     svc, esl, disp, _clock = outbox
-    job = await svc.submit(
+    job = await _submit(app, svc,
         data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
     )
     await svc.tick()
@@ -376,7 +387,7 @@ async def test_send_success_updates_job_and_fires_webhook(app, outbox):
 
 async def test_retry_schedule_then_final_failure(app, outbox):
     svc, esl, disp, clock = outbox
-    job = await svc.submit(
+    job = await _submit(app, svc,
         data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
     )
     # 1 回目: 話中 → 1 分後に再試行
@@ -424,7 +435,7 @@ async def test_retry_schedule_then_final_failure(app, outbox):
 
 async def test_non_retriable_cause_fails_immediately(app, outbox):
     svc, _esl, disp, _clock = outbox
-    job = await svc.submit(
+    job = await _submit(app, svc,
         data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
     )
     await svc.tick()
@@ -439,7 +450,7 @@ async def test_non_retriable_cause_fails_immediately(app, outbox):
 async def test_bgapi_failure_is_retried(app, outbox):
     svc, esl, _disp, clock = outbox
     esl.fail_bgapi = True
-    job = await svc.submit(
+    job = await _submit(app, svc,
         data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
     )
     await svc.tick()
@@ -450,7 +461,7 @@ async def test_bgapi_failure_is_retried(app, outbox):
 
 async def test_watchdog_fails_attempt_when_call_vanishes(app, outbox):
     svc, esl, _disp, clock = outbox
-    job = await svc.submit(
+    job = await _submit(app, svc,
         data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
     )
     await svc.tick()
@@ -465,14 +476,16 @@ async def test_watchdog_fails_attempt_when_call_vanishes(app, outbox):
     clock.advance(10)
     await svc.tick()
     j2 = await _job(app, job.id)
-    assert j2.status == "queued" and "結果を受け取れません" in j2.last_error
+    # 結果不明は二重送信を避けるため自動では再送しない
+    assert j2.status == "failed" and "結果を受け取れません" in j2.last_error
+    assert j2.attempts == 1
     # 反映済みの試行に遅れて届いた結果は無視される
     assert await svc.process_result(_hangup(j.call_uuid, variable_fax_success="1")) is None
 
 
 async def test_watchdog_kills_overlong_send(app, outbox):
     svc, esl, _disp, clock = outbox
-    job = await svc.submit(
+    job = await _submit(app, svc,
         data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
     )
     await svc.tick()
@@ -481,14 +494,14 @@ async def test_watchdog_kills_overlong_send(app, outbox):
     clock.advance(60 + 30 + 1800 + 60)
     await svc.tick()
     assert f"uuid_kill {j.call_uuid}" in esl.api_calls
-    assert (await _job(app, job.id)).status == "queued"
+    assert (await _job(app, job.id)).status == "failed"
 
 
 async def test_concurrency_limit(app, outbox):
     svc, esl, _disp, _clock = outbox
     for _ in range(2):
-        await svc.submit(
-            data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
+        await _submit(
+            app, svc, data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
         )
     await svc.tick()
     await svc.tick()
@@ -497,7 +510,7 @@ async def test_concurrency_limit(app, outbox):
 
 async def test_start_fails_when_trunk_disabled(app, outbox):
     svc, esl, disp, _clock = outbox
-    job = await svc.submit(
+    job = await _submit(app, svc,
         data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
     )
     async with app.state.sessionmaker() as s:
@@ -537,10 +550,10 @@ async def test_recover_on_startup(app, outbox):
 
 async def test_cleanup_removes_old_finished_jobs(app, outbox):
     svc, *_ = outbox
-    job = await svc.submit(
+    job = await _submit(app, svc,
         data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
     )
-    queued = await svc.submit(
+    queued = await _submit(app, svc,
         data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
     )
     async with app.state.sessionmaker() as s:
@@ -615,11 +628,17 @@ async def test_api_send_list_get_cancel_retry(auth_client, api_ready):
     )
     assert r.status_code == 202, r.text
     job = r.json()
-    assert job["status"] == "queued" and job["pages"] == 1 and job["trunk_name"] == "Flets02"
+    # 変換はバックグラウンド（アップロード要求は変換を待たない）
+    assert job["status"] == "converting" and job["trunk_name"] == "Flets02"
     assert job["has_pdf"] is True
-    # ファイル名はサーバー採番（アップロード名は使わない）
+    await app.state.fax_outbox_service.drain()
+    job = (await auth_client.get(f"/api/faxes/outbox/{job['id']}")).json()
+    assert job["status"] == "queued" and job["pages"] == 1
+    # ファイル名はサーバー採番（アップロード名は使わない）。元 PDF は 0600、TIFF は 0644
     out = app.state.settings.fax_dir / "out"
     assert sorted(p.name for p in out.iterdir()) == [f"{job['id']}.pdf", f"{job['id']}.tif"]
+    assert (out / f"{job['id']}.pdf").stat().st_mode & 0o777 == 0o600
+    assert (out / f"{job['id']}.tif").stat().st_mode & 0o777 == 0o644
 
     lst = (await auth_client.get("/api/faxes/outbox")).json()
     assert lst["total"] == 1 and lst["items"][0]["id"] == job["id"]
@@ -637,8 +656,10 @@ async def test_api_send_list_get_cancel_retry(auth_client, api_ready):
     r = await auth_client.post(f"/api/faxes/outbox/{job['id']}/cancel")
     assert r.status_code == 200 and r.json()["status"] == "cancelled"
     assert (await auth_client.post(f"/api/faxes/outbox/{job['id']}/cancel")).status_code == 409
+    assert (await auth_client.get(f"/api/faxes/outbox/{job['id']}")).json()["can_retry"] is True
     r = await auth_client.post(f"/api/faxes/outbox/{job['id']}/retry")
     assert r.status_code == 200 and r.json()["status"] == "queued" and r.json()["attempts"] == 0
+    assert r.json()["retry_count"] == 1
 
     async with app.state.sessionmaker() as s:
         logs = (
@@ -647,13 +668,16 @@ async def test_api_send_list_get_cancel_retry(auth_client, api_ready):
     actions = [log.action for log in logs]
     assert actions == ["fax.send", "fax.cancel", "fax.retry"]
     detail = json.loads(logs[0].detail)
-    assert detail == {"to": "0312345678", "trunk": "Flets02", "pages": 1}
+    # 登録時点のページ数は 0（変換は非同期）。番号・トランクを記録する
+    assert detail["to"] == "0312345678" and detail["trunk"] == "Flets02"
 
 
 async def test_api_validation(auth_client, api_ready, monkeypatch):
     post = auth_client.post
-    r = await post("/api/faxes/outbox", files=_upload(), data={"to_number": "010441234567"})
-    assert r.status_code == 422
+    # 国際番号（010 / 00x）は国内番号の形式でも拒否する
+    for number in ("010441234567", "01068212345", "00168212345", "0033123456"):
+        r = await post("/api/faxes/outbox", files=_upload(), data={"to_number": number})
+        assert r.status_code == 422, number
     r = await post("/api/faxes/outbox", files=_upload(b"PK\x03\x04"), data={"to_number": "0312345678"})
     assert r.status_code == 415
     r = await post(
@@ -675,14 +699,28 @@ async def test_api_validation(auth_client, api_ready, monkeypatch):
     r = await post("/api/faxes/outbox", files=_upload(), data={"to_number": "0312345678"})
     assert r.status_code == 413
     monkeypatch.undo()
+    assert (await auth_client.get("/api/faxes/outbox")).json()["total"] == 0
+    # ページ数の上限超過は変換時に判明する → ジョブは failed（理由つき）
     monkeypatch.setattr("millicall.fax.outbox.FAX_MAX_PAGES", 1)
     r = await post(
         "/api/faxes/outbox",
         files=_upload(_pdf_bytes([(595, 842)] * 2)),
         data={"to_number": "0312345678"},
     )
-    assert r.status_code == 422 and "ページ数" in r.json()["detail"]
-    assert (await auth_client.get("/api/faxes/outbox")).json()["total"] == 0
+    assert r.status_code == 202
+    await api_ready.state.fax_outbox_service.drain()
+    job = (await auth_client.get(f"/api/faxes/outbox/{r.json()['id']}")).json()
+    assert job["status"] == "failed" and "ページ数" in job["last_error"]
+    assert job["can_retry"] is False  # TIFF が無いので再送不可
+
+    # 拒否した登録は監査ログに残る（番号と理由。ファイル内容は残さない）
+    async with api_ready.state.sessionmaker() as s:
+        rejected = (
+            await s.scalars(select(AuditLog).where(AuditLog.action == "fax.send_rejected"))
+        ).all()
+    reasons = [json.loads(log.detail) for log in rejected]
+    assert {d["status"] for d in reasons} >= {413, 415, 422}
+    assert any(d["to"] == "01068212345" and d["status"] == 422 for d in reasons)
 
 
 async def test_api_permissions(client, user_factory, api_ready):
@@ -710,6 +748,12 @@ async def test_api_permissions(client, user_factory, api_ready):
     assert (await client.post(f"/api/faxes/outbox/{other_id}/retry")).status_code == 404
     assert (await client.get(f"/api/faxes/outbox/{other_id}/pdf")).status_code == 404
     assert (await client.get(f"/api/faxes/outbox/{mine}/pdf")).status_code == 200
+    # 一般ユーザーは /api/trunks を使えないため、送信用の軽いトランク一覧を使う
+    assert (await client.get("/api/trunks")).status_code == 403
+    trunks = (await client.get("/api/faxes/outbox/trunks")).json()
+    assert trunks == [
+        {"name": "Flets02", "display_name": "Flets02", "trunk_type": "hgw", "is_default": True}
+    ]
 
 
 async def test_api_pdf_with_signed_token(client, user_factory, api_ready):
@@ -734,3 +778,185 @@ async def test_api_pdf_with_signed_token(client, user_factory, api_ready):
     missing = await client.get("/api/faxes/outbox/999/pdf", params={"token": token})
     assert missing.status_code == 403
     assert (await client.get(f"/api/faxes/outbox/{job['id']}/pdf")).status_code == 401
+    # トークンでの取得は監査ログに残る
+    async with app.state.sessionmaker() as s:
+        logs = (
+            await s.scalars(select(AuditLog).where(AuditLog.action == "fax.pdf_download"))
+        ).all()
+    assert len(logs) == 1 and logs[0].actor_label == "token"
+    assert logs[0].target_id == str(job["id"])
+
+
+async def test_api_retry_is_limited(auth_client, api_ready):
+    app = api_ready
+    job = (
+        await auth_client.post(
+            "/api/faxes/outbox", files=_upload(), data={"to_number": "0312345678"}
+        )
+    ).json()
+    await app.state.fax_outbox_service.drain()
+    for _ in range(3):
+        async with app.state.sessionmaker() as s:
+            row = await s.get(FaxOutbox, job["id"])
+            row.status = "failed"
+            await s.commit()
+        assert (await auth_client.post(f"/api/faxes/outbox/{job['id']}/retry")).status_code == 200
+    async with app.state.sessionmaker() as s:
+        row = await s.get(FaxOutbox, job["id"])
+        row.status = "failed"
+        await s.commit()
+    one = (await auth_client.get(f"/api/faxes/outbox/{job['id']}")).json()
+    assert one["retry_count"] == 3 and one["can_retry"] is False
+    r = await auth_client.post(f"/api/faxes/outbox/{job['id']}/retry")
+    assert r.status_code == 409 and "3 回まで" in r.json()["detail"]
+
+
+async def test_api_cancel_while_converting(auth_client, api_ready):
+    app = api_ready
+    job = (
+        await auth_client.post(
+            "/api/faxes/outbox", files=_upload(), data={"to_number": "0312345678"}
+        )
+    ).json()
+    r = await auth_client.post(f"/api/faxes/outbox/{job['id']}/cancel")
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    await app.state.fax_outbox_service.drain()
+    # 変換完了後も取消のまま。TIFF は記録され、再送できる
+    one = (await auth_client.get(f"/api/faxes/outbox/{job['id']}")).json()
+    assert one["status"] == "cancelled" and one["pages"] == 1 and one["can_retry"] is True
+
+
+async def test_upload_slot_limits_concurrency(app, outbox):
+    svc, *_ = outbox
+    async with svc.upload_slot(), svc.upload_slot():
+        with pytest.raises(FaxSendError) as exc:
+            async with svc.upload_slot():
+                pass
+        assert exc.value.http_status == 429
+    async with svc.upload_slot():
+        pass
+
+
+@pytest.mark.parametrize(
+    "number,ok",
+    [
+        ("0312345678", True),
+        ("09012345678", True),
+        ("0120123456", True),
+        ("01068212345", False),  # 010 = 国際
+        ("00168212345", False),  # 00x = 国際
+        ("0033123456", False),
+        ("1840312345678", False),
+        ("031234567", False),
+    ],
+)
+def test_domestic_number_policy(number, ok):
+    assert is_domestic_fax_number(number) is ok
+    kw = dict(
+        call_uuid="abcdefgh-1", trunk_name="t", to_number=number, caller_id="",
+        tiff_path="/x/1.tif", job_id=1,
+    )
+    if ok:
+        assert build_originate(**kw).endswith(f"/{number} &txfax(/x/1.tif)")
+    else:
+        with pytest.raises(ValueError):
+            build_originate(**kw)
+
+
+async def test_submit_rejects_international_number(app, outbox):
+    svc, *_ = outbox
+    with pytest.raises(FaxSendError, match="国際番号"):
+        await svc.submit(
+            data=_pdf_bytes(), to_number="01068212345", trunk_name=None, user_id=None
+        )
+
+
+async def test_cancel_and_start_do_not_race(app, outbox):
+    """取消と発信開始を同時に走らせても「取消なのに発信」「発信したのに取消」にならない。"""
+    svc, esl, _disp, _clock = outbox
+    for order in ("start_first", "cancel_first"):
+        esl.bgapi_calls.clear()
+        job = await _submit(
+            app, svc, data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02",
+            user_id=None,
+        )
+        if order == "start_first":
+            _, cancelled = await asyncio.gather(svc._start(job.id), svc.cancel(job.id))
+        else:
+            cancelled, _ = await asyncio.gather(svc.cancel(job.id), svc._start(job.id))
+        row = await _job(app, job.id)
+        if cancelled:
+            assert row.status == "cancelled" and esl.bgapi_calls == []
+        else:
+            assert row.status == "sending" and len(esl.bgapi_calls) == 1
+        # 次のジョブのために送信中を片付ける
+        async with app.state.sessionmaker() as s:
+            r = await s.get(FaxOutbox, job.id)
+            r.status = "failed"
+            await s.commit()
+
+
+async def test_start_after_cancel_is_noop(app, outbox):
+    svc, esl, _disp, _clock = outbox
+    job = await _submit(
+        app, svc, data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
+    )
+    assert await svc.cancel(job.id) is True
+    await svc._start(job.id)
+    assert esl.bgapi_calls == [] and (await _job(app, job.id)).status == "cancelled"
+    assert await svc.cancel(job.id) is False
+
+
+async def test_recover_restarts_conversion(app, outbox):
+    svc, *_ = outbox
+    out = app.state.settings.fax_dir / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    async with app.state.sessionmaker() as s:
+        job = FaxOutbox(to_number="0312345678", trunk_name="Flets02", status="converting")
+        s.add(job)
+        await s.flush()
+        pdf = out / f"{job.id}.pdf"
+        pdf.write_bytes(_pdf_bytes())
+        job.pdf_path = str(pdf.resolve())
+        await s.commit()
+        job_id = job.id
+    await svc.recover()
+    await svc.drain()
+    row = await _job(app, job_id)
+    assert row.status == "queued" and row.pages == 1
+
+
+async def test_sweep_work_files(app, outbox):
+    svc, *_ = outbox
+    out = app.state.settings.fax_dir / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    for name in (".faxout-abc.tif.tmp", ".upload-x.pdf", "7.pdf"):
+        (out / name).write_bytes(b"x")
+    # 日次の掃除は新しい作業ファイル（変換中かもしれない）を消さない
+    assert svc.sweep_work_files(older_than=timedelta(days=1)) == 0
+    old = datetime.now().timestamp() - 2 * 24 * 3600
+    os.utime(out / ".faxout-abc.tif.tmp", (old, old))
+    assert svc.sweep_work_files(older_than=timedelta(days=1)) == 1
+    # 起動時（start）はすべて消す
+    await svc.start()
+    await svc.stop()
+    assert sorted(p.name for p in out.iterdir()) == ["7.pdf"]
+
+
+async def test_convert_cancel_kills_child_and_cleans_up(tmp_path):
+    pdf = tmp_path / "a.pdf"
+    pdf.write_bytes(_pdf_bytes([(595, 842)] * 5))
+    task = asyncio.create_task(convert_pdf_to_tiff(pdf, tmp_path / "a.tif", max_pages=10))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.pdf"]
+
+
+def test_child_env_drops_secrets(monkeypatch):
+    monkeypatch.setenv("MILLICALL_MASTER_KEY", "secret")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = convert_mod._child_env()
+    assert "MILLICALL_MASTER_KEY" not in env
+    assert env["PATH"] == "/usr/bin" and env["HOME"] == "/nonexistent"

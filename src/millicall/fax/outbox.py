@@ -9,11 +9,15 @@
 を発行する。結果は CHANNEL_HANGUP_COMPLETE のチャネル変数（variable_fax_success 等）から
 origination_uuid で対応付けて反映し、``fax.sent`` / ``fax.failed`` Webhook を発火する。
 
+- アップロード時は converting のジョブを作ってすぐ応答し、変換はバックグラウンドで行う
+  （Cloudflare Tunnel 等の 100 秒タイムアウトで切られて二重登録されるのを防ぐ）。
 - 失敗（話中・無応答・送信中のエラー等）は 1 分・5 分の間隔で最大 3 回まで再試行する。
 - 結果イベントが届かない（発信自体が失敗した、イベント接続が切れていた）場合はワーカーの
-  見張りが ``uuid_exists`` で通話の有無を確かめ、通話が無ければ失敗として扱う。
-- core 再起動時に sending のまま残ったジョブは、通話が続いていれば見張りを再開し、
-  無ければ「結果不明」で失敗に落とす（重複送信を避けるため自動では再送しない）。
+  見張りが ``uuid_exists`` で通話の有無を確かめ、通話が無ければ「結果不明」の失敗にする。
+  txfax が成功していた可能性があるため **自動では再送しない**（手動の再送のみ）。
+- core 再起動時に sending のまま残ったジョブも同様（通話が続いていれば見張りを再開）。
+- 状態遷移は条件付き UPDATE（status を WHERE に含める）で行い、取消と発信開始の競合で
+  後勝ちにならないようにする。
 - HGW（ひかり電話）は T.38 非対応のため G.711（PCMU）パススルーのみで送る。
 """
 
@@ -32,9 +36,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
-from millicall.fax.convert import convert_pdf_to_tiff, looks_like_pdf
+from millicall.fax.convert import (
+    WORK_FILE_PREFIX,
+    FaxConvertError,
+    convert_pdf_to_tiff,
+    looks_like_pdf,
+)
 from millicall.fax.service import FAX_MAX_PAGES, FAX_MIN_FREE_BYTES, resolve_inside
 from millicall.models import FaxOutbox, Trunk
 from millicall.webhooks.dispatcher import EVENT_FAX_FAILED, EVENT_FAX_SENT, utc_iso
@@ -49,6 +58,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("millicall.fax.outbox")
 
+STATUS_CONVERTING = "converting"
 STATUS_QUEUED = "queued"
 STATUS_SENDING = "sending"
 STATUS_SENT = "sent"
@@ -57,7 +67,10 @@ STATUS_CANCELLED = "cancelled"
 FINAL_STATUSES = (STATUS_SENT, STATUS_FAILED, STATUS_CANCELLED)
 
 # 宛先は国内の一般番号に限る（国際発信・特番・184/186 前置は不可）。
-FAX_TO_NUMBER_RE = re.compile(r"^0\d{9,10}$")
+# originate は dialplan の outbound_intl_block を通らないため、ここで国際番号を必ず拒否する。
+FAX_TO_NUMBER_RE = re.compile(r"^0[1-9]\d{8,9}$")
+# 国際番号（mcp_server/outbound.py の _INTL_RE・dialplan の outbound_intl_block と同じ分類）。
+_INTL_RE = re.compile(r"^(010\d+|00[1-9]\d+)$")
 # originate に補間する値の形式（多層防御。fsconfig の _SAFE_TRUNK_NAME_RE と同じ）。
 _TRUNK_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
 _CALLER_ID_RE = re.compile(r"^\+?[0-9]{1,30}$")
@@ -75,6 +88,12 @@ _WATCHDOG_GRACE_SECONDS = 30
 _MISSING_CONFIRM_SECONDS = 10
 # 同時に走らせる PDF 変換の数（アップロード連打による CPU 枯渇対策）。
 _CONVERT_CONCURRENCY = 2
+# 同時に受け付けるアップロード要求の数（超過は 429）。
+UPLOAD_CONCURRENCY = 2
+# 変換待ち・変換中（converting）のジョブ数の上限（超過は 429）。
+MAX_PENDING_CONVERSIONS = 10
+# 手動の再送の上限（ジョブごと。超過は 409）。
+MAX_MANUAL_RETRIES = 3
 
 # 再試行する切断理由（相手側の一時的な状態・回線混雑など）。
 RETRIABLE_CAUSES = frozenset(
@@ -136,6 +155,11 @@ def _free_bytes(path: Path) -> int:
     return shutil.disk_usage(path).free
 
 
+def is_domestic_fax_number(number: str) -> bool:
+    """送信してよい宛先か（0 から始まる 10〜11 桁の国内番号。国際番号は不可）。"""
+    return bool(FAX_TO_NUMBER_RE.fullmatch(number)) and not _INTL_RE.match(number)
+
+
 def cause_label(cause: str) -> str:
     label = _CAUSE_LABELS.get(cause)
     return f"{label}（{cause}）" if label else cause
@@ -155,7 +179,7 @@ def build_originate(
         raise ValueError("invalid call uuid")
     if not _TRUNK_NAME_RE.fullmatch(trunk_name):
         raise ValueError("invalid trunk name")
-    if not FAX_TO_NUMBER_RE.fullmatch(to_number):
+    if not is_domestic_fax_number(to_number):
         raise ValueError("invalid fax number")
     if caller_id and not _CALLER_ID_RE.fullmatch(caller_id):
         raise ValueError("invalid caller id")
@@ -169,6 +193,8 @@ def build_originate(
         ]
     variables += [
         # HGW（ひかり電話）は PCMU のみ・T.38 非対応。G.711 パススルーで送る。
+        # sip トランク（050 事業者等）も T.38 の対応が不確かで、FAX のモデム信号は
+        # G.711 μ-law が最も無難なため、トランク種別によらず PCMU に固定する。
         "absolute_codec_string=PCMU",
         "fax_enable_t38=false",
         "fax_verbose=false",
@@ -199,7 +225,8 @@ async def resolve_send_trunk(session: AsyncSession, trunk_name: str | None) -> T
     if trunk_name:
         match = next((t for t in rows if t.name == trunk_name), None)
         if match is None:
-            raise FaxSendError(f"トランク {trunk_name} が見つからないか無効です")
+            # 入力値はエラー文に含めない。
+            raise FaxSendError("指定したトランクが見つからないか無効です")
         return match
     if not rows:
         raise FaxSendError("送信に使える外線トランクがありません")
@@ -247,6 +274,7 @@ class FaxOutboxService:
         self._tasks: set[asyncio.Task] = set()
         self._wake = asyncio.Event()
         self._worker: asyncio.Task | None = None
+        self._uploads = 0
 
     # ------------------------------------------------------------------ パス
 
@@ -264,6 +292,20 @@ class FaxOutboxService:
 
     # ------------------------------------------------------------------ 登録
 
+    @contextlib.asynccontextmanager
+    async def upload_slot(self):
+        """アップロード要求の同時実行数を制限する（超過は FaxSendError(429)）。"""
+        if self._uploads >= UPLOAD_CONCURRENCY:
+            raise FaxSendError(
+                "FAX のアップロードが混み合っています。しばらくしてからやり直してください",
+                http_status=429,
+            )
+        self._uploads += 1
+        try:
+            yield
+        finally:
+            self._uploads -= 1
+
     async def submit(
         self,
         *,
@@ -272,16 +314,31 @@ class FaxOutboxService:
         trunk_name: str | None,
         user_id: int | None,
     ) -> FaxOutbox:
-        """PDF を検証・変換して送信ジョブを登録する（失敗は FaxSendError）。"""
-        if not FAX_TO_NUMBER_RE.fullmatch(to_number):
-            raise FaxSendError("宛先は 0 から始まる 10〜11 桁の国内番号で指定してください")
+        """PDF を検証して converting のジョブを登録し、変換をバックグラウンドで始める。
+
+        変換の失敗（壊れた PDF・ページ数超過など）はジョブの failed + last_error で知らせる。
+        登録できない入力は FaxSendError。
+        """
+        if not is_domestic_fax_number(to_number):
+            raise FaxSendError(
+                "宛先は 0 から始まる 10〜11 桁の国内番号で指定してください（国際番号には送信できません）"
+            )
         if not looks_like_pdf(data[:1024]):
             raise FaxSendError("PDF ファイルを指定してください", http_status=415)
         async with self._sessionmaker() as session:
             trunk = await resolve_send_trunk(session, trunk_name)
             resolved_trunk = trunk.name
+            pending = await session.scalar(
+                select(func.count())
+                .select_from(FaxOutbox)
+                .where(FaxOutbox.status == STATUS_CONVERTING)
+            )
         if not _TRUNK_NAME_RE.fullmatch(resolved_trunk):
             raise FaxSendError("トランク名に使用できない文字が含まれています")
+        if int(pending or 0) >= MAX_PENDING_CONVERSIONS:
+            raise FaxSendError(
+                "変換待ちの FAX が多すぎます。しばらくしてからやり直してください", http_status=429
+            )
 
         out_dir = self.out_dir
         try:
@@ -300,48 +357,106 @@ class FaxOutboxService:
         if free < FAX_MIN_FREE_BYTES + len(data) * 4:
             raise FaxSendError("FAX 保存先の空き容量が不足しています", http_status=507)
 
-        # ファイル名はサーバー採番のみ（アップロード時の名前は使わない）。
-        token = _uuid.uuid4().hex
-        tmp_pdf = out_dir / f".upload-{token}.pdf"
-        tmp_tif = out_dir / f".upload-{token}.tif"
-        try:
-            await asyncio.to_thread(self._write_file, tmp_pdf, data)
-            async with self._convert_sem:
-                pages = await self._convert(tmp_pdf, tmp_tif, max_pages=FAX_MAX_PAGES)
-            async with self._sessionmaker() as session:
-                job = FaxOutbox(
-                    to_number=to_number,
-                    trunk_name=resolved_trunk,
-                    pages=pages,
-                    status=STATUS_QUEUED,
-                    max_attempts=DEFAULT_MAX_ATTEMPTS,
-                    created_by=user_id,
-                )
-                session.add(job)
-                await session.flush()
-                pdf_path = out_dir / f"{job.id}.pdf"
-                tif_path = out_dir / f"{job.id}.tif"
-                tmp_pdf.replace(pdf_path)
-                tmp_tif.replace(tif_path)
+        async with self._sessionmaker() as session:
+            job = FaxOutbox(
+                to_number=to_number,
+                trunk_name=resolved_trunk,
+                pages=0,
+                status=STATUS_CONVERTING,
+                max_attempts=DEFAULT_MAX_ATTEMPTS,
+                created_by=user_id,
+            )
+            session.add(job)
+            await session.flush()
+            # ファイル名はサーバー採番のみ（アップロード時の名前は使わない）。
+            pdf_path = out_dir / f"{job.id}.pdf"
+            try:
+                await asyncio.to_thread(self._write_file, pdf_path, data)
                 job.pdf_path = str(pdf_path.resolve())
-                job.tiff_path = str(tif_path.resolve())
-                try:
-                    await session.commit()
-                except BaseException:
-                    pdf_path.unlink(missing_ok=True)
-                    tif_path.unlink(missing_ok=True)
-                    raise
-                await session.refresh(job)
-        finally:
-            tmp_pdf.unlink(missing_ok=True)
-            tmp_tif.unlink(missing_ok=True)
-        logger.info("FAX 送信ジョブを登録しました id=%s pages=%s trunk=%s", job.id, pages, resolved_trunk)
-        self.wake()
+                await session.commit()
+            except BaseException:
+                pdf_path.unlink(missing_ok=True)
+                raise
+            await session.refresh(job)
+        logger.info("FAX 送信ジョブを登録しました id=%s trunk=%s", job.id, resolved_trunk)
+        self._spawn(self._convert_job(job.id))
         return job
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _convert_job(self, job_id: int) -> None:
+        """converting のジョブの PDF を TIFF に変換し、queued（失敗なら failed）にする。"""
+        try:
+            async with self._sessionmaker() as session:
+                job = await session.get(FaxOutbox, job_id)
+                if job is None or job.status != STATUS_CONVERTING:
+                    return
+                pdf = self._safe(job.pdf_path)
+            tif = self.out_dir / f"{job_id}.tif"
+            error = ""
+            pages = 0
+            if pdf is None or not pdf.is_file():
+                error = "アップロードした PDF が見つかりません"
+            else:
+                try:
+                    async with self._convert_sem:
+                        pages = await self._convert(pdf, tif, max_pages=FAX_MAX_PAGES)
+                except FaxConvertError as exc:
+                    error = str(exc)
+                except Exception:
+                    logger.exception("FAX 送信用の PDF 変換に失敗しました id=%s", job_id)
+                    error = "PDF を変換できません"
+            now = self._now()
+            async with self._sessionmaker() as session:
+                if not error:
+                    # 取消済みでも TIFF は記録しておく（再送できるように）。
+                    await session.execute(
+                        update(FaxOutbox)
+                        .where(FaxOutbox.id == job_id)
+                        .values(pages=pages, tiff_path=str(tif.resolve()))
+                    )
+                    await session.execute(
+                        update(FaxOutbox)
+                        .where(FaxOutbox.id == job_id, FaxOutbox.status == STATUS_CONVERTING)
+                        .values(status=STATUS_QUEUED)
+                    )
+                    await session.commit()
+                    self.wake()
+                    return
+                result = await session.execute(
+                    update(FaxOutbox)
+                    .where(FaxOutbox.id == job_id, FaxOutbox.status == STATUS_CONVERTING)
+                    .values(status=STATUS_FAILED, last_error=error[:255], finished_at=now)
+                )
+                await session.commit()
+                failed = await session.get(FaxOutbox, job_id) if result.rowcount else None
+            if failed is not None:
+                logger.warning("FAX 送信用の PDF を変換できませんでした id=%s: %s", job_id, error)
+                self._emit(EVENT_FAX_FAILED, failed)
+        except Exception:
+            logger.exception("FAX 送信用の PDF 変換処理でエラーが発生しました id=%s", job_id)
+
+    async def cancel(self, job_id: int) -> bool:
+        """送信待ち・変換中のジョブを取り消す（条件付き UPDATE。取り消せたら True）。"""
+        async with self._sessionmaker() as session:
+            result = await session.execute(
+                update(FaxOutbox)
+                .where(
+                    FaxOutbox.id == job_id,
+                    FaxOutbox.status.in_((STATUS_QUEUED, STATUS_CONVERTING)),
+                )
+                .values(status=STATUS_CANCELLED, finished_at=self._now(), next_attempt_at=None)
+            )
+            await session.commit()
+        return bool(result.rowcount)
 
     @staticmethod
     def _write_file(path: Path, data: bytes) -> None:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        # 元 PDF は core しか読まない（FreeSWITCH が読むのは TIFF だけ）ので 0600。
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as fp:
             fp.write(data)
 
@@ -352,7 +467,32 @@ class FaxOutboxService:
 
     async def start(self) -> None:
         """送信ワーカーを起動する（起動時の復旧はワーカー内で行い、core の起動を待たせない）。"""
+        # 前回の core 停止で残った変換の作業ファイルを消す（まだ要求を受け付けていない時点）。
+        self.sweep_work_files()
         self._worker = asyncio.create_task(self._run())
+
+    def sweep_work_files(self, *, older_than: timedelta | None = None) -> int:
+        """out/ に残った作業ファイル（.faxout-* / .upload-*）を削除し、件数を返す。"""
+        out_dir = self.out_dir
+        if not out_dir.is_dir():
+            return 0
+        cutoff = None
+        if older_than is not None:
+            cutoff = datetime.now().timestamp() - older_than.total_seconds()
+        removed = 0
+        for path in out_dir.iterdir():
+            if not path.name.startswith((WORK_FILE_PREFIX, ".upload-")) or not path.is_file():
+                continue
+            try:
+                if cutoff is not None and path.stat().st_mtime > cutoff:
+                    continue
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        if removed:
+            logger.info("FAX 送信の作業ファイルを %d 件削除しました", removed)
+        return removed
 
     async def stop(self) -> None:
         if self._worker is not None:
@@ -405,6 +545,15 @@ class FaxOutboxService:
         for job in stale:
             logger.warning("送信結果が不明な FAX ジョブを失敗にしました id=%s", job.id)
             self._emit(EVENT_FAX_FAILED, job)
+        # 変換中に core が止まったジョブは変換をやり直す。
+        async with self._sessionmaker() as session:
+            converting = list(
+                await session.scalars(
+                    select(FaxOutbox.id).where(FaxOutbox.status == STATUS_CONVERTING)
+                )
+            )
+        for job_id in converting:
+            self._spawn(self._convert_job(job_id))
 
     async def _uuid_exists(self, call_uuid: str) -> bool | None:
         """通話の有無（ESL に問い合わせできなければ None）。"""
@@ -436,8 +585,12 @@ class FaxOutboxService:
                 with contextlib.suppress(Exception):
                     if _UUID_RE.fullmatch(call_uuid):
                         await self._api(f"uuid_kill {call_uuid}")
+                # 途中まで送れている可能性があるため自動では再送しない。
                 await self._fail_attempt(
-                    job.id, call_uuid, "送信が制限時間を超えたため切断しました", retriable=True
+                    job.id,
+                    call_uuid,
+                    "送信が制限時間を超えたため切断しました。必要なら再送してください",
+                    retriable=False,
                 )
                 continue
             exists = await self._uuid_exists(call_uuid) if call_uuid else False
@@ -448,11 +601,14 @@ class FaxOutboxService:
                 continue
             first_missing = self._missing_since.setdefault(call_uuid, now)
             if now - first_missing >= timedelta(seconds=_MISSING_CONFIRM_SECONDS):
+                # 結果イベントを取りこぼしただけで txfax は成功していた可能性がある。
+                # 二重送信を避けるため recover() と同じく「結果不明」にし、自動では再送しない。
                 await self._fail_attempt(
                     job.id,
                     call_uuid,
-                    "発信できませんでした（FreeSWITCH から結果を受け取れませんでした）",
-                    retriable=True,
+                    "送信結果を確認できませんでした（FreeSWITCH から結果を受け取れませんでした）。"
+                    "必要なら再送してください",
+                    retriable=False,
                 )
 
     async def _dispatch_queued(self) -> None:
@@ -509,22 +665,39 @@ class FaxOutboxService:
                     )
                 except ValueError as exc:
                     final_error = f"発信コマンドを組み立てられません: {exc}"
+        # 読んでから書くと取消（cancel）と後勝ちになるため、status を条件に含めて更新する。
+        async with self._sessionmaker() as session:
             if final_error is not None:
-                job.status = STATUS_FAILED
-                job.finished_at = now
-                job.last_error = final_error[:255]
+                result = await session.execute(
+                    update(FaxOutbox)
+                    .where(FaxOutbox.id == job_id, FaxOutbox.status == STATUS_QUEUED)
+                    .values(status=STATUS_FAILED, finished_at=now, last_error=final_error[:255])
+                )
                 await session.commit()
-                await session.refresh(job)
-                self._emit(EVENT_FAX_FAILED, job)
+                if result.rowcount:
+                    failed = await session.get(FaxOutbox, job_id)
+                    if failed is not None:
+                        self._emit(EVENT_FAX_FAILED, failed)
                 return
-            job.status = STATUS_SENDING
-            job.attempts += 1
-            job.started_at = now
-            job.finished_at = None
-            job.next_attempt_at = None
-            job.call_uuid = call_uuid
+            result = await session.execute(
+                update(FaxOutbox)
+                .where(FaxOutbox.id == job_id, FaxOutbox.status == STATUS_QUEUED)
+                .values(
+                    status=STATUS_SENDING,
+                    attempts=FaxOutbox.attempts + 1,
+                    started_at=now,
+                    finished_at=None,
+                    next_attempt_at=None,
+                    call_uuid=call_uuid,
+                )
+            )
             await session.commit()
-            attempt = job.attempts
+            if not result.rowcount:
+                # 直前に取り消された（または別経路で状態が変わった）。
+                return
+            attempt = await session.scalar(
+                select(FaxOutbox.attempts).where(FaxOutbox.id == job_id)
+            )
         self._inflight[call_uuid] = job_id
         logger.info("FAX 送信を開始します id=%s attempt=%s uuid=%s", job_id, attempt, call_uuid)
         try:
@@ -686,7 +859,11 @@ class FaxOutboxService:
     # ------------------------------------------------------------------ 保持期間
 
     async def cleanup(self, retention_days: int, *, now: datetime | None = None) -> int:
-        """retention_days より古い終了済みジョブ（行 + PDF/TIFF）を削除し、件数を返す。"""
+        """retention_days より古い終了済みジョブ（行 + PDF/TIFF）を削除し、件数を返す。
+
+        あわせて 1 日以上前の作業ファイル（変換中に core が落ちた残骸）を掃除する。
+        """
+        self.sweep_work_files(older_than=timedelta(days=1))
         if retention_days <= 0:
             return 0
         cutoff = (now or self._now()) - timedelta(days=retention_days)

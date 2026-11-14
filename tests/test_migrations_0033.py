@@ -24,12 +24,13 @@ def test_migration_0033_creates_fax_outbox_with_defaults(tmp_path):
     con.execute("INSERT INTO fax_outbox (to_number, trunk_name) VALUES ('0312345678', 'Flets02')")
     con.commit()
     row = con.execute(
-        "SELECT status, attempts, max_attempts, pages, last_error, created_at IS NOT NULL"
+        "SELECT status, attempts, max_attempts, retry_count, pages, last_error,"
+        " created_at IS NOT NULL"
         " FROM fax_outbox"
     ).fetchone()
     ddl = con.execute("SELECT sql FROM sqlite_master WHERE name='fax_outbox'").fetchone()[0]
     con.close()
-    assert row == ("queued", 0, 3, 0, "", 1)
+    assert row == ("queued", 0, 3, 0, 0, "", 1)
     # 削除後に id を再利用しない（AUTOINCREMENT）
     assert "AUTOINCREMENT" in ddl
 
