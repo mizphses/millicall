@@ -59,8 +59,14 @@ async function createTrunk(form: TrunkFormValues): Promise<TrunkRead> {
   if (response.status === 409) {
     throw new TrunkNameConflictError("このトランク名は既に使用されています");
   }
-  if (error || !data) throw new Error("トランクの作成に失敗しました");
+  if (error || !data) throw new Error(errorDetail(error) ?? "トランクの作成に失敗しました");
   return data;
+}
+
+/** 422 などの日本語 detail（文字列）を取り出す。検証エラー配列などは null。 */
+function errorDetail(error: unknown): string | null {
+  const detail = (error as { detail?: unknown } | undefined)?.detail;
+  return typeof detail === "string" ? detail : null;
 }
 
 async function updateTrunk(
@@ -72,7 +78,7 @@ async function updateTrunk(
     params: { path: { trunk_id: id } },
     body: buildUpdatePayload(form, original),
   });
-  if (error || !data) throw new Error("トランクの更新に失敗しました");
+  if (error || !data) throw new Error(errorDetail(error) ?? "トランクの更新に失敗しました");
   return data;
 }
 
@@ -239,6 +245,21 @@ export function TrunksPage() {
       header: "着信先",
       width: "90px",
       render: (row) => { const entry = numberPlan.find(value => value.number === row.inbound_extension); return entry ? <NumberPlanLink entry={entry} /> : row.inbound_extension || "—"; },
+    },
+    {
+      key: "dial_prefix",
+      header: "発信",
+      width: "120px",
+      render: (row) =>
+        !row.outbound_enabled ? (
+          <span className={badge({ tone: "neutral" })}>着信専用</span>
+        ) : row.dial_prefix ? (
+          <span title={`${row.dial_prefix} + 外線番号でこのトランクから発信`}>
+            プレフィクス <code>{row.dial_prefix}</code>
+          </span>
+        ) : (
+          "—"
+        ),
     },
     {
       key: "enabled",
@@ -430,6 +451,30 @@ export function TrunksPage() {
               placeholder="0312345678"
             />
           </Field>
+
+          <Field
+            label="発信プレフィクス（任意）"
+            error={fieldErrors.dial_prefix}
+            help="「プレフィクス + 外線番号」でこのトランクから発信します（例: 92 0312345678、番号通知は 92 186 03…）。空欄は既定の発信トランク（設定画面）"
+          >
+            <input
+              className={input({ invalid: fieldErrors.dial_prefix ? true : undefined })}
+              value={form.dial_prefix}
+              onChange={(e) => setForm((f) => ({ ...f, dial_prefix: e.target.value }))}
+              placeholder="92"
+              inputMode="tel"
+              maxLength={8}
+            />
+          </Field>
+
+          <label className={checkboxRow}>
+            <input
+              type="checkbox"
+              checked={form.outbound_enabled}
+              onChange={(e) => setForm((f) => ({ ...f, outbound_enabled: e.target.checked }))}
+            />
+            発信に使う（オフにすると着信専用）
+          </label>
 
           <Field label="着信先内線番号" error={fieldErrors.inbound_extension} help={<ObjectLink to="/routes" newTab>番号プランを確認・登録</ObjectLink>}>
             <select

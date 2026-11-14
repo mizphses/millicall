@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { buildTrunkOptions } from "../pages/settings/trunkOptions";
 import {
   buildCreatePayload,
   buildUpdatePayload,
@@ -26,6 +27,8 @@ const original: TrunkRead = {
   fax_detect_timeout_sec: 20,
   fax_route_number: null,
   fax_detect_announce: false,
+  dial_prefix: "",
+  outbound_enabled: true,
   enabled: true,
   has_password: true,
 };
@@ -49,6 +52,8 @@ function formOf(overrides: Partial<TrunkFormValues>): TrunkFormValues {
     fax_detect_timeout_sec: "20",
     fax_route_number: "",
     fax_detect_announce: false,
+    dial_prefix: "",
+    outbound_enabled: true,
     enabled: true,
     ...overrides,
   };
@@ -394,5 +399,45 @@ describe("FAX 自動検知", () => {
     expect(validateForm(formOf({ fax_detect_timeout_sec: "4" }), "edit").fax_detect_timeout_sec).toBeTruthy();
     expect(validateForm(formOf({ fax_detect_timeout_sec: "121" }), "edit").fax_detect_timeout_sec).toBeTruthy();
     expect(validateForm(formOf({ fax_detect_timeout_sec: "120" }), "edit").fax_detect_timeout_sec).toBeUndefined();
+  });
+});
+
+describe("発信プレフィクス / 発信に使う（#139）", () => {
+  it("作成 payload に dial_prefix（trim）と outbound_enabled を含める", () => {
+    const payload = buildCreatePayload(formOf({ dial_prefix: " 92 ", outbound_enabled: false, password: "p" }));
+    expect(payload.dial_prefix).toBe("92");
+    expect(payload.outbound_enabled).toBe(false);
+    expect(buildCreatePayload(formOf({ password: "p" })).dial_prefix).toBe("");
+  });
+
+  it("更新 payload は変更時のみ含め、空文字でプレフィクスなしに戻せる", () => {
+    expect(buildUpdatePayload(formOf({ dial_prefix: "*3" }), original).dial_prefix).toBe("*3");
+    expect(buildUpdatePayload(formOf({}), original).dial_prefix).toBeUndefined();
+    expect(
+      buildUpdatePayload(formOf({ dial_prefix: "" }), { ...original, dial_prefix: "92" }).dial_prefix,
+    ).toBe("");
+    expect(buildUpdatePayload(formOf({ outbound_enabled: false }), original).outbound_enabled).toBe(false);
+    expect(buildUpdatePayload(formOf({}), original).outbound_enabled).toBeUndefined();
+  });
+
+  it("書式を検証する（0 始まり・1 始まり 3 桁・不正文字・9 文字以上は不可）", () => {
+    for (const ok of ["", "9", "92", "*3", "#9", "12345678", "1234"]) {
+      expect(validateForm(formOf({ dial_prefix: ok }), "edit").dial_prefix).toBeUndefined();
+    }
+    for (const bad of ["0", "09", "184", "186", "1860", "110", "9a", "9 2", "123456789"]) {
+      expect(validateForm(formOf({ dial_prefix: bad }), "edit").dial_prefix).toBeTruthy();
+    }
+  });
+
+  it("既定の発信トランクの選択肢は未設定 + 名前順で、使えないトランクを注記する", () => {
+    const options = buildTrunkOptions([
+      { id: 2, name: "b", display_name: "B", caller_id: "", enabled: true, outbound_enabled: false },
+      { id: 1, name: "a", display_name: "A", caller_id: "0311111111", enabled: true, outbound_enabled: true },
+      { id: 3, name: "c", display_name: "C", caller_id: "", enabled: false, outbound_enabled: true },
+    ]);
+    expect(options.map((o) => o.value)).toEqual(["", "1", "2", "3"]);
+    expect(options[1].label).toBe("A（a / 番号通知 0311111111）");
+    expect(options[2].label).toContain("着信専用");
+    expect(options[3].label).toContain("無効");
   });
 });

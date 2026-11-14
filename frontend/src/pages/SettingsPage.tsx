@@ -42,7 +42,8 @@ import { css, cx } from "styled-system/css";
 import { button, input, panel } from "styled-system/recipes";
 
 import { api } from "../api/client";
-import { APP_SETTINGS_KEY } from "../queryKeys";
+import { APP_SETTINGS_KEY, TRUNKS_KEY } from "../queryKeys";
+import { buildTrunkOptions, fetchTrunks } from "./settings/trunkOptions";
 import { PageLayout } from "../components/PageLayout";
 import { UnsavedChangesGuard } from "../components/UnsavedChangesGuard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -121,8 +122,10 @@ type FieldDef = {
   help?: string;
   /** number 入力を小数として解釈する（playback_timeout_sec 用）。 */
   float?: boolean;
-  /** 空欄を null として送る（mcp_default_agent_id 用）。 */
+  /** 空欄を null として送る（mcp_default_agent_id 用）。select では空 = null、他は数値 ID。 */
   nullable?: boolean;
+  /** select の選択肢を API から組み立てる（trunks = 外線トランク一覧）。 */
+  optionsSource?: "trunks";
   min?: number;
   max?: number;
 };
@@ -268,10 +271,18 @@ const SECTIONS: SectionDef[] = [
   {
     id: "telephony",
     title: "電話運用",
-    description: "国際発信・匿名着信・MCP・電話機管理者資格情報",
+    description: "既定の発信トランク・国際発信・匿名着信・MCP・電話機管理者資格情報",
     icon: <Phone size={18} />,
     note: "「MCP サーバーを有効にする」の変更のみ core の再起動後に反映されます。",
     fields: [
+      {
+        key: "default_outbound_trunk_id",
+        label: "既定の発信トランク",
+        type: "select",
+        nullable: true,
+        optionsSource: "trunks",
+        help: "発信プレフィクスを付けずに外線番号をダイヤルしたときに使うトランクです。未設定、または選んだトランクが無効・着信専用のときは、発信に使うトランクの名前順先頭を使います。保存すると FreeSWITCH 設定を再生成します。",
+      },
       {
         key: "outbound_international_allow",
         label: "国際発信を許可するプレフィックス（カンマ区切り）",
@@ -376,6 +387,10 @@ function sectionToValues(section: SectionDef, form: FormState): Record<string, u
       try { values[field.key] = rowsJsonToRoleMap(raw); } catch (error) { throw new FormValidationError({ [field.key]: error instanceof Error ? error.message : "割り当てを確認してください" }); }
     } else if (field.type === "boolean") {
       values[field.key] = Boolean(raw);
+    } else if (field.type === "select" && field.nullable) {
+      // 空 = 未設定（null）、それ以外は数値 ID（default_outbound_trunk_id）。
+      const text = String(raw).trim();
+      values[field.key] = text === "" ? null : Number(text);
     } else if (field.type === "number") {
       const text = String(raw).trim();
       if (text === "") {
@@ -408,6 +423,9 @@ export function SettingsPage({ section: sectionMode }: { section?: "sso" } = {})
     queryFn: fetchSettings,
   });
   const data = settingsQuery.data;
+  // 既定の発信トランクの選択肢（外線トランク一覧）。
+  const trunksQuery = useQuery({ queryKey: TRUNKS_KEY, queryFn: fetchTrunks });
+  const trunkOptions = buildTrunkOptions(trunksQuery.data ?? []);
 
   const [form, setForm] = useState<FormState>({});
   const baseline = useRef<FormState>();
@@ -541,7 +559,7 @@ export function SettingsPage({ section: sectionMode }: { section?: "sso" } = {})
                 {section.fields.map((field) => (
                   <SettingField
                     key={field.key}
-                    field={field}
+                    field={field.optionsSource === "trunks" ? { ...field, options: trunkOptions } : field}
                     value={form[field.key] ?? (field.type === "boolean" ? false : "")}
                     isOverridden={overridden.has(field.key)}
                     secretSet={field.type === "secret" ? Boolean(data.secrets[field.key]) : false}
