@@ -26,7 +26,18 @@
       <param name="register-transport" value="udp"/>
       <param name="expire-seconds"     value="{{ trunk.register_expire_seconds }}"/>
       <param name="retry-seconds"      value="30"/>
+{%- if trunk.trunk_type == 'sip' %}
+      <!--
+        インターネット SIP（Brastel 等）は From のユーザー部を認証ユーザーに固定する（issue #152）。
+        caller-id-in-from=true だと From が発信者番号（caller_id）になり、認証ユーザーと
+        一致しないため 407 → 認証付き INVITE → 403 で拒否される。
+        Brastel は From の認証ユーザーに紐づく 050 番号を発信者番号として通知する。
+      -->
+      <param name="caller-id-in-from"  value="false"/>
+{%- else %}
+      <!-- HGW は From のユーザー部の番号で発信者番号を判断するため caller_id を From に載せる。 -->
       <param name="caller-id-in-from"  value="true"/>
+{%- endif %}
 {%- if trunk.options_ping_seconds %}
       <param name="ping"               value="{{ trunk.options_ping_seconds }}"/>
 {%- endif %}
@@ -52,6 +63,13 @@
       DTMF は RFC2833 を有効化（既定 PT 101）。一般 SIP/IVR はこれが必須。
     -->
     <param name="dtmf-type"                  value="rfc2833"/>
+    <!--
+      INVITE サイズ: Brastel は UDP の INVITE が 1300 バイト以上だと 513 Message too large を
+      返す（issue #152、実機で認証付き INVITE が 1386 バイト）。既定の User-Agent
+      （FreeSWITCH-mod_sofia/<version>）を短い固定値にし、発信側で sip_cid_type=none を付けて
+      Remote-Party-ID を省くことで 1300 バイト未満に収める。
+    -->
+    <param name="user-agent-string"          value="millicall"/>
     <!--
       NAT 越え: ext-sip-ip/ext-rtp-ip を外部アドレスにする。
       auto-nat は HGW が UPnP / NAT-PMP に対応していないと外部 IP を得られず、

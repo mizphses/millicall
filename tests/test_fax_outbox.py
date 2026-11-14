@@ -171,6 +171,24 @@ def test_build_originate_string():
         tiff_path="/x/1.tif", job_id=1,
     )
     assert "origination_caller_id" not in no_cid
+    assert "sip_cid_type" not in cmd
+
+
+def test_build_originate_sip_trunk_omits_rpid():
+    """#152: sip トランク（Brastel 等）宛は sip_cid_type=none で Remote-Party-ID を付けない。"""
+    cmd = build_originate(
+        call_uuid="0b9c7a4e-1111-4222-8333-444455556666",
+        trunk_name="brastel01",
+        to_number="0312345678",
+        caller_id="05068650165",
+        tiff_path="/app/data/fax/out/7.tif",
+        job_id=7,
+        trunk_type="sip",
+    )
+    var_block = cmd[cmd.index("{") + 1 : cmd.index("}")]
+    assert "sip_cid_type=none" in var_block.split(",")
+    assert "absolute_codec_string=PCMU" in var_block.split(",")
+    assert cmd.endswith("}sofia/gateway/brastel01/0312345678 &txfax(/app/data/fax/out/7.tif)")
 
 
 @pytest.mark.parametrize(

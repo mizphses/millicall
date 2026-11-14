@@ -14,6 +14,8 @@ HGW 種別は HGW の癖に合わせた設定（DTMF 無効化・Session-Timers�
 - **DTMF**: RFC2833 を有効化（一般 SIP / IVR で必須）
 - **NAT 越え**: `ext-sip-ip` / `ext-rtp-ip` に外部アドレスを設定（NAT 内で使う場合は[後述の設定](#nat-越え)が必要）
 - **着信 ACL**: RFC1918 限定ではなく、**トランクごとに許可した CIDR（プロバイダ IP 帯）**のみ許可
+- **From**: 発信者番号ではなく**認証ユーザー（ユーザー名）**を入れる（`caller-id-in-from=false`）
+- **INVITE サイズ**: User-Agent を短い固定値 `millicall` にし、発信時に Remote-Party-ID を付けない（`sip_cid_type=none`）
 
 ## 登録手順（Brastel my050 の例）
 
@@ -45,6 +47,17 @@ HGW 種別は HGW の癖に合わせた設定（DTMF 無効化・Session-Timers�
    docker compose exec freeswitch fs_cli -x "sofia status gateway brastel_my050"
    # State に REGED が出れば登録成功
    ```
+
+### Brastel の注意（発信）
+
+- **From は認証ユーザー固定**: Brastel は INVITE の From のユーザー部が SIP 認証 ID（例: `44425296`）と
+  一致しないと、認証付き INVITE を `403` で拒否します。HGW 種別のように From に発信者番号を入れると
+  発信できないため、インターネット SIP 種別では From を認証ユーザーにしています（issue #152）。
+- **発信者番号は 050 番号になる**: 相手に通知されるのは認証 ID に紐づく Brastel の 050 番号です。
+  「発信者番号」欄の値や Remote-Party-ID は使われません。
+- **INVITE は 1300 バイト未満**: UDP の INVITE が 1300 バイト以上だと `513 Message too large` で
+  失敗します。millicall は User-Agent を `millicall` に短縮し、Remote-Party-ID を省いて収めています
+  （実機で 1386 → 1206 バイト）。外線発信（dialplan）・FAX 送信・AI 発信のどの経路も同じ扱いです。
 
 ## 着信許可 IP 帯（CIDR）について
 
@@ -142,6 +155,8 @@ FreeSWITCH のログには次のような行が繰り返し出ます。
 | 登録は成功するが着信しない | 着信許可 CIDR にプロバイダの SIP サーバ IP 帯が含まれているか確認。DID 番号のルーティングを確認 |
 | 登録済みだが外から掛けると無音（`CALLS-IN 0`） | NAT の穴が閉じて INVITE が届いていない。登録更新間隔を `60`〜`120` にし、`MILLICALL_SIP_EXTERNAL_IP` に STUN か公開 IP を指定する（[NAT 越え](#nat-越え)） |
 | 片方向しか音声が聞こえない | NAT 越えの問題。`MILLICALL_SIP_EXTERNAL_IP` と HGW のポート転送を確認 |
+| 発信が `403 Unauthorized` で失敗する | 種別が「インターネット SIP」か確認（From が認証ユーザーになる）。`sofia global siptrace on` で INVITE の From を確認 |
+| 発信が `513 Message too large` で失敗する | INVITE が 1300 バイト以上。siptrace で INVITE のサイズと余計なヘッダを確認（[Brastel の注意](#brastel-の注意発信)） |
 | DTMF（プッシュ操作）が効かない | 種別が「インターネット SIP」になっているか確認（HGW 種別は DTMF を無効化している） |
 
 > `realm` はホスト名と同じ値を使います。プロバイダが認証 realm に別ドメインを要求する場合は、

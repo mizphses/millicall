@@ -716,6 +716,7 @@ async def test_dial_hgw_trunk_forces_pcmu():
     cmd = esl.cmds[-1]
     var_block = cmd[cmd.index("{") + 1 : cmd.index("}")]
     assert "absolute_codec_string=PCMU" in var_block.split(",")
+    assert "sip_cid_type=none" not in var_block.split(",")
     assert cmd.endswith("}sofia/gateway/main/0901234567 &park")
 
 
@@ -733,7 +734,12 @@ async def test_dial_sip_trunk_has_no_codec_override():
 
     asyncio.get_running_loop().create_task(_answer_soon())
     await svc.dial("0901234567", "", "", timeout=1)
-    assert "absolute_codec_string" not in esl.cmds[-1]
+    cmd = esl.cmds[-1]
+    assert "absolute_codec_string" not in cmd
+    # #152: Brastel は From の番号しか使わず INVITE サイズに制約があるため RPID を付けない。
+    var_block = cmd[cmd.index("{") + 1 : cmd.index("}")]
+    assert "sip_cid_type=none" in var_block.split(",")
+    assert cmd.endswith("}sofia/gateway/brastel/0901234567 &park")
 
 
 @pytest.mark.asyncio

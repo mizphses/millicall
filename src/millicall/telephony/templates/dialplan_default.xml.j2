@@ -89,7 +89,9 @@
   HGW（ひかり電話）は G.711 μ-law（PCMU）しか受け付けず、PCMA でオファーすると
   488 Not Acceptable Here になる（#136）。A レグに set しても B レグのオファーは
   変わらないため、bridge 文字列の {} で B レグ変数として absolute_codec_string を渡す。
-  sip 種別（Brastel 等）は従来どおりコーデック指定なし。
+  sip 種別（Brastel 等）はコーデック指定なし。代わりに sip_cid_type=none で
+  Remote-Party-ID を付けない（Brastel は From の番号しか使わず、INVITE を 1300 バイト未満に
+  収めないと 513 Message too large になる。issue #152）。
 #}
 {#
   番号通知（caller_id_mode, issue #139 追加要望）:
@@ -107,7 +109,7 @@
           <action application="set" data="effective_caller_id_number={{ trunk.caller_id }}"/>
           <action application="set" data="effective_caller_id_name={{ trunk.caller_id }}"/>
           <action application="set" data="hangup_after_bridge=true"/>
-          <action application="bridge" data="{{ "{absolute_codec_string=PCMU}" if trunk.trunk_type == "hgw" else "" }}sofia/gateway/{{ trunk.name }}/{{ target }}"/>
+          <action application="bridge" data="{{ "{absolute_codec_string=PCMU}" if trunk.trunk_type == "hgw" else "{sip_cid_type=none}" if trunk.trunk_type == "sip" else "" }}sofia/gateway/{{ trunk.name }}/{{ target }}"/>
           <action application="hangup"/>
           <anti-action application="log" data="WARNING calling_permission=${calling_permission} {{ reject_label }}: ${destination_number}{{ via }} (calling_permission が空なら INVITE がダイジェスト認証されていない可能性: apply-inbound-acl 通過でディレクトリ変数が載っていない)"/>
           <anti-action application="hangup" data="CALL_REJECTED"/>

@@ -192,12 +192,14 @@ def build_originate(
     tiff_path: str,
     job_id: int,
     caller_id_mode: str = "as_dialed",
+    trunk_type: str = "hgw",
 ) -> str:
     """txfax 送信の originate コマンド文字列を組み立てる（補間する値はすべて形式検証する）。
 
     caller_id_mode はトランクの番号通知モード（issue #139）。notify / withhold なら宛先に
     186 / 184 を前置する（dialplan・MCP 発信と同じ apply_caller_id_mode）。宛先に既に
     184/186 が付いていればそれを優先し、二重に付けない（issue #151）。
+    trunk_type が sip なら sip_cid_type=none で Remote-Party-ID を付けない（issue #152）。
     """
     if not _UUID_RE.fullmatch(call_uuid):
         raise ValueError("invalid call uuid")
@@ -229,6 +231,9 @@ def build_originate(
         f"originate_timeout={ORIGINATE_TIMEOUT_SECONDS}",
         f"millicall_fax_outbox_id={int(job_id)}",
     ]
+    if trunk_type == "sip":
+        # Brastel 等は From の番号しか使わず、INVITE が 1300 バイト以上だと 513 になる。
+        variables.append("sip_cid_type=none")
     return (
         f"originate {{{','.join(variables)}}}sofia/gateway/{trunk_name}/{dial} "
         f"&txfax({tiff_path})"
@@ -717,6 +722,7 @@ class FaxOutboxService:
                         tiff_path=str(tiff),
                         job_id=job.id,
                         caller_id_mode=trunk.caller_id_mode,
+                        trunk_type=trunk.trunk_type,
                     )
                 except ValueError as exc:
                     final_error = f"発信コマンドを組み立てられません: {exc}"
