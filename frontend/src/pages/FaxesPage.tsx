@@ -11,9 +11,11 @@ import { DataTable, type Column } from "../components/DataTable";
 import { ObjectLink } from "../components/ObjectLink";
 import { PageLayout } from "../components/PageLayout";
 import { FAXES_KEY, faxesKey } from "../queryKeys";
+import { useUrlState } from "../hooks/useUrlState";
 import { useToast } from "../toast/ToastProvider";
 import { formatDateTime } from "./cdr/format";
 import { faxPdfUrl, faxResult, faxSender, totalPages, type FaxRead } from "./faxes/format";
+import { OutboxPanel } from "./faxes/OutboxPanel";
 
 const PAGE_SIZE = 50;
 
@@ -32,8 +34,65 @@ async function deleteFax(id: number): Promise<void> {
   if (error) throw new Error("FAX の削除に失敗しました");
 }
 
-/** 受信 FAX の一覧（PDF ダウンロード・削除）。 */
+type FaxTab = "inbox" | "outbox";
+
+const TABS: { value: FaxTab; label: string }[] = [
+  { value: "inbox", label: "受信" },
+  { value: "outbox", label: "送信" },
+];
+
+const tabButton = css({
+  px: "4",
+  py: "2",
+  fontSize: "sm",
+  fontWeight: "medium",
+  borderBottomWidth: "2px",
+  borderBottomStyle: "solid",
+  borderBottomColor: "transparent",
+  color: "text.muted",
+  cursor: "pointer",
+  bg: "transparent",
+  "&[aria-selected=true]": { borderBottomColor: "accent", color: "text" },
+});
+
+/** FAX（受信・送信タブ）。タブは URL の ?tab= に保持する。 */
 export function FaxesPage() {
+  const [tabParam, setTab] = useUrlState("tab", "inbox");
+  const tab: FaxTab = tabParam === "outbox" ? "outbox" : "inbox";
+  return (
+    <PageLayout
+      title="FAX"
+      description="受信した FAX の確認と、PDF をアップロードして外線トランク経由で FAX を送信できます。"
+    >
+      <div
+        role="tablist"
+        aria-label="FAX の表示切替"
+        className={css({ display: "flex", gap: "1", borderBottomWidth: "1px", borderColor: "border" })}
+      >
+        {TABS.map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            role="tab"
+            id={`fax-tab-${t.value}`}
+            aria-selected={tab === t.value}
+            aria-controls={`fax-panel-${t.value}`}
+            className={tabButton}
+            onClick={() => setTab(t.value)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" id={`fax-panel-${tab}`} aria-labelledby={`fax-tab-${tab}`}>
+        {tab === "outbox" ? <OutboxPanel /> : <InboxPanel />}
+      </div>
+    </PageLayout>
+  );
+}
+
+/** 受信 FAX の一覧（PDF ダウンロード・削除）。 */
+function InboxPanel() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
@@ -108,12 +167,9 @@ export function FaxesPage() {
   ];
 
   return (
-    <PageLayout
-      title="受信 FAX"
-      description="FAX 受信番号で受け取った FAX の一覧。PDF をダウンロードできます。"
-    >
+    <div className={css({ display: "flex", flexDirection: "column" })}>
       <p className={css({ fontSize: "sm", color: "text.muted", mb: "3" })}>
-        受信番号の追加・トランクへの割り当ては<ObjectLink to="/routes">ルーティング</ObjectLink>
+        FAX 受信番号で受け取った FAX の一覧です。受信番号の追加・トランクへの割り当ては<ObjectLink to="/routes">ルーティング</ObjectLink>
         と<ObjectLink to="/trunks">外線トランク</ObjectLink>で行います。
       </p>
       <DataTable
@@ -169,6 +225,6 @@ export function FaxesPage() {
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         onCancel={() => setDeleteTarget(null)}
       />
-    </PageLayout>
+    </div>
   );
 }

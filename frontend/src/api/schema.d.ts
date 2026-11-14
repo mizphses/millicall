@@ -693,6 +693,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/faxes/outbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Outbox */
+        get: operations["list_outbox_api_faxes_outbox_get"];
+        put?: never;
+        /** Send Fax */
+        post: operations["send_fax_api_faxes_outbox_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/faxes/outbox/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Outbox Job */
+        get: operations["get_outbox_job_api_faxes_outbox__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/faxes/outbox/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Outbox Job */
+        post: operations["cancel_outbox_job_api_faxes_outbox__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/faxes/outbox/{job_id}/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Outbox Pdf */
+        get: operations["download_outbox_pdf_api_faxes_outbox__job_id__pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/faxes/outbox/{job_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Outbox Job */
+        post: operations["retry_outbox_job_api_faxes_outbox__job_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/faxes/{fax_id}": {
         parameters: {
             query?: never;
@@ -2536,6 +2622,51 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** FaxOutboxList */
+        FaxOutboxList: {
+            /** Items */
+            items: components["schemas"]["FaxOutboxRead"][];
+            /** Total */
+            total: number;
+        };
+        /** FaxOutboxRead */
+        FaxOutboxRead: {
+            /** Attempts */
+            attempts: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: number | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Has Pdf */
+            has_pdf: boolean;
+            /** Id */
+            id: number;
+            /** Last Error */
+            last_error: string;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Next Attempt At */
+            next_attempt_at: string | null;
+            /** Pages */
+            pages: number;
+            /** Remote Station Id */
+            remote_station_id: string;
+            /** Result Text */
+            result_text: string;
+            /** Started At */
+            started_at: string | null;
+            /** Status */
+            status: string;
+            /** To Number */
+            to_number: string;
+            /** Trunk Name */
+            trunk_name: string;
+        };
         /** FaxRead */
         FaxRead: {
             /** Call Uuid */
@@ -3297,7 +3428,7 @@ export interface components {
              */
             enabled: boolean;
             /** Events */
-            events?: ("call.inbound" | "call.ended" | "fax.received")[];
+            events?: ("call.inbound" | "call.ended" | "fax.received" | "fax.sent" | "fax.failed")[];
             /**
              * Format
              * @default generic
@@ -3374,7 +3505,7 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
             /** Events */
-            events?: ("call.inbound" | "call.ended" | "fax.received")[] | null;
+            events?: ("call.inbound" | "call.ended" | "fax.received" | "fax.sent" | "fax.failed")[] | null;
             /** Format */
             format?: ("generic" | "discord" | "slack" | "teams") | null;
             /** Name */
@@ -4793,6 +4924,196 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FaxList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_outbox_api_faxes_outbox_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxOutboxList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_fax_api_faxes_outbox_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description 送信する PDF（20 MB・100 ページまで）
+                     */
+                    file: string;
+                    /** @description 宛先 FAX 番号（0 から始まる 10〜11 桁の国内番号） */
+                    to_number: string;
+                    /** @description 送信に使うトランク名（省略時は既定の発信トランク） */
+                    trunk_name?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxOutboxRead"];
+                };
+            };
+        };
+    };
+    get_outbox_job_api_faxes_outbox__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxOutboxRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_outbox_job_api_faxes_outbox__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxOutboxRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_outbox_pdf_api_faxes_outbox__job_id__pdf_get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_outbox_job_api_faxes_outbox__job_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxOutboxRead"];
                 };
             };
             /** @description Validation Error */

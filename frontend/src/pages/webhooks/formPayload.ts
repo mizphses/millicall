@@ -58,6 +58,12 @@ export const WEBHOOK_EVENT_OPTIONS: { value: WebhookEvent; label: string; help: 
   { value: "call.inbound", label: "着信", help: "外線トランクに着信したとき" },
   { value: "call.ended", label: "通話終了", help: "通話が終了し通話履歴が確定したとき" },
   { value: "fax.received", label: "FAX 受信", help: "FAX の受信処理が完了したとき" },
+  { value: "fax.sent", label: "FAX 送信完了", help: "FAX の送信に成功したとき" },
+  {
+    value: "fax.failed",
+    label: "FAX 送信失敗",
+    help: "再試行しても FAX を送信できなかったとき（最終的な失敗）",
+  },
 ];
 
 export function webhookEventLabel(event: string): string {

@@ -25,6 +25,11 @@ export const FAX_RECEIVERS_KEY = ["fax-receivers"] as const;
 export const faxesKey = (limit: number, offset: number) => ["faxes", limit, offset] as const;
 /** 受信 FAX の invalidate 用プレフィックス。 */
 export const FAXES_KEY = ["faxes"] as const;
+/** 送信 FAX（送信ボックス）一覧。 */
+export const faxOutboxKey = (limit: number, offset: number) =>
+  ["fax-outbox", limit, offset] as const;
+/** 送信 FAX の invalidate 用プレフィックス。 */
+export const FAX_OUTBOX_KEY = ["fax-outbox"] as const;
 /** Webhook 一覧。 */
 export const WEBHOOKS_KEY = ["webhooks"] as const;
 /** Webhook 配信ログ（webhook ごと）。 */
