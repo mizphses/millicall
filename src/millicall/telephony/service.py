@@ -128,6 +128,7 @@ class TelephonyChangeListener:
                 trunk_type=t.trunk_type,
                 inbound_cidrs=[c for c in t.inbound_cidrs.split(",") if c],
                 options_ping_seconds=t.options_ping_seconds,
+                register_expire_seconds=t.register_expire_seconds,
                 fax_detect_enabled=t.fax_detect_enabled,
                 fax_detect_timeout_sec=t.fax_detect_timeout_sec,
                 fax_route_number=t.fax_route_number,

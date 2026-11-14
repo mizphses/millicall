@@ -12,7 +12,7 @@ HGW 種別は HGW の癖に合わせた設定（DTMF 無効化・Session-Timers�
 テンプレートが以下を自動で切り替えます。
 
 - **DTMF**: RFC2833 を有効化（一般 SIP / IVR で必須）
-- **NAT 越え**: `ext-sip-ip` / `ext-rtp-ip` に外部アドレスを設定（NAT 内・フレッツ直付けの両対応）
+- **NAT 越え**: `ext-sip-ip` / `ext-rtp-ip` に外部アドレスを設定（NAT 内で使う場合は[後述の設定](#nat-越え)が必要）
 - **着信 ACL**: RFC1918 限定ではなく、**トランクごとに許可した CIDR（プロバイダ IP 帯）**のみ許可
 
 ## 登録手順（Brastel my050 の例）
@@ -33,6 +33,7 @@ HGW 種別は HGW の癖に合わせた設定（DTMF 無効化・Session-Timers�
    | 着信先内線番号 | 受電させる内線 / AI / ワークフロー番号 |
    | 着信許可 IP 帯（CIDR） | プロバイダの SIP サーバ IP 帯（1 行 1 件） |
    | OPTIONS キープアライブ間隔（秒、0 で無効） | **`0`**（Brastel は OPTIONS に応答しないため。後述） |
+   | 登録更新間隔（秒） | NAT 内（HGW 傘下）なら **`60`**〜`120`（NAT の穴を維持するため。後述）。公開 IP 直付けなら既定 `3600` |
 
 3. 「保存」すると対象トランクのプロファイルが再起動され、直ちに REGISTER が試行されます。
 4. 一覧の状態バッジが「登録済み」になれば成功です。API では:
@@ -51,10 +52,19 @@ HGW 種別は HGW の癖に合わせた設定（DTMF 無効化・Session-Timers�
   本番では必ずプロバイダの IP 帯を設定してください。
 - Brastel 等の許可すべき IP 帯は各プロバイダの技術資料で確認してください。
 
-## NAT / 外部 IP の設定
+## NAT 越え
 
-`ext-sip-ip` / `ext-rtp-ip` は既定で **`auto-nat`** です（NAT 内でも公開 IP でも機能）。固定したい場合は
-`.env` で上書きします。
+HGW 傘下（NAT 内）のサーバからインターネット SIP を使うと、「登録済み」なのに外から掛けると
+無音のまま着信しない（`sofia status profile external_<名前>` で `CALLS-IN 0`、INVITE が 1 件も
+届いていない）ことがあります。次の 3 点を確認してください。
+
+### 1. 外部アドレス（`MILLICALL_SIP_EXTERNAL_IP`）を指定する
+
+`ext-sip-ip` / `ext-rtp-ip` は既定で **`auto-nat`** です。`auto-nat` は公開 IP の直付けや
+UPnP / NAT-PMP に対応したルータ配下では機能しますが、**HGW が UPnP / NAT-PMP に対応していないと
+外部 IP を得られず**（FreeSWITCH の起動ログに `Auto-NAT false` が出て Ext-SIP-IP が空になる）、
+REGISTER の Contact や SDP が私設アドレス（`192.168.x.x` 等）のままになります。この場合は
+`.env` で STUN か公開 IP を指定してください。
 
 ```bash
 # ~/millicall/.env
@@ -64,8 +74,24 @@ MILLICALL_SIP_EXTERNAL_IP=stun:stun.freeswitch.org
 # MILLICALL_SIP_EXTERNAL_IP=203.0.113.10
 ```
 
-HGW 傘下（NAT 内）で使う場合は、HGW 側で当該トランクの送信元 SIP ポート（既定 `5080` から +2 ずつ
-自動採番／`/trunks` で明示指定可）に対する UDP ポート転送が必要になることがあります。
+反映後に `sofia status profile external_<名前>` の `Ext-SIP-IP` が公開 IP になっていることを確認します。
+
+### 2. 登録更新間隔を 60〜120 秒にする
+
+HGW の UDP NAT エントリは通信が無いと短時間で閉じます。REGISTER の更新間隔が既定の 3600 秒のままで、
+ほかに NAT の穴を維持する通信が無いと、エントリが閉じた後は事業者からの INVITE がサーバに届きません。
+トランク編集画面の **「登録更新間隔（秒）」を `60`〜`120`** にして保存してください
+（gateway の `expire-seconds`。60〜3600 秒で指定でき、API では `register_expire_seconds`）。
+定期的な再 REGISTER が NAT の穴を開け続けます。
+
+### 3. OPTIONS に応答しない事業者は OPTIONS 間隔を `0` にする
+
+OPTIONS キープアライブも NAT の穴を維持しますが、Brastel 050 など OPTIONS に応答しない事業者では
+登録がフラップします（[後述](#options-キープアライブpingについて)）。その場合は OPTIONS 間隔を `0` にし、
+NAT の維持は上記 2. の登録更新間隔で行います。
+
+上記で改善しない場合は、HGW 側で当該トランクの送信元 SIP ポート（既定 `5080` から +2 ずつ
+自動採番／`/trunks` で明示指定可）に対する UDP ポート転送を設定してください。
 
 ## OPTIONS キープアライブ（ping）について
 
@@ -95,6 +121,7 @@ FreeSWITCH のログには次のような行が繰り返し出ます。
 | 登録が約 60 秒ごとに「登録済み」⇔「未登録」を往復する | ログに `Ping failed ... 408` が出ていれば OPTIONS 非応答の事業者。OPTIONS キープアライブ間隔を `0` にする（上記参照） |
 | `UNREGED` / `FAIL_WAIT` / 未登録 | ユーザー名・パスワード・ホスト名を確認。`sofia status gateway <name>` の失敗理由（401/403 等）を確認 |
 | 登録は成功するが着信しない | 着信許可 CIDR にプロバイダの SIP サーバ IP 帯が含まれているか確認。DID 番号のルーティングを確認 |
+| 登録済みだが外から掛けると無音（`CALLS-IN 0`） | NAT の穴が閉じて INVITE が届いていない。登録更新間隔を `60`〜`120` にし、`MILLICALL_SIP_EXTERNAL_IP` に STUN か公開 IP を指定する（[NAT 越え](#nat-越え)） |
 | 片方向しか音声が聞こえない | NAT 越えの問題。`MILLICALL_SIP_EXTERNAL_IP` と HGW のポート転送を確認 |
 | DTMF（プッシュ操作）が効かない | 種別が「インターネット SIP」になっているか確認（HGW 種別は DTMF を無効化している） |
 

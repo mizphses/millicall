@@ -99,6 +99,8 @@ class TrunkConfig:
     inbound_cidrs: list[str] = field(default_factory=list)
     # gateway の OPTIONS キープアライブ間隔（秒）。0 = ping param を出さない（無効）。
     options_ping_seconds: int = 30
+    # REGISTER の更新間隔（秒。gateway の expire-seconds）。NAT 内では短くして穴を維持する。
+    register_expire_seconds: int = 3600
     # FAX 自動検知（CNG）。有効かつ fax_route_number が有効な FAX 受信番号のときだけ
     # public.xml に spandsp_start_fax_detect を出力する。
     fax_detect_enabled: bool = False

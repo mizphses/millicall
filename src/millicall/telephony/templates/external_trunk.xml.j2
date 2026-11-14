@@ -24,7 +24,7 @@
       <param name="extension"          value="{{ trunk.username }}"/>
       <param name="register"           value="true"/>
       <param name="register-transport" value="udp"/>
-      <param name="expire-seconds"     value="3600"/>
+      <param name="expire-seconds"     value="{{ trunk.register_expire_seconds }}"/>
       <param name="retry-seconds"      value="30"/>
       <param name="caller-id-in-from"  value="true"/>
 {%- if trunk.options_ping_seconds %}
@@ -54,8 +54,10 @@
     <param name="dtmf-type"                  value="rfc2833"/>
     <!--
       NAT 越え: ext-sip-ip/ext-rtp-ip を外部アドレスにする。
-      auto-nat は NAT 内でも フレッツ直付け（公開 IP）でも機能する。
-      固定したい場合は MILLICALL_SIP_EXTERNAL_IP に stun:host や明示 IP を指定。
+      auto-nat は HGW が UPnP / NAT-PMP に対応していないと外部 IP を得られず、
+      Contact / SDP が私設アドレスのままになる。その場合は
+      MILLICALL_SIP_EXTERNAL_IP に stun:host か公開 IP を指定する。
+      NAT の穴を維持するため gateway の expire-seconds（登録更新間隔）も短くする。
     -->
     <param name="ext-sip-ip"                 value="{{ sip_external_ip }}"/>
     <param name="ext-rtp-ip"                 value="{{ sip_external_ip }}"/>

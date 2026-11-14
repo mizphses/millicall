@@ -198,6 +198,13 @@ class Trunk(Base):
     options_ping_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=30, server_default="30"
     )
+    # REGISTER の更新間隔（秒。sofia gateway の expire-seconds param）。60〜3600。
+    # NAT 内（HGW 傘下）のインターネット SIP は、再 REGISTER 以外に NAT の穴を維持する
+    # 通信が無いと HGW の UDP NAT エントリが閉じ、事業者からの INVITE が届かなくなる。
+    # その場合は 60〜120 に短くする（issue #132）。既定 3600 = 従来挙動。
+    register_expire_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3600, server_default="3600"
+    )
     # 音声・FAX 併用回線の FAX 自動検知（issue #121）。True のとき public.xml の着信で
     # transfer の前に spandsp_start_fax_detect を仕掛け、CNG（発呼側 FAX の 1100Hz）を
     # 検知したら fax_route_number（FAX 受信番号）へ切り替える。

@@ -41,6 +41,11 @@ docker compose exec freeswitch fs_cli -x "sofia status gateway hikari"
 「OPTIONS キープアライブ間隔（秒、0 で無効）」を `0` にして保存してください
 （詳細: [インターネット SIP トランク](sip-trunk.md#options-キープアライブpingについて)）。
 
+インターネット SIP で `REGED` なのに外から掛けると無音のまま着信しない（`sofia status profile
+external_<名前>` で `CALLS-IN 0`）場合は、HGW の NAT エントリが閉じて INVITE が届いていません。
+`/trunks` の「登録更新間隔（秒）」を `60`〜`120` にし、`MILLICALL_SIP_EXTERNAL_IP` に STUN か公開 IP を
+指定してください（詳細: [インターネット SIP トランク](sip-trunk.md#nat-越え)）。
+
 **2. ルーティング設定を確認**
 
 管理 GUI `/routes` で着信番号に対するルートが設定されているか確認します。

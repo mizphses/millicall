@@ -476,6 +476,23 @@ export function TrunksPage() {
             />
           </Field>
 
+          <Field
+            label="登録更新間隔（秒）"
+            error={fieldErrors.register_expire_seconds}
+            help="NAT 内で着信が届かない場合は 60〜120 にします（インターネット SIP 向け）"
+          >
+            <input
+              className={input({ invalid: fieldErrors.register_expire_seconds ? true : undefined })}
+              type="number"
+              inputMode="numeric"
+              min={60}
+              max={3600}
+              value={form.register_expire_seconds}
+              onChange={(e) => setForm((f) => ({ ...f, register_expire_seconds: e.target.value }))}
+              placeholder="3600"
+            />
+          </Field>
+
           {form.trunk_type === "sip" && (
             <Field
               label="着信許可 IP 帯（CIDR・改行区切り）"
