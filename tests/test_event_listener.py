@@ -51,6 +51,26 @@ async def test_recorder_persists_and_dedupes(app):
     assert len(rows) == 1
 
 
+async def test_recorder_skips_bridge_b_leg(app):
+    """bridge の B レグ（自身の UUID を Channel-Call-UUID に持つ）は CDR に残さない（issue #135）。"""
+    recorder = CdrRecorder(app.state.sessionmaker)
+    a_leg = {**_hangup_event("a-leg"), "Unique-ID": "a-leg", "Call-Direction": "inbound"}
+    b_leg = {
+        **_hangup_event("b-leg"),
+        "Unique-ID": "b-leg",
+        "variable_originating_leg_uuid": "a-leg",
+        "Other-Type": "originator",
+        "Other-Leg-Unique-ID": "a-leg",
+    }
+    await recorder.handle(b_leg)
+    await recorder.handle(a_leg)
+    async with app.state.sessionmaker() as s:
+        from sqlalchemy import select
+
+        uuids = [r.call_uuid for r in await s.scalars(select(Cdr))]
+    assert uuids == ["a-leg"]
+
+
 async def _fake_fs_emitting_hangup():
     async def handle(reader, writer):
         try:

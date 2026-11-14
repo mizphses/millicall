@@ -8,7 +8,7 @@
 | イベント | 発火タイミング |
 |---|---|
 | `call.inbound` | 外線トランクからの着信チャネル作成時（`CHANNEL_CREATE`、トランクの `external_<name>` プロファイルの inbound レグ） |
-| `call.ended` | 通話終了時（`CHANNEL_HANGUP_COMPLETE`、通話履歴と同じ値）。bridge の B レグは通知しません。内線同士の通話も含みます |
+| `call.ended` | 通話終了時（`CHANNEL_HANGUP_COMPLETE`、通話履歴と同じ値）。**1 通話につき 1 回**、呼の代表レグ（A レグ）だけを通知します（下記「call.ended のレグ」）。内線同士の通話も含みます |
 | `fax.received` | FAX 受信処理の完了時（成功・失敗とも。`success` で判別） |
 | `webhook.test` | 管理画面の「テスト」ボタン（購読設定に関係なく 1 回だけ送信・再試行なし） |
 
@@ -42,6 +42,29 @@
          "ended_at":"2026-11-14T01:03:08Z","duration_seconds":65,"billsec_seconds":60,
          "hangup_cause":"NORMAL_CLEARING"}}
 ```
+
+### call.ended のレグ
+
+FreeSWITCH では 1 通話が複数のチャネル（レグ）からなり、それぞれ `CHANNEL_HANGUP_COMPLETE` が出ます。
+millicall は次の規則で **A レグ（呼の代表）だけ** を通知し、通話履歴（CDR）にも同じ規則で A レグだけを残します。
+
+| 通話の作られ方 | A レグ（通知する） | B レグ（通知しない） |
+|---|---|---|
+| ダイヤルプランの bridge（外線着信 → 内線、内線 → 外線発信、内線同士） | 最初のチャネル（外線着信ならトランク側、内線発信なら発信した端末側） | bridge で作られた `outbound` のチャネル（`variable_originating_leg_uuid` が A レグを指す） |
+| ワークフローの転送（transfer） | 同じチャネルがダイヤルプランを移るだけなので 1 チャネル | — |
+| API / ワークフローからの発信（originate） | 最初に作られるチャネル（`originating_leg_uuid` を持たない `outbound`） | その先を bridge したチャネル |
+
+念のため、同じ `call.uuid` の `call.ended` が重ねて届いた場合も、直近 256 件の `call.uuid` を覚えておき 1 回だけ送ります（再起動でリセット）。
+
+`direction` は FreeSWITCH から見た A レグの向き（`inbound` / `outbound`）をそのまま入れています。
+チャット形式（Discord / Slack / Teams）の「種別」は、`trunk` の有無と組み合わせて次のように表示します。
+
+| `trunk` | `direction` | 種別 |
+|---|---|---|
+| あり | `inbound` | 外線着信 |
+| あり | `outbound` | 外線発信（API・ワークフローからトランクへ直接発信した場合など） |
+| なし | `inbound` | 内線発信（内線端末が発信。外線宛ても含む） |
+| なし | `outbound` | 内線着信（API・ワークフローから内線端末を呼び出した場合など） |
 
 ```json
 {"event":"fax.received","id":"...","occurred_at":"...",
@@ -158,7 +181,7 @@ Webhook がそのまま受け付ける本文を送ります（受信サーバー
 ```json
 {"text":"☎️ 通話終了: `07012345678`（1分0秒）",
  "blocks":[{"type":"header","text":{"type":"plain_text","text":"☎️ 通話終了","emoji":true}},
-           {"type":"section","fields":[{"type":"mrkdwn","text":"*種別*\n着信"},
+           {"type":"section","fields":[{"type":"mrkdwn","text":"*種別*\n外線着信"},
                                        {"type":"mrkdwn","text":"*発信元*\n`07012345678`"},
                                        {"type":"mrkdwn","text":"*着信先*\n`0445895782`"},
                                        {"type":"mrkdwn","text":"*トランク*\n`Flets01`"},
