@@ -34,6 +34,8 @@ from millicall.crypto import SecretBox
 from millicall.db import create_db_engine
 from millicall.db_migrations import sqlite_path, upgrade_to_head
 from millicall.extensions.router import router as extensions_router
+from millicall.fax.outbox import FaxOutboxService
+from millicall.fax.outbox_router import router as fax_outbox_router
 from millicall.fax.router import pdf_router as fax_pdf_router
 from millicall.fax.router import router as fax_router
 from millicall.fax.service import RXFAX_SUBCLASS, FaxService
@@ -41,7 +43,12 @@ from millicall.mcp_server.ephemeral import EphemeralAgentStore
 from millicall.mcp_server.integration import mcp_session_context, mount_mcp
 from millicall.media.audio_fork import MediaEventRouter, register_media_ws
 from millicall.media.dtmf import DtmfCollector
-from millicall.media.service import AnswerRegistry, HangupRegistry, SessionRegistry
+from millicall.media.service import (
+    AnswerRegistry,
+    HangupRegistry,
+    SessionRegistry,
+    locked_bgapi,
+)
 from millicall.media.tickets import MediaStreamTickets
 from millicall.net_guard import (
     WEBHOOK_INTERNAL_PORTS,
@@ -60,7 +67,7 @@ from millicall.scim.router import scim_router
 from millicall.secrets_store import load_or_create_secrets
 from millicall.sip_credentials import SipCredentialError
 from millicall.system.router import router as system_router
-from millicall.telephony.esl import ESLClient
+from millicall.telephony.esl import ESLClient, ESLConnectionClosed
 from millicall.telephony.events import CdrRecorder, EslEventListener
 from millicall.telephony.outbound_routes import (
     make_db_dial_prefix_loader,
@@ -322,13 +329,11 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
         while True:
             try:
                 await fax_service.cleanup(settings.fax_retention_days)
+                await fax_outbox_service.cleanup(settings.fax_retention_days)
             except Exception:
                 logger.exception("FAX の保持期間クリーンアップに失敗しました")
             await asyncio.sleep(24 * 60 * 60)
 
-    fax_retention_task = (
-        asyncio.create_task(_fax_retention_loop()) if settings.fax_retention_days > 0 else None
-    )
     app.state.session_registry = SessionRegistry()
     # 発信オーケストレーション（MCP dial/converse）の応答待ちレジストリ。
     # MediaEventRouter が CHANNEL_ANSWER で解決する。
@@ -379,6 +384,39 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
 
     app.state.esl_reconnect = _esl_reconnect
 
+    # FAX 送信（issue #141）。共有 ESL コマンド接続で originate / uuid_exists を発行する。
+    async def _fax_esl_bgapi(command: str) -> None:
+        app.state.esl_command = await locked_bgapi(
+            app.state.esl_command,
+            command,
+            lock=app.state.esl_command_lock,
+            reconnect=_esl_reconnect,
+        )
+
+    async def _fax_esl_api(command: str) -> str:
+        async with app.state.esl_command_lock:
+            try:
+                return await app.state.esl_command.api(command)
+            except ESLConnectionClosed:
+                return await (await _esl_reconnect()).api(command)
+
+    fax_outbox_service = FaxOutboxService(
+        app.state.sessionmaker,
+        settings.fax_dir,
+        esl_bgapi=_fax_esl_bgapi,
+        esl_api=_fax_esl_api,
+        dispatcher=webhook_dispatcher,
+        public_base_url=settings.public_base_url,
+        secret_box=SecretBox(app.state.secrets.master_key),
+        concurrency=settings.fax_send_concurrency,
+        max_duration_seconds=settings.fax_max_duration_sec,
+    )
+    app.state.fax_outbox_service = fax_outbox_service
+    # 保持期間クリーンアップは受信・送信の両サービスが揃ってから開始する。
+    fax_retention_task = (
+        asyncio.create_task(_fax_retention_loop()) if settings.fax_retention_days > 0 else None
+    )
+
     app.state.workflow_runner = WorkflowRunner(
         sessionmaker=app.state.sessionmaker,
         secrets=app.state.secrets,
@@ -413,6 +451,7 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
         # どちらも配信/変換をタスクへ逃がして即座に戻る（ESL 処理をブロックしない）。
         await webhook_dispatcher.handle(event)
         await fax_service.handle(event)
+        await fax_outbox_service.handle(event)
 
     def _make_event_client(handler):
         return ESLClient(
@@ -435,12 +474,14 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
     )
     await event_listener.start()
     app.state.event_listener = event_listener
+    await fax_outbox_service.start()
 
     # MCP StreamableHTTP session manager を起動/停止する（mount_mcp 済みのときのみ実体を持つ）。
     async with mcp_session_context(app):
         try:
             yield
         finally:
+            await fax_outbox_service.stop()
             await event_listener.stop()
             await webhook_dispatcher.close()
             if fax_retention_task is not None:
@@ -526,6 +567,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(scim_router)
     app.include_router(system_router)
     app.include_router(users_router)
+    # 送信 API（/api/faxes/outbox）は受信の /api/faxes/{fax_id} より先に登録する。
+    app.include_router(fax_outbox_router)
     app.include_router(fax_router)
     app.include_router(fax_pdf_router)
     app.include_router(webhooks_router)
