@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +25,18 @@ class ExtensionUpdate(BaseModel):
     calling_permission: CallingPermission | None = None
 
 
+class ExtensionDeviceSummary(BaseModel):
+    """内線に紐づく端末（電話機）の要約（issue #149）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    device_id: int
+    mac_address: str
+    model: str | None
+    ip_address: str | None
+    last_seen: datetime | None
+
+
 class ExtensionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -32,6 +45,8 @@ class ExtensionRead(BaseModel):
     display_name: str
     enabled: bool
     calling_permission: str
+    # 紐づく端末。1 内線 = 1 端末が原則だが、旧データでは複数ありうるため配列で返す。
+    devices: list[ExtensionDeviceSummary] = []
 
 
 class ExtensionCredentials(BaseModel):
