@@ -169,6 +169,11 @@ class Settings(BaseSettings):
     fax_max_duration_sec: int = 1800
     # 受信 FAX の保持日数。0 = 削除しない。1 以上なら日次で古い FAX（行 + TIFF/PDF）を削除する。
     fax_retention_days: int = 0
+    # FAX 送信（issue #141）: 管理者以外（role=user）にも送信を許可する。既定は管理者のみ。
+    # 許可した場合も、一般ユーザーが見られる・操作できるのは自分が登録した送信ジョブだけ。
+    fax_send_allow_users: bool = False
+    # FAX 送信の同時発信数（HGW の同時通話数を超えないようにする。ひかり電話は通常 2ch）。
+    fax_send_concurrency: int = 1
     # Webhook の送信先として追加で許可する宛先（カンマ/改行区切りの CIDR）。管理画面で編集可。
     # 空でも RFC1918 の LAN 宛ては許可されるが、docker 既定レンジ 172.16.0.0/12・CGNAT
     # 100.64.0.0/10 と、非グローバル宛ての内部サービスポート（80/443/2375/2376/8021 等）は
