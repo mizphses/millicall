@@ -76,6 +76,7 @@ EDITABLE_SETTINGS: dict[str, SettingMeta] = {
     "outbound_international_allow": SettingMeta("telephony"),
     "sip_reject_anonymous": SettingMeta("telephony"),
     "mcp_default_agent_id": SettingMeta("telephony"),
+    "default_outbound_trunk_id": SettingMeta("telephony"),
     "phone_admin_username": SettingMeta("telephony"),
     "phone_admin_password": SettingMeta("telephony", secret=True),
     "mcp_enabled": SettingMeta("telephony"),
@@ -89,7 +90,7 @@ SECRET_KEYS: frozenset[str] = frozenset(k for k, m in EDITABLE_SETTINGS.items() 
 
 # FreeSWITCH 設定の再生成が必要なキー（PUT /api/settings 後に dialplan を再生成する）。
 TELEPHONY_REGEN_KEYS: frozenset[str] = frozenset(
-    {"outbound_international_allow", "sip_reject_anonymous"}
+    {"outbound_international_allow", "sip_reject_anonymous", "default_outbound_trunk_id"}
 )
 
 # 国際発信プレフィックスは 2〜8 桁の数字のみ許可（telephony/service.py と同一規則）。
@@ -125,6 +126,8 @@ def _validate_extra(key: str, value: object) -> None:
             raise SettingValidationError(
                 key, "CIDR 表記が不正です（例: 172.20.0.0/16, 100.64.0.0/10）"
             ) from None
+    elif key == "default_outbound_trunk_id" and value is not None:
+        _check_range(key, value, lambda v: v >= 1, "トランク ID（1 以上の整数）で指定してください")
     elif key == "vad_mode":
         _check_range(key, value, lambda v: 0 <= v <= 3, "0〜3 の整数で指定してください")
     elif key == "saml_default_role":

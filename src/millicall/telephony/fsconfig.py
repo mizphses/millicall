@@ -8,6 +8,11 @@ from xml.etree import ElementTree
 from jinja2 import Environment, PackageLoader
 from markupsafe import Markup
 
+from millicall.telephony.outbound_routes import (
+    prefixed_outbound_trunks,
+    select_default_outbound_trunk,
+)
+
 logger = logging.getLogger("millicall.telephony.fsconfig")
 
 # 生成する FreeSWITCH 設定の権限（SIP/ESL パスワードを平文で含むため所有者のみ）。
@@ -108,6 +113,12 @@ class TrunkConfig:
     fax_route_number: str | None = None
     # 検知中に案内音声を再生する（answer → 検知 → playback → transfer）。
     fax_detect_announce: bool = False
+    # DB の trunks.id（既定の発信トランク設定との照合用）。テスト等で未指定なら None。
+    id: int | None = None
+    # 発信プレフィクス（issue #139）。空 = プレフィクスなし。
+    dial_prefix: str = ""
+    # 発信に使う。False のトランクは着信専用（既定の発信トランクにもならない）。
+    outbound_enabled: bool = True
 
 
 def _safe_abs_path(path: Path | str) -> str | None:
@@ -274,6 +285,8 @@ class FreeswitchConfigWriter:
         fax_announce_path: Path | str = Path("data/freeswitch/tts/builtin/fax_receive_notice.wav"),
         # 1 回の FAX 受信の上限秒数（sched_hangup で強制切断する）。
         fax_max_duration_sec: int = 1800,
+        # 既定の発信トランク（trunks.id, issue #139）。None = 発信に使うトランクの名前順先頭。
+        default_outbound_trunk_id: int | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         # dialplan の data 属性に埋め込むため、空白・クォート・変数展開記号を含むパスは使わない。
@@ -324,6 +337,7 @@ class FreeswitchConfigWriter:
             "fax_dir": resolved_fax_dir,
             "fax_announce_path": resolved_announce,
             "fax_max_duration_sec": int(fax_max_duration_sec),
+            "default_outbound_trunk_id": default_outbound_trunk_id,
         }
         self._env = Environment(
             loader=PackageLoader("millicall.telephony", "templates"),
@@ -354,6 +368,10 @@ class FreeswitchConfigWriter:
                 )
         self._base["international_allow_prefixes"] = list(international_allow_prefixes)
         self._base["sip_reject_anonymous"] = sip_reject_anonymous
+
+    def set_default_outbound_trunk_id(self, trunk_id: int | None) -> None:
+        """既定の発信トランク（trunks.id）を差し替える（管理画面からの設定変更用）。"""
+        self._base["default_outbound_trunk_id"] = trunk_id
 
     def set_internal_network(
         self, internal_bind_ip: str | None, internal_domain: str | None
@@ -494,10 +512,16 @@ class FreeswitchConfigWriter:
                 "external_trunk.xml.j2",
                 {"trunk": trunk, "source_port": source_ports[trunk.name]},
             )
-        outbound_trunk = sorted(trunks, key=lambda t: t.name)[0] if trunks else None
+        # 既定の発信トランク（プレフィクスなしの外線発信）と、発信プレフィクスで選ぶ
+        # トランク（issue #139）。どちらも outbound_enabled のトランクだけが対象。
+        outbound_trunk = select_default_outbound_trunk(
+            trunks, self._base["default_outbound_trunk_id"]
+        )
+        prefixed_trunks = prefixed_outbound_trunks(trunks)
         rendered["dialplan/default.xml"] = self._render(
             "dialplan_default.xml.j2",
-            {"outbound_trunk": outbound_trunk, "extensions": extensions,
+            {"outbound_trunk": outbound_trunk, "prefixed_trunks": prefixed_trunks,
+             "extensions": extensions,
              "ring_groups": ring_groups, "ai_agents": ai_agents, "workflows": workflows,
              "fax_receivers": fax_receivers},
         )

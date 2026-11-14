@@ -37,6 +37,11 @@ class TrunkCreate(BaseModel):
     fax_route_number: str | None = Field(default=None, pattern=r"^(\d{2,6})?$")
     # 検知中に案内音声を再生する（応答してから検知・案内 → 通常の着信先へ）。
     fax_detect_announce: bool = False
+    # 発信プレフィクス（issue #139）。"" = プレフィクスなし。書式・重複は router で検証する
+    # （違反は日本語メッセージの 422）。
+    dial_prefix: str = Field(default="", max_length=32)
+    # 発信に使う。False = 着信専用（既定の発信トランクにもプレフィクス発信にも使わない）。
+    outbound_enabled: bool = True
     enabled: bool = True
 
 
@@ -66,6 +71,9 @@ class TrunkUpdate(BaseModel):
     # 未指定 = 変更しない / null または "" = 未設定に戻す（model_fields_set で区別）。
     fax_route_number: str | None = Field(default=None, pattern=r"^(\d{2,6})?$")
     fax_detect_announce: bool | None = None
+    # None = 変更しない / "" = プレフィクスなしに戻す。
+    dial_prefix: str | None = Field(default=None, max_length=32)
+    outbound_enabled: bool | None = None
     enabled: bool | None = None
 
 
@@ -93,6 +101,9 @@ class TrunkRead(BaseModel):
     fax_detect_timeout_sec: int
     fax_route_number: str | None
     fax_detect_announce: bool
+    # 発信プレフィクス（"" = なし）と、発信に使うか。
+    dial_prefix: str
+    outbound_enabled: bool
     enabled: bool
     has_password: bool
     # Mutation responses distinguish persistence from live telephony application.
@@ -118,6 +129,8 @@ class TrunkRead(BaseModel):
             fax_detect_timeout_sec=t.fax_detect_timeout_sec,
             fax_route_number=t.fax_route_number,
             fax_detect_announce=t.fax_detect_announce,
+            dial_prefix=t.dial_prefix,
+            outbound_enabled=t.outbound_enabled,
             enabled=t.enabled,
             has_password=bool(t.password_encrypted),
         )

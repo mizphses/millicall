@@ -26,6 +26,7 @@ from millicall.numberplan import find_number
 from millicall.sip_credentials import encrypt_sip_password
 from millicall.telephony.esl import ESLError
 from millicall.telephony.hooks import ExtensionChangeListener
+from millicall.telephony.outbound_routes import dial_prefix_format_error, prefixes_overlap
 from millicall.trunks.schemas import TrunkCreate, TrunkRead, TrunkUpdate
 
 router = APIRouter(prefix="/api/trunks", tags=["trunks"], dependencies=[Depends(require_admin)])
@@ -143,6 +144,45 @@ async def _validate_fax_detect(
         )
 
 
+async def _validate_dial_prefix(
+    session: AsyncSession, prefix: str, *, exclude_trunk_id: int | None = None
+) -> None:
+    """発信プレフィクスを検証する（issue #139）。違反は日本語メッセージの 422。
+
+    - 書式: 0-9 * # の 1〜8 文字、0 始まり不可、1 始まり 3 桁（184/186 等）不可
+    - 他トランクのプレフィクスと重複・前方一致で重なる（92 と 920 など）ものは不可
+    - 番号プラン（内線・AI・ワークフロー・グループ・FAX）の番号と一致するものは不可
+    """
+    if prefix == "":
+        return
+    error = dial_prefix_format_error(prefix)
+    if error is not None:
+        raise HTTPException(status_code=422, detail=error)
+    stmt = select(Trunk).where(Trunk.dial_prefix != "")
+    if exclude_trunk_id is not None:
+        stmt = stmt.where(Trunk.id != exclude_trunk_id)
+    for other in await session.scalars(stmt):
+        if other.dial_prefix == prefix:
+            raise HTTPException(
+                status_code=422,
+                detail=f"発信プレフィクス {prefix} は他のトランク（{other.name}）と重複しています",
+            )
+        if prefixes_overlap(other.dial_prefix, prefix):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"発信プレフィクス {prefix} は他のトランク（{other.name}）の"
+                    f" {other.dial_prefix} と先頭が重なり、どちらから発信するか決まりません"
+                ),
+            )
+    entry = await find_number(session, prefix)
+    if entry is not None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"発信プレフィクス {prefix} は番号プランの番号（{entry.label}）と衝突しています",
+        )
+
+
 async def _validate_pending(session: AsyncSession, listener: ExtensionChangeListener) -> None:
     """Check the pending transaction's complete configuration before committing."""
     await session.flush()
@@ -188,6 +228,7 @@ async def create_trunk(
     inbound_cidrs = _validate_inbound_cidrs(body.inbound_cidrs)
     fax_route_number = body.fax_route_number or None
     await _validate_fax_detect(session, body.fax_detect_enabled, fax_route_number)
+    await _validate_dial_prefix(session, body.dial_prefix)
     trunk = Trunk(
         name=body.name,
         display_name=body.display_name,
@@ -206,6 +247,8 @@ async def create_trunk(
         fax_detect_timeout_sec=body.fax_detect_timeout_sec,
         fax_route_number=fax_route_number,
         fax_detect_announce=body.fax_detect_announce,
+        dial_prefix=body.dial_prefix,
+        outbound_enabled=body.outbound_enabled,
         enabled=body.enabled,
     )
     session.add(trunk)
@@ -287,6 +330,8 @@ async def update_trunk(
         await _validate_inbound_extension(session, body.inbound_extension)
     if body.inbound_cidrs is not None:
         trunk.inbound_cidrs = _validate_inbound_cidrs(body.inbound_cidrs)
+    if body.dial_prefix is not None:
+        await _validate_dial_prefix(session, body.dial_prefix, exclude_trunk_id=trunk_id)
     for fld in (
         "display_name",
         "host",
@@ -300,6 +345,8 @@ async def update_trunk(
         "fax_detect_enabled",
         "fax_detect_timeout_sec",
         "fax_detect_announce",
+        "dial_prefix",
+        "outbound_enabled",
         "enabled",
     ):
         val = getattr(body, fld)
