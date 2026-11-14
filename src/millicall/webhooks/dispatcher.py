@@ -10,6 +10,9 @@ ESL イベントストリーム（EslEventListener の _compose_handler）と FA
 - 接続先は net_guard.make_webhook_transport で解決・固定する（規則は net_guard の
   「Webhook 送信先ポリシー」参照。ローカル専用サービスへの SSRF 防止）。リダイレクトは追わない。
 - 各試行を webhook_deliveries に記録し、webhook ごとに直近 200 件だけ残す。
+- 本文の形式（issue #130）: ``generic`` は millicall JSON（上記の署名付き）。``discord`` /
+  ``slack`` / ``teams`` は formats.build_chat_message の本文を送り、署名ヘッダは付けない
+  （各サービスは検証しないため。再試行・配信ログ・送信先ポリシーは共通）。
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from millicall.models import Webhook, WebhookDelivery
 from millicall.net_guard import WebhookTargetPolicy, make_webhook_transport
 from millicall.telephony.events import event_to_cdr
+from millicall.webhooks.formats import CHAT_FORMATS, FORMAT_GENERIC, build_chat_message
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -237,10 +241,16 @@ class WebhookDispatcher:
         for hook in hooks:
             if event_name not in parse_events(hook.events):
                 continue
-            secret = self._decrypt_secret(hook)
-            if secret is None:
-                continue
-            self._spawn(self.deliver(hook.id, hook.url, secret, event_name, data))
+            if hook.format in CHAT_FORMATS:
+                # チャット形式は署名しないのでシークレットを使わない（復号失敗でも送る）。
+                secret = ""
+            else:
+                secret = self._decrypt_secret(hook)
+                if secret is None:
+                    continue
+            self._spawn(
+                self.deliver(hook.id, hook.url, secret, event_name, data, format=hook.format)
+            )
 
     def _decrypt_secret(self, hook: Webhook) -> str | None:
         if not hook.secret_encrypted:
@@ -252,14 +262,19 @@ class WebhookDispatcher:
             return None
 
     def build_body(
-        self, event_name: str, delivery_id: str, data: dict[str, Any]
+        self,
+        event_name: str,
+        delivery_id: str,
+        data: dict[str, Any],
+        format: str = FORMAT_GENERIC,
     ) -> bytes:
-        payload: dict[str, Any] = {
-            "event": event_name,
-            "id": delivery_id,
-            "occurred_at": utc_iso(),
-        }
-        payload.update(data)
+        occurred_at = utc_iso()
+        payload: dict[str, Any]
+        if format in CHAT_FORMATS:
+            payload = build_chat_message(format, event_name, data, occurred_at)
+        else:
+            payload = {"event": event_name, "id": delivery_id, "occurred_at": occurred_at}
+            payload.update(data)
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
     async def deliver(
@@ -270,18 +285,22 @@ class WebhookDispatcher:
         event_name: str,
         data: dict[str, Any],
         *,
+        format: str = FORMAT_GENERIC,
         max_attempts: int = MAX_ATTEMPTS,
     ) -> DeliveryResult:
-        """1 件の Webhook へ配信する（失敗時は最大 max_attempts 回まで再試行）。"""
+        """1 件の Webhook へ配信する（失敗時は最大 max_attempts 回まで再試行）。
+
+        format が未知の値なら generic として送る。チャット形式は secret があっても署名しない。
+        """
         delivery_id = str(uuid.uuid4())
-        body = self.build_body(event_name, delivery_id, data)
+        body = self.build_body(event_name, delivery_id, data, format)
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "millicall-webhook/1",
             EVENT_HEADER: event_name,
             DELIVERY_HEADER: delivery_id,
         }
-        if secret:
+        if secret and format not in CHAT_FORMATS:
             headers[SIGNATURE_HEADER] = compute_signature(secret, body)
         status_code: int | None = None
         error: str | None = None

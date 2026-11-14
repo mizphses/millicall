@@ -2,6 +2,8 @@
 
 シークレットは SecretBox で暗号化保存し、レスポンスには出さない（has_secret のみ）。
 変更は監査ログに残す（URL は記録するがシークレットは記録しない）。
+format（issue #130）が discord / slack / teams のときはチャット向け本文を署名なしで送る。
+チャット形式でもシークレットは受理・保存する（generic に戻したときに使える）。
 """
 
 import json
@@ -23,11 +25,14 @@ from millicall.webhooks.dispatcher import (
     WebhookDispatcher,
     parse_events,
 )
+from millicall.webhooks.formats import CHAT_FORMATS
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"], dependencies=[Depends(require_admin)])
 
 # WEBHOOK_EVENTS と同じ集合（tests/test_webhooks.py で一致を検証する）。
 WebhookEvent = Literal["call.inbound", "call.ended", "fax.received"]
+# formats.WEBHOOK_FORMATS と同じ集合（tests/test_webhooks.py で一致を検証する）。
+WebhookFormat = Literal["generic", "discord", "slack", "teams"]
 
 
 def _validate_url(value: str) -> str:
@@ -54,6 +59,8 @@ class WebhookCreate(BaseModel):
     # 空文字 = 署名なし。
     secret: str = Field(default="", max_length=256)
     events: list[WebhookEvent] = Field(default_factory=list)
+    # generic = millicall JSON（署名あり）/ discord / slack / teams = チャット向け本文（署名なし）。
+    format: WebhookFormat = "generic"
     enabled: bool = True
 
     @field_validator("url")
@@ -70,6 +77,7 @@ class WebhookUpdate(BaseModel):
     # 未指定 = 変更しない / "" = シークレットを削除（署名なし）/ 値 = 置き換え。
     secret: str | None = Field(default=None, max_length=256)
     events: list[WebhookEvent] | None = None
+    format: WebhookFormat | None = None
     enabled: bool | None = None
 
     @field_validator("url")
@@ -83,6 +91,7 @@ class WebhookRead(BaseModel):
     name: str
     url: str
     events: list[str]
+    format: str
     enabled: bool
     has_secret: bool
     created_at: datetime
@@ -94,6 +103,7 @@ class WebhookRead(BaseModel):
             name=w.name,
             url=w.url,
             events=parse_events(w.events),
+            format=w.format,
             enabled=w.enabled,
             has_secret=bool(w.secret_encrypted),
             created_at=w.created_at,
@@ -154,6 +164,7 @@ async def create_webhook(
         url=body.url,
         secret_encrypted=box.encrypt(body.secret) if body.secret else "",
         events=_dedupe(list(body.events)),
+        format=body.format,
         enabled=body.enabled,
     )
     session.add(hook)
@@ -165,7 +176,12 @@ async def create_webhook(
         action="webhook.create",
         target_type="webhook",
         target_id=str(hook.id),
-        detail={"name": body.name, "url": body.url, "events": sorted(set(body.events))},
+        detail={
+            "name": body.name,
+            "url": body.url,
+            "format": body.format,
+            "events": sorted(set(body.events)),
+        },
         ip_address=get_client_ip(request),
     )
     await session.commit()
@@ -200,6 +216,9 @@ async def update_webhook(
     if body.events is not None:
         hook.events = _dedupe(list(body.events))
         changed["events"] = sorted(set(body.events))
+    if body.format is not None:
+        hook.format = body.format
+        changed["format"] = body.format
     if body.enabled is not None:
         hook.enabled = body.enabled
         changed["enabled"] = body.enabled
@@ -257,7 +276,12 @@ async def test_webhook(
     """webhook.test イベントを 1 回だけ（再試行なし）送り、結果を返す。"""
     hook = await _get_or_404(session, webhook_id)
     try:
-        secret = box.decrypt(hook.secret_encrypted) if hook.secret_encrypted else ""
+        # チャット形式は署名しないので復号しない。
+        secret = (
+            box.decrypt(hook.secret_encrypted)
+            if hook.secret_encrypted and hook.format not in CHAT_FORMATS
+            else ""
+        )
     except Exception:  # noqa: BLE001 — InvalidToken（master_key 不一致など）
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -270,6 +294,7 @@ async def test_webhook(
         action="webhook.test",
         target_type="webhook",
         target_id=str(hook.id),
+        detail={"format": hook.format},
         ip_address=get_client_ip(request),
     )
     await session.commit()
@@ -279,6 +304,7 @@ async def test_webhook(
         secret,
         EVENT_TEST,
         {"test": {"message": "millicall webhook test", "webhook_id": hook.id}},
+        format=hook.format,
         max_attempts=1,
     )
     return WebhookTestResult(
