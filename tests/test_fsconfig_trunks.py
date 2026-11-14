@@ -325,3 +325,32 @@ def test_gateway_expire_seconds_custom_value(tmp_path):
     params = _gateway_params(ext)
     assert params["expire-seconds"] == "60"
     assert params["register"] == "true"
+
+
+# --- From と INVITE サイズ（issue #152） ---
+
+
+def _profile_settings(ext: str) -> dict[str, str]:
+    root = ET.fromstring(ext)
+    settings = root.find("settings")
+    assert settings is not None
+    return {p.get("name"): p.get("value") for p in settings.findall("param")}
+
+
+def test_sip_trunk_from_is_auth_user_and_short_user_agent(tmp_path):
+    """sip 種別は From を認証ユーザーにし（403 回避）、UA を短くする（513 回避）。"""
+    w = _writer(tmp_path)
+    trunk = _trunk("brastel", trunk_type="sip", username="44425296", caller_id="05068650165")
+    w.write_all([], trunks=[trunk])
+    ext = (tmp_path / "sip_profiles" / "external_brastel.xml").read_text()
+    assert _gateway_params(ext)["caller-id-in-from"] == "false"
+    assert _profile_settings(ext)["user-agent-string"] == "millicall"
+
+
+def test_hgw_trunk_keeps_caller_id_in_from(tmp_path):
+    """HGW は From の番号で発信者番号を判断するため従来どおり true。UA は既定のまま。"""
+    w = _writer(tmp_path)
+    w.write_all([], trunks=[_trunk("hgw")])
+    ext = (tmp_path / "sip_profiles" / "external_hgw.xml").read_text()
+    assert _gateway_params(ext)["caller-id-in-from"] == "true"
+    assert "user-agent-string" not in _profile_settings(ext)

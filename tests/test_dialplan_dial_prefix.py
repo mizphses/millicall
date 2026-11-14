@@ -122,7 +122,7 @@ def test_star_prefix_is_regex_escaped_and_sip_has_no_codec(tmp_path):
     assert 'expression="^\\*3(18[46])?(0\\d+)$"' in dp
     r = _route(dp, "*305012345678")
     assert r["extension"] == "outbound_external_via_brastel"
-    assert r["bridge"] == "sofia/gateway/brastel/05012345678"
+    assert r["bridge"] == "{sip_cid_type=none}sofia/gateway/brastel/05012345678"
     assert r["caller_id"] == "05068650165"
     # * がエスケープされていなければ「3 の 0 回以上」になり 305… に一致してしまう
     assert _route(dp, "305012345678")["bridge"] is None
@@ -165,7 +165,7 @@ def test_prefixed_international_allowlist_requires_international(tmp_path):
 def test_default_outbound_trunk_setting(tmp_path):
     dp = _render(tmp_path, _trunks(), default_id=3)
     r = _route(dp, "0312345678")
-    assert r["bridge"] == "sofia/gateway/brastel/0312345678"
+    assert r["bridge"] == "{sip_cid_type=none}sofia/gateway/brastel/0312345678"
     assert r["caller_id"] == "05068650165"
     # プレフィクス発信は既定設定に関係なく効く
     assert _route(dp, "920312345678")["bridge"].endswith("gateway/Flets02/0312345678")

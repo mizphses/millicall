@@ -108,10 +108,12 @@ def test_hgw_trunk_bridge_forces_pcmu(tmp_path):
     # 国内 outbound_external と国際 allow の両方の bridge に付く。
     assert dp.count(f'data="{bridged}"') == 2
     assert dp.count("sofia/gateway/hgw/") == 2
+    # HGW は From の番号で発信者番号を判断するので sip_cid_type は付けない（#152）。
+    assert "sip_cid_type" not in dp
 
 
 def test_sip_trunk_bridge_has_no_codec_override(tmp_path):
-    """#136: sip 種別（Brastel 等）は従来どおりコーデック指定なし。"""
+    """#136: sip 種別（Brastel 等）はコーデック指定なし。#152: RPID を付けない。"""
     w = _writer(tmp_path, allow=["010"])
     w.write_all(
         [ExtensionConfig("1001", "A", "pw")], trunks=[_trunk(trunk_type="sip", name="brastel")]
@@ -119,4 +121,6 @@ def test_sip_trunk_bridge_has_no_codec_override(tmp_path):
     dp = (tmp_path / "dialplan" / "default.xml").read_text()
     ET.fromstring(dp)
     assert "absolute_codec_string" not in dp
-    assert dp.count('data="sofia/gateway/brastel/${destination_number}"') == 2
+    bridged = "{sip_cid_type=none}sofia/gateway/brastel/${destination_number}"
+    assert dp.count(f'data="{bridged}"') == 2
+    assert dp.count("sofia/gateway/brastel/") == 2

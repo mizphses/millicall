@@ -171,7 +171,7 @@ async def test_mcp_prefixed_dial_selects_trunk():
     assert extra == ["absolute_codec_string=PCMU"]
     dest, cid, extra = await svc._resolve_target_with_vars("*305012345678", "", "")
     assert dest == "sofia/gateway/brastel/05012345678"
-    assert extra == []
+    assert extra == ["sip_cid_type=none"]
 
 
 @pytest.mark.asyncio

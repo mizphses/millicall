@@ -60,10 +60,15 @@ def _codec_vars_for(trunk_row: object) -> list[str]:
 
     HGW（ひかり電話）は G.711 μ-law（PCMU）のみ対応で、PCMA でオファーすると
     488 Not Acceptable Here になる（#136）。hgw 種別なら B レグを PCMU 固定にする。
+    sip 種別（Brastel 等）は sip_cid_type=none で Remote-Party-ID を付けない。Brastel は
+    From の番号しか使わず、INVITE を 1300 バイト未満に収めないと 513 になる（issue #152）。
     trunk_type 属性が無い場合はモデル既定値（hgw）とみなす。
     """
-    if (getattr(trunk_row, "trunk_type", "hgw") or "hgw") == "hgw":
+    trunk_type = getattr(trunk_row, "trunk_type", "hgw") or "hgw"
+    if trunk_type == "hgw":
         return ["absolute_codec_string=PCMU"]
+    if trunk_type == "sip":
+        return ["sip_cid_type=none"]
     return []
 
 
