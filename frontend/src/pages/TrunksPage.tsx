@@ -17,6 +17,7 @@ import { PageLayout } from "../components/PageLayout";
 import { SlidePanel } from "../components/SlidePanel";
 import { useToast } from "../toast/ToastProvider";
 import {
+  CALLER_ID_MODE_OPTIONS,
   buildCreatePayload,
   buildUpdatePayload,
   emptyForm,
@@ -475,6 +476,25 @@ export function TrunksPage() {
             />
             発信に使う（オフにすると着信専用）
           </label>
+
+          <Field
+            label="番号通知"
+            help="ひかり電話は既定で非通知です。番号を通知したい回線は「常に通知（186）」にしてください。掛けた番号が 184/186 で始まるときはそちらを優先します"
+          >
+            <select
+              className={input()}
+              value={form.caller_id_mode}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, caller_id_mode: e.target.value as TrunkFormValues["caller_id_mode"] }))
+              }
+            >
+              {CALLER_ID_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
 
           <Field label="着信先内線番号" error={fieldErrors.inbound_extension} help={<ObjectLink to="/routes" newTab>番号プランを確認・登録</ObjectLink>}>
             <select

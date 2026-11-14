@@ -29,6 +29,7 @@ const original: TrunkRead = {
   fax_detect_announce: false,
   dial_prefix: "",
   outbound_enabled: true,
+  caller_id_mode: "as_dialed",
   enabled: true,
   has_password: true,
 };
@@ -54,6 +55,7 @@ function formOf(overrides: Partial<TrunkFormValues>): TrunkFormValues {
     fax_detect_announce: false,
     dial_prefix: "",
     outbound_enabled: true,
+    caller_id_mode: "as_dialed",
     enabled: true,
     ...overrides,
   };
@@ -439,5 +441,17 @@ describe("発信プレフィクス / 発信に使う（#139）", () => {
     expect(options[1].label).toBe("A（a / 番号通知 0311111111）");
     expect(options[2].label).toContain("着信専用");
     expect(options[3].label).toContain("無効");
+  });
+});
+
+describe("番号通知（caller_id_mode, #139）", () => {
+  it("作成 payload は既定 as_dialed、選んだモードを送る", () => {
+    expect(buildCreatePayload(formOf({ password: "p" })).caller_id_mode).toBe("as_dialed");
+    expect(buildCreatePayload(formOf({ caller_id_mode: "notify", password: "p" })).caller_id_mode).toBe("notify");
+  });
+
+  it("更新 payload は変更時のみ含める", () => {
+    expect(buildUpdatePayload(formOf({ caller_id_mode: "withhold" }), original).caller_id_mode).toBe("withhold");
+    expect(buildUpdatePayload(formOf({}), original).caller_id_mode).toBeUndefined();
   });
 });

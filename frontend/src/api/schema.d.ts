@@ -3027,6 +3027,12 @@ export interface components {
              */
             caller_id: string;
             /**
+             * Caller Id Mode
+             * @default as_dialed
+             * @enum {string}
+             */
+            caller_id_mode: "as_dialed" | "notify" | "withhold";
+            /**
              * Dial Prefix
              * @default
              */
@@ -3105,6 +3111,11 @@ export interface components {
             apply_warning?: string | null;
             /** Caller Id */
             caller_id: string;
+            /**
+             * Caller Id Mode
+             * @enum {string}
+             */
+            caller_id_mode: "as_dialed" | "notify" | "withhold";
             /** Dial Prefix */
             dial_prefix: string;
             /** Did Number */
@@ -3167,6 +3178,8 @@ export interface components {
         TrunkUpdate: {
             /** Caller Id */
             caller_id?: string | null;
+            /** Caller Id Mode */
+            caller_id_mode?: ("as_dialed" | "notify" | "withhold") | null;
             /** Dial Prefix */
             dial_prefix?: string | null;
             /** Did Number */

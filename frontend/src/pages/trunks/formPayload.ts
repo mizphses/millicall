@@ -3,6 +3,14 @@ import type { components } from "../../api/schema";
 export type TrunkRead = components["schemas"]["TrunkRead"];
 export type TrunkCreate = components["schemas"]["TrunkCreate"];
 export type TrunkUpdate = components["schemas"]["TrunkUpdate"];
+export type CallerIdMode = TrunkRead["caller_id_mode"];
+
+/** 番号通知セレクトの選択肢。 */
+export const CALLER_ID_MODE_OPTIONS: { value: CallerIdMode; label: string }[] = [
+  { value: "as_dialed", label: "掛けたとおり" },
+  { value: "notify", label: "常に通知（186）" },
+  { value: "withhold", label: "常に非通知（184）" },
+];
 
 /** SlidePanel フォームが保持する値。API 型とは分離し、UI 都合の型に寄せる。 */
 export interface TrunkFormValues {
@@ -58,6 +66,11 @@ export interface TrunkFormValues {
   dial_prefix: string;
   /** 発信に使う。オフ = 着信専用。 */
   outbound_enabled: boolean;
+  /**
+   * 番号通知。as_dialed=掛けたとおり / notify=常に 186 / withhold=常に 184。
+   * 掛けた番号が既に 184/186 で始まるときはそちらが優先される。
+   */
+  caller_id_mode: CallerIdMode;
   enabled: boolean;
 }
 
@@ -91,6 +104,7 @@ export function emptyForm(): TrunkFormValues {
     fax_detect_announce: false,
     dial_prefix: "",
     outbound_enabled: true,
+    caller_id_mode: "as_dialed",
     enabled: true,
   };
 }
@@ -117,6 +131,7 @@ export function formFromTrunk(trunk: TrunkRead): TrunkFormValues {
     fax_detect_announce: trunk.fax_detect_announce,
     dial_prefix: trunk.dial_prefix,
     outbound_enabled: trunk.outbound_enabled,
+    caller_id_mode: trunk.caller_id_mode,
     enabled: trunk.enabled,
   };
 }
@@ -145,6 +160,7 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
     fax_detect_announce: form.fax_detect_enabled ? form.fax_detect_announce : false,
     dial_prefix: form.dial_prefix.trim(),
     outbound_enabled: form.outbound_enabled,
+    caller_id_mode: form.caller_id_mode,
     enabled: form.enabled,
   };
 }
@@ -273,6 +289,9 @@ export function buildUpdatePayload(
   }
   if (form.outbound_enabled !== original.outbound_enabled) {
     payload.outbound_enabled = form.outbound_enabled;
+  }
+  if (form.caller_id_mode !== original.caller_id_mode) {
+    payload.caller_id_mode = form.caller_id_mode;
   }
 
   if (form.enabled !== original.enabled) {
