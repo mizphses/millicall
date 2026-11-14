@@ -62,7 +62,8 @@ millicallctl logs core | grep 初期管理者
 | ページ | URL | 確認内容 |
 |---|---|---|
 | ダッシュボード | `/` | サービス状態の概要 |
-| 内線 | `/extensions` | SIP 内線の登録 |
+| 内線 | `/extensions` | SIP 内線の登録（電話機に割り当てる内線もここで先に作成） |
+| デバイス | `/devices` | 電話機に作成済みの内線を選んで割り当てる |
 | トランク | `/trunks` | HGW 外線トランクの設定 |
 | ネットワーク | `/network` | LAN/DHCP/NAT/Tailscale |
 
