@@ -1,7 +1,8 @@
 """
 テスト: SIP多層防御 (Phase 6 Task 7)
 - acl.conf.xml レンダリング（millicall_trusted, default="deny", RFC1918+loopback）
-- internal / external プロファイルへの apply-inbound-acl=millicall_trusted 適用
+- internal プロファイルへの apply-register-acl=millicall_trusted 適用（apply-inbound-acl は使わない）
+- external プロファイルへの apply-inbound-acl=millicall_trusted 適用
 - public.xml 匿名着信拒否（sip_reject_anonymous=False/True）
 - Settings.sip_trusted_cidrs デフォルト値（HGW 192.168.1.1 を包含）
 """
@@ -84,12 +85,23 @@ def test_acl_conf_xml_in_returned_paths(tmp_path) -> None:
 # --- SIP プロファイルへの ACL 適用 ---
 
 
-def test_internal_profile_has_apply_inbound_acl(tmp_path) -> None:
-    """internal.xml に apply-inbound-acl=millicall_trusted が設定されていること。"""
+def test_internal_profile_has_apply_register_acl(tmp_path) -> None:
+    """internal.xml に apply-register-acl=millicall_trusted が設定されていること。"""
     _writer(tmp_path).write_all([])
     content = (tmp_path / "sip_profiles" / "internal.xml").read_text()
-    assert 'name="apply-inbound-acl"' in content
-    assert 'value="millicall_trusted"' in content
+    assert '<param name="apply-register-acl" value="millicall_trusted"/>' in content
+
+
+def test_internal_profile_has_no_apply_inbound_acl(tmp_path) -> None:
+    """internal.xml に apply-inbound-acl の param が無いこと（regression: issue #134）。
+
+    apply-inbound-acl があると ACL 通過の INVITE はダイジェスト認証が省略され、
+    ディレクトリ変数（calling_permission 等）が載らずに外線発信が CALL_REJECTED になる。
+    """
+    _writer(tmp_path).write_all([])
+    content = (tmp_path / "sip_profiles" / "internal.xml").read_text()
+    assert 'name="apply-inbound-acl"' not in content
+    assert '<param name="auth-calls" value="true"/>' in content
 
 
 def _external_trunk_content(tmp_path) -> str:

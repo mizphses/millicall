@@ -8,8 +8,13 @@
     <param name="auth-calls" value="true"/>
     <param name="accept-blind-reg" value="false"/>
     <param name="accept-blind-auth" value="false"/>
-    <!-- SIP多層防御: 信頼CIDRからのみ内線登録を受け付ける（auth-callsと二重防御）-->
-    <param name="apply-inbound-acl" value="millicall_trusted"/>
+    <!--
+      SIP多層防御: REGISTER の送信元は信頼 CIDR に限定する（apply-register-acl）。
+      INVITE は apply-inbound-acl にすると ACL 通過で認証が省略され、ディレクトリ変数
+      （calling_permission 等）がチャネルに載らないため使わず、auth-calls=true の
+      ダイジェスト認証に任せる（issue #134）。
+    -->
+    <param name="apply-register-acl" value="millicall_trusted"/>
     <param name="inbound-codec-prefs" value="PCMU,PCMA"/>
     <param name="outbound-codec-prefs" value="PCMU,PCMA"/>
     <param name="rtp-timer-name" value="soft"/>

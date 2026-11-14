@@ -65,6 +65,25 @@ SDP ネゴシエーションの失敗の場合は [HGW/フレッツ設定](hgw-f
 
 ---
 
+## 内線から外線に発信できない（CALL_REJECTED）
+
+### 症状
+発信権限を `domestic` 以上にしている内線から外線に発信しても切断され、FreeSWITCH のログに
+`calling_permission= DOMESTIC_REJECTED`（または `INTL_REJECTED`）が出る。
+
+### 確認手順
+
+```bash
+millicallctl logs freeswitch | grep "_REJECTED"
+```
+
+- `calling_permission=internal` と出る場合: `/extensions` で発信権限を確認します（[発信権限](security-model.md#発信権限トールフラウド対策)）。
+- `calling_permission=` が**空**の場合: INVITE がダイジェスト認証されず、ディレクトリ変数が載っていません。
+  internal プロファイル（`sip_profiles/internal.xml`）に `apply-inbound-acl` が残っていないか確認してください。
+  正しくは `apply-register-acl` です（[SIP 多層防御](security-model.md#sip-多層防御)、issue #134）。
+
+---
+
 ## AI 応答が遅い（TTS 遅延）
 
 ### 症状
