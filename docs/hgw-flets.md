@@ -53,6 +53,14 @@ HGW は **RFC 2833（電話イベント / payload type 101）の renegotiation �
 
 HGW は `Session-Expires: 300`（5 分）を要求します。長時間通話やワークフロー実行中に park が続く場合、セッションが切れる可能性があります。FreeSWITCH の session-timer 設定で対処します。
 
+### コーデック（G.711 μ-law / PCMU のみ）
+
+HGW が受け付ける音声コーデックは **G.711 μ-law（PCMU）のみ**です。PCMA（A-law）でオファーすると `488 Not Acceptable Here` で発信が失敗します。
+
+- HGW 種別のトランクへの外線発信は、bridge / originate 文字列に `{absolute_codec_string=PCMU}` を付けて B レグを PCMU 固定でオファーします（core が自動生成）。
+- 内線プロファイルは `inbound-codec-negotiation=greedy` で FreeSWITCH 側の優先順（PCMU 先頭）でコーデックを決めるため、通常はトランスコードなしで中継されます。
+- 内線端末が PCMA でしか接続できない場合でも、FreeSWITCH が PCMA ⇔ PCMU を変換するので発信できます（変換分の CPU 負荷のみ）。
+
 ## 発信者番号通知（186 プレフィックス）
 
 この HGW 回線は **デフォルト非通知**です。相手に発信者番号を通知したい場合は、発信番号の先頭に `186` を付けます。
@@ -98,6 +106,7 @@ docker compose exec freeswitch fs_cli -x "sofia loglevel all 5"
 | トランクが `NOREG` / 未登録 | HGW 側の内線登録設定を確認。SIP パスワードが一致しているか確認 |
 | 着信しない | `sofia status gateway hikari` で `REGED` を確認。ルーティング設定（`/routes`）で着信番号が正しいか確認 |
 | DTMF が効かない | インバンド DTMF 設定を確認。`docker compose logs freeswitch` で DTMF イベントを確認 |
+| 外線発信が `488 Not Acceptable Here` | HGW は PCMU のみ。`fs_cli` の `sofia global siptrace on` で B レグの SDP に `PCMU`（payload 0）だけが載っているか確認 |
 | 通話が突然切れる | Session-Expires タイムアウトを疑う。HGW の `Session-Expires` 値に合わせた session-timer 設定を確認 |
 
 詳細: RUNBOOK-phase3-ai.md（リポジトリ runbooks/ 参照） / RUNBOOK-phase4b-workflow.md（リポジトリ runbooks/ 参照）

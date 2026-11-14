@@ -13,9 +13,10 @@ def _writer(tmp_path, allow=None):
     )
 
 
-def _trunk():
+def _trunk(trunk_type="hgw", name="hgw"):
     return TrunkConfig(
-        name="hgw",
+        name=name,
+        trunk_type=trunk_type,
         display_name="HGW",
         host="192.168.1.1",
         username="0312345678",
@@ -94,3 +95,27 @@ def test_malicious_prefix_raises_valueerror(tmp_path):
             esl_password="pw",
             international_allow_prefixes=["010|"],
         )
+
+
+def test_hgw_trunk_bridge_forces_pcmu(tmp_path):
+    """#136: HGW は PCMU のみ。bridge 文字列の {} で B レグを PCMU 固定にする。"""
+    w = _writer(tmp_path, allow=["010"])
+    w.write_all([ExtensionConfig("1001", "A", "pw")], trunks=[_trunk()])
+    dp = (tmp_path / "dialplan" / "default.xml").read_text()
+    ET.fromstring(dp)
+    bridged = "{absolute_codec_string=PCMU}sofia/gateway/hgw/${destination_number}"
+    # 国内 outbound_external と国際 allow の両方の bridge に付く。
+    assert dp.count(f'data="{bridged}"') == 2
+    assert dp.count("sofia/gateway/hgw/") == 2
+
+
+def test_sip_trunk_bridge_has_no_codec_override(tmp_path):
+    """#136: sip 種別（Brastel 等）は従来どおりコーデック指定なし。"""
+    w = _writer(tmp_path, allow=["010"])
+    w.write_all(
+        [ExtensionConfig("1001", "A", "pw")], trunks=[_trunk(trunk_type="sip", name="brastel")]
+    )
+    dp = (tmp_path / "dialplan" / "default.xml").read_text()
+    ET.fromstring(dp)
+    assert "absolute_codec_string" not in dp
+    assert dp.count('data="sofia/gateway/brastel/${destination_number}"') == 2

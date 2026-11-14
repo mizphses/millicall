@@ -77,6 +77,13 @@
       </condition>
     </extension>
 {% if outbound_trunk %}
+{#
+  HGW（ひかり電話）は G.711 μ-law（PCMU）しか受け付けず、PCMA でオファーすると
+  488 Not Acceptable Here になる（#136）。A レグに set しても B レグのオファーは
+  変わらないため、bridge 文字列の {} で B レグ変数として absolute_codec_string を渡す。
+  sip 種別（Brastel 等）は従来どおりコーデック指定なし。
+#}
+{% set outbound_codec_vars = "{absolute_codec_string=PCMU}" if outbound_trunk.trunk_type == "hgw" else "" %}
     <!--
       発信権限ゲート（トールフラウド対策 §7）
       チャンネル変数 ${calling_permission} はディレクトリの <variable> で内線ごとに設定される。
@@ -93,7 +100,7 @@
           <action application="set" data="effective_caller_id_number={{ outbound_trunk.caller_id }}"/>
           <action application="set" data="effective_caller_id_name={{ outbound_trunk.caller_id }}"/>
           <action application="set" data="hangup_after_bridge=true"/>
-          <action application="bridge" data="sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
+          <action application="bridge" data="{{ outbound_codec_vars }}sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
           <action application="hangup"/>
           <anti-action application="log" data="WARNING calling_permission=${calling_permission} INTL_REJECTED: ${destination_number} (calling_permission が空なら INVITE がダイジェスト認証されていない可能性: apply-inbound-acl 通過でディレクトリ変数が載っていない)"/>
           <anti-action application="hangup" data="CALL_REJECTED"/>
@@ -118,7 +125,7 @@
           <action application="set" data="effective_caller_id_number={{ outbound_trunk.caller_id }}"/>
           <action application="set" data="effective_caller_id_name={{ outbound_trunk.caller_id }}"/>
           <action application="set" data="hangup_after_bridge=true"/>
-          <action application="bridge" data="sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
+          <action application="bridge" data="{{ outbound_codec_vars }}sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
           <action application="hangup"/>
           <anti-action application="log" data="WARNING calling_permission=${calling_permission} DOMESTIC_REJECTED: ${destination_number} (calling_permission が空なら INVITE がダイジェスト認証されていない可能性: apply-inbound-acl 通過でディレクトリ変数が載っていない)"/>
           <anti-action application="hangup" data="CALL_REJECTED"/>

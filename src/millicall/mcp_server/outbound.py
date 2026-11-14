@@ -45,6 +45,19 @@ _EXTERNAL_PREFIXES = ("0", "184", "186")
 # originate コマンドへの補間前に検証し、空白・改行・区切り文字による注入を防ぐ。
 _VALID_NUMBER_RE = re.compile(r"^[0-9*#+]{1,32}$")
 
+
+def _codec_vars_for(trunk_row: object) -> list[str]:
+    """トランク種別に応じた originate 変数を返す。
+
+    HGW（ひかり電話）は G.711 μ-law（PCMU）のみ対応で、PCMA でオファーすると
+    488 Not Acceptable Here になる（#136）。hgw 種別なら B レグを PCMU 固定にする。
+    trunk_type 属性が無い場合はモデル既定値（hgw）とみなす。
+    """
+    if (getattr(trunk_row, "trunk_type", "hgw") or "hgw") == "hgw":
+        return ["absolute_codec_string=PCMU"]
+    return []
+
+
 # C3 修正: 国際番号パターン（dialplan_default.xml.j2 の outbound_intl_block と同じ分類）。
 # 010\d+  : 国際電話（NTT ひかり電話/固定網の国際プレフィクス）
 # 00[1-9]\d+: IP 電話・各キャリアの国際プレフィクス（001/0033 等）
@@ -288,6 +301,20 @@ class OutboundCallService:
     ) -> tuple[str, str]:
         """(dest, effective_caller_id) を解決する（旧 _resolve_endpoint 相当）。
 
+        詳細は _resolve_target_with_vars を参照。
+        """
+        dest, cid, _ = await self._resolve_target_with_vars(phone_number, caller_id, trunk)
+        return dest, cid
+
+    async def _resolve_target_with_vars(
+        self, phone_number: str, caller_id: str, trunk: str
+    ) -> tuple[str, str, list[str]]:
+        """(dest, effective_caller_id, 追加 originate 変数) を解決する。
+
+        HGW 種別のトランクは PCMU しか受け付けず PCMA でオファーすると 488 になる
+        （#136）。外線が HGW 宛のときは originate 変数に absolute_codec_string=PCMU を
+        追加して B レグのオファーを PCMU 固定にする。sip 種別・内線宛は追加なし。
+
         トランクが必要な外線で enabled トランクが無い場合は ValueError。
 
         セキュリティ: phone_number / caller_id / trunk は originate コマンド文字列に
@@ -322,7 +349,9 @@ class OutboundCallService:
             # C3: caller-ID ロックダウン — トランクの caller_id を優先し spoofing を防ぐ。
             trunk_cid = getattr(match, "caller_id", "") or ""
             effective_cid = trunk_cid or caller_id  # trunk値が無い場合のみ caller-supplied を使う
-            return f"sofia/gateway/{trunk}/{phone_number}", effective_cid
+            return (
+                f"sofia/gateway/{trunk}/{phone_number}", effective_cid, _codec_vars_for(match)
+            )
 
         if phone_number.startswith(_EXTERNAL_PREFIXES):
             trunks = await self._fetch_enabled_trunks()
@@ -334,10 +363,14 @@ class OutboundCallService:
             # C3: caller-ID ロックダウン — トランクの caller_id を優先し spoofing を防ぐ。
             trunk_cid = getattr(selected, "caller_id", "") or ""
             effective_cid = trunk_cid or caller_id  # trunk値が無い場合のみ caller-supplied を使う
-            return f"sofia/gateway/{selected.name}/{phone_number}", effective_cid
+            return (
+                f"sofia/gateway/{selected.name}/{phone_number}",
+                effective_cid,
+                _codec_vars_for(selected),
+            )
 
         # 内線宛。
-        return f"user/{phone_number}@{self._sip_domain}", caller_id
+        return f"user/{phone_number}@{self._sip_domain}", caller_id, []
 
     async def dial(
         self,
@@ -352,12 +385,15 @@ class OutboundCallService:
         番号解決失敗（トランク無しなど）は ValueError を送出。
         timeout 秒以内に応答が無ければ DialTimeout(call_uuid) を送出。
         """
-        dest, caller_id = await self._resolve_target(phone_number, caller_id, trunk)
+        dest, caller_id, extra_vars = await self._resolve_target_with_vars(
+            phone_number, caller_id, trunk
+        )
         call_uuid = self._uuid_factory()
 
         variables = [
             f"origination_uuid={call_uuid}",
             "verbose_events=true",
+            *extra_vars,
         ]
         if caller_id:
             variables.append(f"origination_caller_id_number={caller_id}")
@@ -404,7 +440,9 @@ class OutboundCallService:
 
         # 番号解決（dial と同経路）。
         try:
-            dest, resolved_cid = await self._resolve_target(phone_number, caller_id, trunk)
+            dest, resolved_cid, extra_vars = await self._resolve_target_with_vars(
+                phone_number, caller_id, trunk
+            )
         except ValueError as exc:
             return ConverseResult(
                 status="error", phone_number=phone_number, purpose=purpose, error=str(exc)
@@ -448,6 +486,7 @@ class OutboundCallService:
             f"origination_uuid={call_uuid}",
             "millicall_ai_agent=ephemeral",
             "verbose_events=true",
+            *extra_vars,
         ]
         if resolved_cid:
             variables.append(f"origination_caller_id_number={resolved_cid}")

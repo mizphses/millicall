@@ -33,6 +33,9 @@ def test_write_all_creates_static_configs(tmp_path) -> None:
     assert 'name="192.168.1.10"' in internal
     assert '<param name="sip-ip" value="auto"/>' in internal
     assert '<param name="rtp-ip" value="auto"/>' in internal
+    # #136: FreeSWITCH 側の優先順（PCMU 先頭）で内線コーデックを決める。
+    assert '<param name="inbound-codec-negotiation" value="greedy"/>' in internal
+    assert '<param name="inbound-codec-prefs" value="PCMU,PCMA"/>' in internal
     dialplan = (tmp_path / "dialplan" / "default.xml").read_text()
     assert "user/${destination_number}@192.168.1.10" in dialplan
 
