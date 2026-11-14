@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +31,9 @@ from millicall.network.client import NetdClient, NetdError
 from millicall.provisioning.service import (
     PROVISION_MODE_STANDARD,
     PROVISION_MODE_STRICT,
+    AssignResult,
+    ExtensionAlreadyAssignedError,
+    ExtensionNotFoundError,
     ResyncResult,
     chunked,
     device_is_registered,
@@ -41,6 +44,7 @@ from millicall.provisioning.service import (
     reset_config_fetch,
     resync_phone,
     sync_devices_from_leases,
+    unbind_device,
 )
 from millicall.provisioning.templates import provisioning_root_url
 from millicall.telephony.hooks import ExtensionChangeListener
@@ -89,16 +93,38 @@ class DeviceRead(BaseModel):
 
 
 class QuickProvisionBody(BaseModel):
-    """クイックプロビジョニングリクエストボディ。"""
+    """クイックプロビジョニングリクエストボディ。
 
-    extension_number: str
-    display_name: str
+    ``extension_id``（既存内線を選ぶ。推奨）か、``extension_number`` + ``display_name``
+    （無ければ新規作成）のどちらか一方を指定する。両方・どちらも無しは 422。
+    """
+
+    extension_id: int | None = None
+    extension_number: str | None = None
+    display_name: str | None = None
+    # 選んだ内線が別の端末に割当済みのとき、旧端末の割当を外して付け替える
+    reassign: bool = False
+
+    @model_validator(mode="after")
+    def _one_target(self) -> "QuickProvisionBody":
+        by_number = self.extension_number is not None or self.display_name is not None
+        if self.extension_id is not None and by_number:
+            raise ValueError("extension_id と extension_number/display_name は同時に指定できません")
+        if self.extension_id is None and (not self.extension_number or not self.display_name):
+            raise ValueError("extension_id か extension_number + display_name を指定してください")
+        return self
 
 
 class DeviceUpdate(BaseModel):
-    """デバイス更新リクエストボディ（指定した項目のみ更新）。"""
+    """デバイス更新リクエストボディ（指定した項目のみ更新）。
+
+    ``extension_id`` は指定したときだけ扱う（``null`` で割当を解除する）。
+    """
 
     provision_mode: ProvisionMode | None = None
+    extension_id: int | None = None
+    # extension_id の変更で、別の端末に割当済みの内線を付け替えるか
+    reassign: bool = False
 
 
 class ProvisionTokenIssued(BaseModel):
@@ -213,6 +239,49 @@ async def _get_device_or_404(session: AsyncSession, device_id: int) -> Device:
     return device
 
 
+def _assigned_conflict(exc: ExtensionAlreadyAssignedError) -> HTTPException:
+    """別の端末に割当済みの内線を選んだときの 409（相手端末の MAC/モデル/IP を含む）。"""
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+async def _record_assign_audit(
+    session: AsyncSession, request: Request, admin: User, result: AssignResult
+) -> None:
+    """内線の割当（と付け替えで外した旧端末）を監査ログに残す（commit は呼び出し元）。"""
+    ip = get_client_ip(request)
+    for released in result.released:
+        await record_audit(
+            session,
+            actor_user_id=admin.id,
+            actor_label=admin.username,
+            action="device.extension.unassign",
+            target_type="device",
+            target_id=str(released.id),
+            detail={
+                "mac_address": released.mac_address,
+                "extension_number": result.extension.number,
+                "reason": "reassign",
+                "to_device_mac_address": result.device.mac_address,
+            },
+            ip_address=ip,
+        )
+    await record_audit(
+        session,
+        actor_user_id=admin.id,
+        actor_label=admin.username,
+        action="device.extension.reassign" if result.released else "device.extension.assign",
+        target_type="device",
+        target_id=str(result.device.id),
+        detail={
+            "mac_address": result.device.mac_address,
+            "extension_number": result.extension.number,
+            "extension_created": result.created,
+            "from_device_mac_addresses": [d.mac_address for d in result.released],
+        },
+        ip_address=ip,
+    )
+
+
 def _to_resync_read(result: ResyncResult) -> ResyncResultRead:
     return ResyncResultRead(
         requested=result.requested,
@@ -316,27 +385,44 @@ async def quick_provision_endpoint(
     device_id: int,
     body: QuickProvisionBody,
     request: Request,
+    admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
     listener: ExtensionChangeListener = Depends(get_change_listener),
     esl_factory=Depends(get_esl_factory),
 ) -> DeviceRead:
     """デバイスに内線を割り当て、プロビジョニング完了状態にする。
 
+    ``extension_id`` で事前定義した内線を選ぶ（推奨）か、従来どおり番号 + 表示名で
+    指定する（無ければ新規作成）。選んだ内線が別の端末に割当済みなら 409 を返し、
+    ``reassign: true`` のときだけ旧端末の割当を外して付け替える（issue #149）。
+
     トークンは発行しない（既定は standard ゲート。厳格モードは管理者が個別に選ぶ）。
     内線割り当て後、best-effort で電話機へ再取得を指示する（結果は応答に含めない。
     取得できたかは一覧の取得記録で確認する）。
     """
     try:
-        device = await quick_provision(
+        result = await quick_provision(
             session=session,
             device_id=device_id,
+            extension_id=body.extension_id,
             extension_number=body.extension_number,
             display_name=body.display_name,
-            telephony_notify=listener.notify,
+            reassign=body.reassign,
             secret_box=get_secret_box(request),
         )
+    except ExtensionAlreadyAssignedError as exc:
+        await session.rollback()
+        raise _assigned_conflict(exc) from exc
     except ValueError as exc:
+        await session.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await _record_assign_audit(session, request, admin, result)
+    await session.commit()
+    device = result.device
+    await session.refresh(device)
+    # FreeSWITCH 設定再生成 + reloadxml
+    await listener.notify(session)
 
     await _resync(request, device, esl_factory)
     return await _build_device_read(device, session)
@@ -349,14 +435,61 @@ async def update_device(
     request: Request,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
+    listener: ExtensionChangeListener = Depends(get_change_listener),
+    esl_factory=Depends(get_esl_factory),
 ) -> DeviceRead:
-    """デバイスの配信ゲート（provision_mode）を切り替える。
+    """デバイスの配信ゲート（provision_mode）と内線割当（extension_id）を変更する。
 
-    standard へ戻すとトークンは破棄する（トークン付き URL は以後 404。電話機側の URL も
-    通常 URL に戻す必要がある）。strict にしてもトークンは自動発行しない
+    provision_mode: standard へ戻すとトークンは破棄する（トークン付き URL は以後 404。
+    電話機側の URL も通常 URL に戻す必要がある）。strict にしてもトークンは自動発行しない
     （POST /{id}/token で明示的に発行する。発行までは端末固有 cfg は 404）。
+
+    extension_id: 指定したときだけ扱う。別の内線 ID なら割当を変更し（別の端末に割当済みなら
+    409。``reassign: true`` で付け替え）、``null`` なら割当を解除する（provisioned=False・
+    取得記録リセット）。どちらも FreeSWITCH 設定を再生成する（issue #149）。
     """
     device = await _get_device_or_404(session, device_id)
+    changed_extension = False
+    if "extension_id" in body.model_fields_set and body.extension_id != device.extension_id:
+        if body.extension_id is None:
+            prev = (
+                await session.get(Extension, device.extension_id)
+                if device.extension_id is not None
+                else None
+            )
+            unbind_device(device)
+            await record_audit(
+                session,
+                actor_user_id=admin.id,
+                actor_label=admin.username,
+                action="device.extension.unassign",
+                target_type="device",
+                target_id=str(device.id),
+                detail={
+                    "mac_address": device.mac_address,
+                    "extension_number": prev.number if prev is not None else None,
+                    "reason": "manual",
+                },
+                ip_address=get_client_ip(request),
+            )
+        else:
+            try:
+                result = await quick_provision(
+                    session=session,
+                    device_id=device.id,
+                    extension_id=body.extension_id,
+                    reassign=body.reassign,
+                    secret_box=get_secret_box(request),
+                )
+            except ExtensionAlreadyAssignedError as exc:
+                await session.rollback()
+                raise _assigned_conflict(exc) from exc
+            except ExtensionNotFoundError as exc:
+                await session.rollback()
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            await _record_assign_audit(session, request, admin, result)
+        changed_extension = True
+
     if body.provision_mode is not None and body.provision_mode != device.provision_mode:
         previous = device.provision_mode
         device.provision_mode = body.provision_mode
@@ -379,7 +512,14 @@ async def update_device(
             },
             ip_address=get_client_ip(request),
         )
-        await session.commit()
+    await session.commit()
+
+    if changed_extension:
+        await session.refresh(device)
+        # FreeSWITCH 設定再生成 + reloadxml
+        await listener.notify(session)
+        if device.extension_id is not None:
+            await _resync(request, device, esl_factory)
     return await _build_device_read(device, session)
 
 

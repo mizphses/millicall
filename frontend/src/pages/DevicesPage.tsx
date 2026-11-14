@@ -6,8 +6,12 @@ import { Field as ProvisionField } from "../components/Field";
  * セクション:
  *   (a) デバイス一覧テーブル（MAC / IP / ホスト名 / モデル / 内線 / provisioned バッジ / 最終確認）
  *   (b) 「リース同期」ボタン → POST /api/devices/sync（スピナー付き・502 エラー表示）
- *   (c) 未プロビジョニングデバイスへの「内線割当」アクション → SlidePanel でフォーム入力
+ *   (c) 「内線割当」/「内線を変更」アクション → SlidePanel で内線を選ぶ（issue #149）
  *       → POST /api/devices/{id}/quick-provision
+ *       既定は /extensions で定義済みの内線から選ぶ（extension_id）。別の端末に割当済みの
+ *       内線を選ぶと付け替えの確認を挟み reassign: true で送る。「新しい内線を作成して
+ *       割り当てる」に切り替えると従来どおり番号 + 表示名を入力する。
+ *       「割当を解除」→ PATCH /api/devices/{id}（extension_id: null）
  *   (d) 削除アクション（confirm ダイアログ）→ DELETE /api/devices/{id}
  *   (e) 状態列（issue #85）: 取得待ち / トークン待ち / 取得済み（登録未確認・未登録）/ 完了。
  *       「完了」は設定ファイル取得済み かつ SIP 登録確認済み（GET /api/devices/registrations）
@@ -40,6 +44,7 @@ import {
   Copy,
   Check,
   AlertTriangle,
+  Unlink,
 } from "lucide-react";
 
 import { css, cx } from "styled-system/css";
@@ -47,13 +52,24 @@ import { badge, button, input, panel } from "styled-system/recipes";
 
 import { api } from "../api/client";
 import type { components } from "../api/schema.d";
-import { DEVICE_REGISTRATIONS_KEY, DEVICES_KEY } from "../queryKeys";
+import { DEVICE_REGISTRATIONS_KEY, DEVICES_KEY, EXTENSIONS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
 import { SlidePanel } from "../components/SlidePanel";
 import { useToast } from "../toast/ToastProvider";
 import { deviceStatus, resyncToast } from "./devices/deviceStatus";
+import {
+  type AssignErrors,
+  type AssignForm,
+  type AssignMode,
+  type QuickProvisionPayload,
+  buildAssignPayload,
+  deviceShortLabel,
+  emptyAssignForm,
+  extensionOptions,
+  validateAssignForm,
+} from "./devices/extensionAssign";
 
 // ---------------------------------------------------------------------------
 // 型エイリアス（schema.d.ts の自動生成型を再利用）
@@ -64,6 +80,7 @@ type DeviceRegistrations = components["schemas"]["DeviceRegistrations"];
 type ProvisionTokenIssued = components["schemas"]["ProvisionTokenIssued"];
 type ResyncResultRead = components["schemas"]["ResyncResultRead"];
 type ProvisionMode = DeviceRead["provision_mode"];
+type ExtensionRead = components["schemas"]["ExtensionRead"];
 
 // ---------------------------------------------------------------------------
 // API 関数
@@ -87,17 +104,29 @@ async function syncDevices(): Promise<DeviceRead[]> {
   return data;
 }
 
+async function fetchExtensions(): Promise<ExtensionRead[]> {
+  const { data, error } = await api.GET("/api/extensions");
+  if (error) throw new Error("内線一覧の取得に失敗しました");
+  return data ?? [];
+}
+
 async function quickProvision(
   deviceId: number,
-  extensionNumber: string,
-  displayName: string
+  body: QuickProvisionPayload
 ): Promise<DeviceRead> {
   const { data, error, response } = await api.POST("/api/devices/{device_id}/quick-provision", {
     params: { path: { device_id: deviceId } },
-    body: { extension_number: extensionNumber, display_name: displayName },
+    body,
   });
   if (response.status === 409) {
-    throw new Error("この内線番号は既に使用されています");
+    // 別の端末に割当済み（detail に相手端末の MAC・モデル・IP が入る）
+    const detail = (error as { detail?: unknown } | undefined)?.detail;
+    throw new Error(
+      typeof detail === "string" ? detail : "この内線は別の端末に割り当て済みです"
+    );
+  }
+  if (response.status === 404) {
+    throw new Error("端末または内線が見つかりません。一覧を更新してください");
   }
   if (response.status === 502) {
     const body = await response.json().catch(() => ({}));
@@ -131,10 +160,19 @@ async function resyncDevice(deviceId: number): Promise<ResyncResultRead> {
   return data;
 }
 
+async function unassignExtension(deviceId: number): Promise<DeviceRead> {
+  const { data, error } = await api.PATCH("/api/devices/{device_id}", {
+    params: { path: { device_id: deviceId } },
+    body: { extension_id: null, reassign: false },
+  });
+  if (error || !data) throw new Error("内線の割当解除に失敗しました");
+  return data;
+}
+
 async function updateProvisionMode(deviceId: number, mode: ProvisionMode): Promise<DeviceRead> {
   const { data, error } = await api.PATCH("/api/devices/{device_id}", {
     params: { path: { device_id: deviceId } },
-    body: { provision_mode: mode },
+    body: { provision_mode: mode, reassign: false },
   });
   if (error || !data) throw new Error("配信モードの変更に失敗しました");
   return data;
@@ -170,19 +208,6 @@ function formatDateTime(value: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// フォーム状態型
-// ---------------------------------------------------------------------------
-
-type QuickProvisionForm = {
-  extension_number: string;
-  display_name: string;
-};
-
-function emptyProvisionForm(): QuickProvisionForm {
-  return { extension_number: "", display_name: "" };
-}
-
-// ---------------------------------------------------------------------------
 // ページコンポーネント
 // ---------------------------------------------------------------------------
 
@@ -207,12 +232,15 @@ export function DevicesPage() {
     null
   );
 
-  // 内線割当パネル
+  // 内線割当パネル（issue #149: 既定は既存の内線から選ぶ）
+  const extensionsQuery = useQuery({ queryKey: EXTENSIONS_KEY, queryFn: fetchExtensions });
   const [provisionTarget, setProvisionTarget] = useState<DeviceRead | null>(null);
-  const [provisionForm, setProvisionForm] = useState<QuickProvisionForm>(emptyProvisionForm());
-  const [provisionErrors, setProvisionErrors] = useState<
-    Partial<Record<"extension_number" | "display_name", string>>
-  >({});
+  const [provisionForm, setProvisionForm] = useState<AssignForm>(emptyAssignForm());
+  const [provisionErrors, setProvisionErrors] = useState<AssignErrors>({});
+  // 別の端末に割当済みの内線を選んだときの付け替え確認
+  const [reassignHolder, setReassignHolder] = useState<DeviceRead | null>(null);
+  // 割当解除の確認
+  const [unassignTarget, setUnassignTarget] = useState<DeviceRead | null>(null);
 
   // 削除確認
   const [deleteTarget, setDeleteTarget] = useState<DeviceRead | null>(null);
@@ -233,19 +261,32 @@ export function DevicesPage() {
 
   // ─── 内線割当ミューテーション ───
   const provisionMutation = useMutation({
-    mutationFn: () =>
-      quickProvision(
-        provisionTarget!.id,
-        provisionForm.extension_number.trim(),
-        provisionForm.display_name.trim()
-      ),
-    onSuccess: () => {
+    mutationFn: (reassign: boolean) =>
+      quickProvision(provisionTarget!.id, buildAssignPayload(provisionForm, reassign)),
+    onSuccess: (_device, reassign) => {
       queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
-      toast.success("内線を割り当てました");
+      queryClient.invalidateQueries({ queryKey: EXTENSIONS_KEY });
+      toast.success(reassign ? "内線を付け替えました" : "内線を割り当てました");
+      setReassignHolder(null);
       setProvisionTarget(null); selection.clear();
     },
     onError: (err) => {
+      setReassignHolder(null);
       toast.error(err instanceof Error ? err.message : "内線割当に失敗しました");
+    },
+  });
+
+  // ─── 割当解除ミューテーション ───
+  const unassignMutation = useMutation({
+    mutationFn: (id: number) => unassignExtension(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
+      queryClient.invalidateQueries({ queryKey: EXTENSIONS_KEY });
+      toast.success("内線の割当を解除しました");
+      setUnassignTarget(null);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "内線の割当解除に失敗しました");
     },
   });
 
@@ -322,7 +363,13 @@ export function DevicesPage() {
   function openProvision(device: DeviceRead) {
     selection.select(device.id);
     setProvisionTarget(device);
-    setProvisionForm(emptyProvisionForm());
+    setProvisionForm(emptyAssignForm());
+    setProvisionErrors({});
+    setReassignHolder(null);
+  }
+
+  function setAssignMode(mode: AssignMode) {
+    setProvisionForm((f) => ({ ...f, mode }));
     setProvisionErrors({});
   }
 
@@ -330,18 +377,24 @@ export function DevicesPage() {
     setProvisionTarget(null); selection.clear();
   }
 
+  const assignOptions = provisionTarget
+    ? extensionOptions(extensionsQuery.data ?? [], listQuery.data ?? [], provisionTarget.id)
+    : [];
+
   function handleProvisionSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const errors: Partial<Record<"extension_number" | "display_name", string>> = {};
-    if (!provisionForm.extension_number.trim()) {
-      errors.extension_number = "内線番号を入力してください";
-    }
-    if (!provisionForm.display_name.trim()) {
-      errors.display_name = "表示名を入力してください";
-    }
+    const errors = validateAssignForm(provisionForm);
     setProvisionErrors(errors);
     if (Object.keys(errors).length > 0) return;
-    provisionMutation.mutate();
+    if (provisionForm.mode === "existing") {
+      const option = assignOptions.find((o) => String(o.id) === provisionForm.extension_id);
+      if (option?.holder) {
+        // 別の端末に割当済み → 付け替えの確認を挟む
+        setReassignHolder(option.holder);
+        return;
+      }
+    }
+    provisionMutation.mutate(false);
   }
 
   // ─── テーブルカラム定義 ───
@@ -477,7 +530,7 @@ export function DevicesPage() {
     {
       key: "actions",
       header: "操作",
-      width: "340px",
+      width: "420px",
       align: "right",
       render: (row) => (
         <div
@@ -488,7 +541,7 @@ export function DevicesPage() {
             flexWrap: "wrap",
           })}
         >
-          {!row.provisioned && (
+          {row.extension_id == null ? (
             <button
               type="button"
               className={button({ variant: "secondary", size: "sm" })}
@@ -498,6 +551,27 @@ export function DevicesPage() {
               <PhoneCall size={13} />
               内線割当
             </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={button({ variant: "ghost", size: "sm" })}
+                style={{ height: "28px" }}
+                onClick={() => openProvision(row)}
+              >
+                <PhoneCall size={13} />
+                内線を変更
+              </button>
+              <button
+                type="button"
+                className={button({ variant: "ghost", size: "sm" })}
+                style={{ height: "28px" }}
+                onClick={() => setUnassignTarget(row)}
+              >
+                <Unlink size={13} />
+                割当を解除
+              </button>
+            </>
           )}
           {row.provisioned && (
             <button
@@ -603,7 +677,7 @@ export function DevicesPage() {
       <SlidePanel
         busy={provisionMutation.isPending}
         open={provisionTarget !== null}
-        title="内線を割り当てる"
+        title={provisionTarget?.extension_id != null ? "内線を変更する" : "内線を割り当てる"}
         onClose={closeProvision}
         footer={
           <>
@@ -665,32 +739,142 @@ export function DevicesPage() {
               </div>
             </div>
 
-            <ProvisionField required label="内線番号" error={provisionErrors.extension_number}>
-              <input
-                className={input({ invalid: provisionErrors.extension_number ? true : undefined })}
-                value={provisionForm.extension_number}
-                onChange={(e) =>
-                  setProvisionForm((f) => ({ ...f, extension_number: e.target.value }))
-                }
-                inputMode="numeric"
-                placeholder="1001"
-                autoFocus
-              />
-            </ProvisionField>
+            {provisionTarget.extension_number && (
+              <p className={css({ fontSize: "sm", color: "text.muted" })}>
+                現在の内線: {provisionTarget.extension_number}
+                {provisionTarget.extension_display_name
+                  ? ` ${provisionTarget.extension_display_name}`
+                  : ""}
+              </p>
+            )}
 
-            <ProvisionField required label="表示名" error={provisionErrors.display_name}>
-              <input
-                className={input({ invalid: provisionErrors.display_name ? true : undefined })}
-                value={provisionForm.display_name}
-                onChange={(e) =>
-                  setProvisionForm((f) => ({ ...f, display_name: e.target.value }))
-                }
-                placeholder="営業部 田中"
-              />
-            </ProvisionField>
+            <div
+              role="radiogroup"
+              aria-label="割当方法"
+              className={css({ display: "flex", flexDirection: "column", gap: "2" })}
+            >
+              {(
+                [
+                  ["existing", "既存の内線から選ぶ"],
+                  ["new", "新しい内線を作成して割り当てる"],
+                ] as const
+              ).map(([mode, label]) => (
+                <label
+                  key={mode}
+                  className={css({
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "2",
+                    fontSize: "sm",
+                    cursor: "pointer",
+                  })}
+                >
+                  <input
+                    type="radio"
+                    name="assign-mode"
+                    value={mode}
+                    checked={provisionForm.mode === mode}
+                    onChange={() => setAssignMode(mode)}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+
+            {provisionForm.mode === "existing" ? (
+              <ProvisionField required label="内線" error={provisionErrors.extension_id}>
+                <select
+                  className={input({ invalid: provisionErrors.extension_id ? true : undefined })}
+                  value={provisionForm.extension_id}
+                  onChange={(e) =>
+                    setProvisionForm((f) => ({ ...f, extension_id: e.target.value }))
+                  }
+                  disabled={extensionsQuery.isLoading}
+                >
+                  <option value="">
+                    {extensionsQuery.isLoading ? "読み込み中…" : "内線を選んでください"}
+                  </option>
+                  {assignOptions.map((o) => (
+                    <option key={o.id} value={String(o.id)}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </ProvisionField>
+            ) : (
+              <>
+                <ProvisionField required label="内線番号" error={provisionErrors.extension_number}>
+                  <input
+                    className={input({ invalid: provisionErrors.extension_number ? true : undefined })}
+                    value={provisionForm.extension_number}
+                    onChange={(e) =>
+                      setProvisionForm((f) => ({ ...f, extension_number: e.target.value }))
+                    }
+                    inputMode="numeric"
+                    placeholder="1001"
+                  />
+                </ProvisionField>
+
+                <ProvisionField required label="表示名" error={provisionErrors.display_name}>
+                  <input
+                    className={input({ invalid: provisionErrors.display_name ? true : undefined })}
+                    value={provisionForm.display_name}
+                    onChange={(e) =>
+                      setProvisionForm((f) => ({ ...f, display_name: e.target.value }))
+                    }
+                    placeholder="営業部 田中"
+                  />
+                </ProvisionField>
+              </>
+            )}
+            {provisionForm.mode === "existing" &&
+            !extensionsQuery.isLoading &&
+            assignOptions.length === 0 ? (
+              <p className={css({ fontSize: "sm", color: "text.muted" })}>
+                内線がまだありません。
+                <Link
+                  to="/extensions"
+                  className={css({ color: "accent.text", textDecoration: "underline" })}
+                >
+                  内線
+                </Link>
+                の画面で作成するか、「新しい内線を作成して割り当てる」を選んでください。
+              </p>
+            ) : null}
           </form>
         )}
       </SlidePanel>
+
+      {/* 付け替えの確認（別の端末に割当済みの内線を選んだとき） */}
+      <ConfirmDialog
+        open={reassignHolder !== null}
+        title="内線を付け替える"
+        message={
+          reassignHolder && provisionTarget
+            ? `この内線は端末 ${deviceShortLabel(reassignHolder)}${reassignHolder.ip_address ? `・${reassignHolder.ip_address}` : ""} に割り当て済みです。付け替えると、その端末の割当は解除され設定を取得できなくなります。${provisionTarget.mac_address} に付け替えますか？`
+            : ""
+        }
+        confirmLabel="付け替える"
+        busy={provisionMutation.isPending}
+        onConfirm={() => provisionMutation.mutate(true)}
+        onCancel={() => setReassignHolder(null)}
+      />
+
+      {/* 割当解除の確認 */}
+      <ConfirmDialog
+        open={unassignTarget !== null}
+        title="内線の割当を解除"
+        message={
+          unassignTarget
+            ? `${unassignTarget.mac_address} から内線 ${unassignTarget.extension_number ?? ""} の割当を解除します。端末は未割当に戻り、内線を割り当て直すまで設定を取得できなくなります（内線そのものは削除しません）。`
+            : ""
+        }
+        confirmLabel="解除"
+        destructive
+        busy={unassignMutation.isPending}
+        onConfirm={() => unassignTarget && unassignMutation.mutate(unassignTarget.id)}
+        onCancel={() => setUnassignTarget(null)}
+      />
 
       {/* 削除確認ダイアログ */}
       <ConfirmDialog

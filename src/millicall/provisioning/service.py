@@ -13,7 +13,7 @@ import hmac
 import logging
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -147,75 +147,163 @@ async def sync_devices_from_leases(
     return devices
 
 
+class ExtensionAlreadyAssignedError(Exception):
+    """選んだ内線が別の端末に既に割り当てられている（1 内線 = 1 端末）。
+
+    Attributes:
+        extension: 割当先として指定された内線。
+        holder: その内線を現在使っている別の端末。
+    """
+
+    def __init__(self, extension: Extension, holder: Device) -> None:
+        self.extension = extension
+        self.holder = holder
+        super().__init__(
+            f"内線 {extension.number} は別の端末"
+            f"（MAC {holder.mac_address} / モデル {holder.model or '不明'}"
+            f" / IP {holder.ip_address or '不明'}）に割り当て済みです。"
+            "付け替える場合は reassign を指定してください"
+        )
+
+
+class ExtensionNotFoundError(ValueError):
+    """指定した extension_id の内線が存在しない。"""
+
+
+@dataclass
+class AssignResult:
+    """quick_provision の結果（監査ログの記録に使う）。
+
+    Attributes:
+        device: 割り当てた端末。
+        extension: 割り当てた内線。
+        created: 内線を新規作成したか。
+        previous_extension_id: 割当前に端末へ紐づいていた内線 ID。
+        released: 付け替え（reassign）で内線を外した旧端末。
+    """
+
+    device: Device
+    extension: Extension
+    created: bool
+    previous_extension_id: int | None
+    released: list[Device] = field(default_factory=list)
+
+
+def unbind_device(device: Device) -> None:
+    """端末から内線の割当を外し、未プロビジョニングに戻す（commit は呼び出し元）。
+
+    端末固有 cfg は内線が無いと配信されなくなるため provisioned=False とし、
+    取得記録もリセットする（古い取得を新しい状態の確認に使わない）。
+    """
+    device.extension_id = None
+    device.provisioned = False
+    reset_config_fetch(device)
+
+
+async def devices_bound_to(session: AsyncSession, extension_id: int) -> list[Device]:
+    """内線に紐づく端末を返す（通常は 0〜1 台。旧データでは複数ありうる）。"""
+    return list(
+        await session.scalars(
+            select(Device).where(Device.extension_id == extension_id).order_by(Device.id)
+        )
+    )
+
+
 async def quick_provision(
     session: AsyncSession,
     device_id: int,
-    extension_number: str,
-    display_name: str,
-    telephony_notify: Callable[[AsyncSession], Awaitable[None]],
     *,
     secret_box: SecretBox,
-) -> Device:
-    """デバイスに内線を割り当ててプロビジョニング完了状態にする。
+    extension_id: int | None = None,
+    extension_number: str | None = None,
+    display_name: str | None = None,
+    reassign: bool = False,
+) -> AssignResult:
+    """デバイスに内線を割り当ててプロビジョニング完了状態にする（commit は呼び出し元）。
 
-    Extension が存在しない場合は新規作成する（SIP パスワードは自動生成）。
-    FreeSWITCH 設定を再生成する。
+    割当先の決め方（issue #149）:
+        - ``extension_id`` を指定: 事前に定義した既存の内線を選んで紐づける（推奨経路）。
+          内線の表示名は変更しない。
+        - ``extension_number`` + ``display_name`` を指定: 従来どおり。番号の内線が
+          無ければ新規作成し（SIP パスワードは自動生成）、あればその内線に紐づける。
+
+    1 内線 = 1 端末をここで保証する。選んだ内線が別の端末に紐づいている場合は
+    ``ExtensionAlreadyAssignedError`` を送出し、``reassign=True`` のときだけ旧端末の
+    割当を外して（``unbind_device``）付け替える。
 
     トークンについて（issue #85）:
         プロビジョニングトークンはここでは発行しない。端末固有 cfg は既定（standard）で
         LAN + 登録済み端末 + IP 一致 + active/enabled のゲートで配信する。トークン必須の
         厳格モード（strict）は管理者が端末ごとに明示的に選び、トークンも明示的に発行して
         電話機の Web 画面へ手入力する（``issue_provision_token`` / devices_router 参照）。
-        以前は電話機管理者資格情報が設定済みだと自動でトークンを発行していたが、
-        トークン付き URL を電話機へ配送する手段が無く、電話機が 404 のまま
-        登録できなくなっていた。
 
         内線の割り当てが変わるため、設定ファイル取得記録はリセットする
         （以前の取得は新しい内線の設定を反映していない）。
 
+    呼び出し元は監査ログを記録してから commit し、FreeSWITCH 設定の再生成を通知する。
+
     Args:
         session: SQLAlchemy 非同期セッション。
         device_id: 対象 Device の主キー。
-        extension_number: 割り当てる内線番号（SIP ユーザー名）。
-        display_name: 内線の表示名（既存 Extension がある場合は更新しない）。
-        telephony_notify: TelephonyChangeListener.notify のような非同期 callable。
-                          call signature: ``async (session) -> None``。
         secret_box: 新規作成する内線の SIP パスワードを暗号化する鍵。
+        extension_id: 割り当てる既存内線の ID。
+        extension_number: 割り当てる内線番号（SIP ユーザー名）。
+        display_name: 新規作成時の内線の表示名（既存 Extension がある場合は更新しない）。
+        reassign: 別の端末に割当済みの内線を付け替えるか。
 
     Returns:
-        更新済みの Device オブジェクト。
+        割当結果（AssignResult）。
 
     Raises:
         ValueError: 指定した device_id のデバイスが存在しない場合。
+        ExtensionNotFoundError: 指定した extension_id の内線が存在しない場合。
+        ExtensionAlreadyAssignedError: 内線が別の端末に割当済みで reassign=False の場合。
     """
     device = await session.get(Device, device_id)
     if device is None:
         raise ValueError(f"Device not found: id={device_id}")
 
-    # Extension を番号で検索、なければ新規作成
-    ext = await session.scalar(select(Extension).where(Extension.number == extension_number))
-    if ext is None:
-        ext = Extension(
-            number=extension_number,
-            display_name=display_name,
-            sip_password_encrypted=new_extension_password(secret_box)[1],
-            enabled=True,
-        )
-        session.add(ext)
-        await session.flush()  # ext.id を確定させる（commit は後）
+    created = False
+    if extension_id is not None:
+        ext = await session.get(Extension, extension_id)
+        if ext is None:
+            raise ExtensionNotFoundError(f"Extension not found: id={extension_id}")
+    else:
+        if extension_number is None or display_name is None:
+            raise ValueError("extension_id か extension_number + display_name が必要です")
+        # Extension を番号で検索、なければ新規作成
+        ext = await session.scalar(select(Extension).where(Extension.number == extension_number))
+        if ext is None:
+            ext = Extension(
+                number=extension_number,
+                display_name=display_name,
+                sip_password_encrypted=new_extension_password(secret_box)[1],
+                enabled=True,
+            )
+            session.add(ext)
+            await session.flush()  # ext.id を確定させる（commit は後）
+            created = True
 
+    others = [d for d in await devices_bound_to(session, ext.id) if d.id != device.id]
+    if others and not reassign:
+        raise ExtensionAlreadyAssignedError(ext, others[0])
+    for other in others:
+        unbind_device(other)
+
+    previous_extension_id = device.extension_id
     device.extension_id = ext.id
     device.provisioned = True
     # 取得確認は新しい割り当てで取り直す（UI の「完了」判定に古い取得を使わない）。
     reset_config_fetch(device)
+    await session.flush()
 
-    await session.commit()
-    await session.refresh(device)
-
-    # FreeSWITCH 設定再生成 + reloadxml
-    await telephony_notify(session)
-
-    return device
+    return AssignResult(
+        device=device,
+        extension=ext,
+        created=created,
+        previous_extension_id=previous_extension_id,
+        released=others,
+    )
 
 
 # ---------------------------------------------------------------------------

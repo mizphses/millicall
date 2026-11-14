@@ -14,6 +14,7 @@ const original: ExtensionRead = {
   display_name: "営業部 田中",
   enabled: true,
   calling_permission: "domestic",
+  devices: [],
 };
 
 function formOf(overrides: Partial<ExtensionFormValues>): ExtensionFormValues {
