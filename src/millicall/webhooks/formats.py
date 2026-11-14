@@ -53,7 +53,21 @@ COLOR_FAX_NG = 0xEF4444
 COLOR_TEST = 0x8B5CF6
 COLOR_OTHER = 0x6B7280
 
-_DIRECTION_LABELS = {"inbound": "着信", "outbound": "発信"}
+# call.ended の「種別」（issue #135）。direction は FreeSWITCH から見た A レグの向きなので、
+# トランクの有無と組み合わせて利用者の視点に直す。
+# - トランクあり: inbound = 外線から着信、outbound = 外線へ発信（API 発信など）
+# - トランクなし: inbound = 内線端末が発信、outbound = 内線端末を呼び出した（API 発信など）
+_CALL_KIND_LABELS = {
+    (True, "inbound"): "外線着信",
+    (True, "outbound"): "外線発信",
+    (False, "inbound"): "内線発信",
+    (False, "outbound"): "内線着信",
+}
+
+
+def call_kind_label(direction: str | None, trunk: str | None) -> str | None:
+    """call.ended の種別ラベル。未知の direction は None。"""
+    return _CALL_KIND_LABELS.get((bool(trunk), direction or ""))
 
 
 @dataclass
@@ -208,7 +222,8 @@ def describe_event(event_name: str, data: dict[str, Any], esc: Escaper = _plain)
         caller = ext(_party(call.get("from"), call.get("caller_name")))
         direction = _text(call.get("direction"))
         fields = []
-        _add(fields, "種別", _DIRECTION_LABELS.get(direction or "") or ext(direction))
+        kind = call_kind_label(direction, _text(call.get("trunk")))
+        _add(fields, "種別", kind or ext(direction))
         _add(fields, "発信元", caller)
         _add(fields, "着信先", ext(call.get("to")))
         _add(fields, "トランク", ext(call.get("trunk")))

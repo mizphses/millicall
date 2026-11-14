@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 
 from millicall.crypto import SecretBox
 from millicall.models import AuditLog, Webhook, WebhookDelivery
+from millicall.telephony.events import is_b_leg
 from millicall.webhooks import dispatcher as dispatcher_mod
 from millicall.webhooks.dispatcher import (
     DELIVERY_HEADER,
@@ -124,6 +125,117 @@ def test_call_ended_payload_matches_cdr_fields():
 
 def test_call_ended_b_leg_is_ignored():
     assert event_to_webhook(_hangup("b-leg", "a-leg")) is None
+
+
+def _bridge_b_leg() -> dict[str, str]:
+    """ダイヤルプラン bridge(user/9001@...) で作られた B レグ（本番 2026-11-14 の観測に合わせる）。
+
+    Channel-Call-UUID は B レグ自身の UUID で、originating_leg_uuid / Other-Leg が A レグを指す。
+    """
+    return {
+        **_hangup("b-leg", "b-leg"),
+        "Call-Direction": "outbound",
+        "Channel-Name": "sofia/internal/9001@192.168.1.9",
+        "variable_sofia_profile_name": "internal",
+        "Caller-Caller-ID-Number": "07089372750",
+        "Caller-Destination-Number": "9001",
+        "variable_originating_leg_uuid": "a-leg",
+        "Other-Type": "originator",
+        "Other-Leg-Unique-ID": "a-leg",
+    }
+
+
+def test_is_b_leg_dialplan_bridge():
+    assert is_b_leg(_bridge_b_leg()) is True
+    assert event_to_webhook(_bridge_b_leg()) is None
+    # originating_leg_uuid が無くても Other-Type=originator なら B レグ
+    ev = _bridge_b_leg()
+    del ev["variable_originating_leg_uuid"]
+    assert is_b_leg(ev) is True
+
+
+def test_is_b_leg_a_leg_of_bridge_is_kept():
+    # トランク着信の A レグ（bridge 後は Other-Leg が B を指すが Other-Type=originatee）
+    a_leg = {
+        **_hangup("a-leg", "a-leg"),
+        "Other-Type": "originatee",
+        "Other-Leg-Unique-ID": "b-leg",
+        "variable_bridge_uuid": "b-leg",
+    }
+    assert is_b_leg(a_leg) is False
+    name, data = event_to_webhook(a_leg)
+    assert name == "call.ended"
+    assert data["call"]["uuid"] == "a-leg"
+    assert data["call"]["trunk"] == "Flets01"
+
+
+def test_is_b_leg_originate_a_leg_is_kept():
+    # API / ワークフローの originate: 最初のレグは outbound だが originating_leg_uuid を持たない
+    ev = {
+        **_hangup("orig-a", "orig-a"),
+        "Call-Direction": "outbound",
+        "Channel-Name": "sofia/internal/1001@192.168.1.20",
+        "variable_sofia_profile_name": "internal",
+        "Other-Type": "originatee",
+        "Other-Leg-Unique-ID": "orig-b",
+    }
+    assert is_b_leg(ev) is False
+    assert event_to_webhook(ev)[0] == "call.ended"
+    # その先を bridge したレグは B レグ
+    b = {
+        **ev,
+        "Unique-ID": "orig-b",
+        "Channel-Call-UUID": "orig-b",
+        "variable_originating_leg_uuid": "orig-a",
+        "Other-Type": "originator",
+        "Other-Leg-Unique-ID": "orig-a",
+    }
+    assert is_b_leg(b) is True
+
+
+def test_is_b_leg_after_transfer_is_single_channel():
+    # transfer は同じチャネルがダイヤルプランを移るだけ（他レグの情報なし）
+    ev = {**_hangup("x-1", "x-1"), "variable_transfer_history": "1700000010:abc:uuid_br:9001"}
+    assert is_b_leg(ev) is False
+    assert event_to_webhook(ev)[0] == "call.ended"
+    # 自分自身を指す originating_leg_uuid は B レグ扱いしない
+    assert (
+        is_b_leg({**ev, "Call-Direction": "outbound", "variable_originating_leg_uuid": "x-1"})
+        is False
+    )
+
+
+async def test_bridged_call_notifies_once(app):
+    await _add_hook(app, events=["call.ended"])
+    rec = _Recorder([200])
+    d = _dispatcher(app, rec)
+    a_leg = {
+        **_hangup("a-leg", "a-leg"),
+        "Other-Type": "originatee",
+        "Other-Leg-Unique-ID": "b-leg",
+    }
+    await d.handle(_bridge_b_leg())
+    await d.handle(a_leg)
+    await d.drain()
+    assert len(rec.requests) == 1
+    assert json.loads(rec.requests[0].content)["call"]["uuid"] == "a-leg"
+
+
+async def test_call_ended_is_deduped_by_call_uuid(app, monkeypatch):
+    await _add_hook(app, events=["call.ended"])
+    rec = _Recorder([200])
+    d = _dispatcher(app, rec)
+    await d.handle(_hangup("u-1", "u-1"))
+    await d.handle(_hangup("u-1", "u-1"))  # 再送
+    await d.drain()
+    assert len(rec.requests) == 1
+    # 記憶件数を超えた古い call_uuid は忘れる
+    monkeypatch.setattr(dispatcher_mod, "DEDUPE_CAPACITY", 2)
+    await d.handle(_hangup("u-2", "u-2"))
+    await d.handle(_hangup("u-3", "u-3"))  # u-1 が押し出される
+    await d.handle(_hangup("u-1", "u-1"))
+    await d.drain()
+    assert len(rec.requests) == 4
 
 
 # --------------------------------------------------------------------------- 配信
@@ -483,7 +595,7 @@ def test_describe_event_skips_empty_values():
         "切断理由",
     ]
     values = {f.name: f.value for f in msg.fields}
-    assert values["種別"] == "着信"
+    assert values["種別"] == "外線着信"
     assert values["発信元"] == "0701234567"  # caller_name が空なら番号だけ
     assert values["通話時間"] == "1分5秒"
 
@@ -493,6 +605,26 @@ def test_describe_event_skips_empty_values():
     assert "トランク" not in values
     # 空の局 ID は項目にしない
     assert "送信元局 ID" not in [f.name for f in describe_event("fax.received", _fax()).fields]
+
+
+@pytest.mark.parametrize(
+    ("trunk", "direction", "label"),
+    [
+        ("Flets01", "inbound", "外線着信"),
+        ("Flets01", "outbound", "外線発信"),
+        (None, "inbound", "内線発信"),
+        (None, "outbound", "内線着信"),
+        (None, "weird", "weird"),
+    ],
+)
+def test_call_ended_kind_label(trunk, direction, label):
+    data = {"call": {**_ENDED["call"], "trunk": trunk, "direction": direction}}
+    values = {f.name: f.value for f in describe_event("call.ended", data).fields}
+    assert values["種別"] == label
+
+
+def test_call_inbound_title_unchanged():
+    assert describe_event("call.inbound", _INBOUND).title == "📞 着信"
 
 
 def test_format_duration():

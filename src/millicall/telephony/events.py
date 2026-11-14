@@ -35,6 +35,35 @@ def _int(value: str | None) -> int:
         return 0
 
 
+def is_b_leg(event: dict[str, str]) -> bool:
+    """チャネルイベントが呼の B レグ（他のレグから作られた側）なら True を返す（issue #135）。
+
+    「1 呼 = 1 レコード」にするため、CDR と Webhook の call.ended は A レグ（呼の代表）だけを扱う。
+
+    - ダイヤルプランの bridge（トランク着信 → 内線、内線 → トランク発信、内線同士）:
+      B レグは ``Call-Direction=outbound`` で、``variable_originating_leg_uuid`` が A レグを指す。
+      Channel-Call-UUID は B レグ自身の UUID になることがあるため、それだけでは判定できない。
+    - ワークフローの transfer: 同じチャネルがダイヤルプランを渡り歩くだけなので A レグのまま。
+    - API / ワークフローからの originate: 最初に作られるレグは outbound だが
+      ``variable_originating_leg_uuid`` を持たない（親セッションが無い）ので A レグとみなす。
+      その後の bridge で作られるレグは上の bridge の規則で B レグになる。
+    - ``Other-Type=originator`` は「相手レグが自分を作った」ことを示す（A レグ側は originatee）。
+      originating_leg_uuid が落ちている場合の補助に使う。
+    """
+    unique_id = event.get("Unique-ID", "")
+    call_uuid = event.get("Channel-Call-UUID", "")
+    # 従来の規則: Channel-Call-UUID が A レグを指している B レグ。
+    if unique_id and call_uuid and unique_id != call_uuid:
+        return True
+    if event.get("Call-Direction") != "outbound":
+        return False
+    originating = event.get("variable_originating_leg_uuid", "")
+    if originating and originating != unique_id:
+        return True
+    other = event.get("Other-Leg-Unique-ID", "")
+    return event.get("Other-Type") == "originator" and bool(other) and other != unique_id
+
+
 def event_to_cdr(event: dict[str, str]) -> Cdr | None:
     if event.get("Event-Name") != "CHANNEL_HANGUP_COMPLETE":
         return None
@@ -61,6 +90,9 @@ class CdrRecorder:
         self._sessionmaker = sessionmaker
 
     async def handle(self, event: dict[str, str]) -> None:
+        # B レグは記録しない（自身の UUID を Channel-Call-UUID に持つ B レグが別行になるのを防ぐ）。
+        if is_b_leg(event):
+            return
         cdr = event_to_cdr(event)
         if cdr is None:
             return
@@ -69,7 +101,7 @@ class CdrRecorder:
             try:
                 await session.commit()
             except IntegrityError:
-                # 同一 call_uuid（両レグ / 再送）は最初の1件だけ残す
+                # 同一 call_uuid（再送など）は最初の1件だけ残す
                 await session.rollback()
 
 

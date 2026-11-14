@@ -23,6 +23,7 @@ import hmac
 import json
 import logging
 import uuid
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,7 +35,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from millicall.models import Webhook, WebhookDelivery
 from millicall.net_guard import WebhookTargetPolicy, make_webhook_transport
-from millicall.telephony.events import event_to_cdr
+from millicall.telephony.events import event_to_cdr, is_b_leg
 from millicall.webhooks.formats import CHAT_FORMATS, FORMAT_GENERIC, build_chat_message
 
 if TYPE_CHECKING:
@@ -62,6 +63,9 @@ KEEP_DELIVERIES = 200
 # 受信側レスポンスは読み捨てる。巨大レスポンスでメモリを食わないよう上限で打ち切る。
 MAX_RESPONSE_BYTES = 64 * 1024
 _ERROR_MAX = 500
+
+# call.ended の重複排除で覚えておく call_uuid の件数。
+DEDUPE_CAPACITY = 256
 
 # sofia プロファイル名 external_<trunk>（fsconfig のトランクごとプロファイル）。
 _TRUNK_PROFILE_PREFIX = "external_"
@@ -114,10 +118,8 @@ def event_to_webhook(event: dict[str, str]) -> tuple[str, dict[str, Any]] | None
             }
         }
     if name == "CHANNEL_HANGUP_COMPLETE":
-        unique_id = event.get("Unique-ID", "")
-        call_uuid = event.get("Channel-Call-UUID", "")
-        # bridge の B レグも同じ Channel-Call-UUID で届くため、A レグ（呼の代表）だけ通知する。
-        if unique_id and call_uuid and unique_id != call_uuid:
+        # A レグ（呼の代表）だけ通知する。判定規則は CDR と共通（is_b_leg 参照）。
+        if is_b_leg(event):
             return None
         cdr = event_to_cdr(event)
         if cdr is None:
@@ -196,6 +198,8 @@ class WebhookDispatcher:
         self._retry_delays = retry_delays
         self._timeout = timeout
         self._tasks: set[asyncio.Task] = set()
+        # 直近に通知した call.ended の call_uuid（万一同じ呼で 2 回来ても 1 回だけ送る）。
+        self._recent_ended: OrderedDict[str, None] = OrderedDict()
 
     # ------------------------------------------------------------------ 入口
 
@@ -205,7 +209,22 @@ class WebhookDispatcher:
         if converted is None:
             return
         name, data = converted
+        if name == EVENT_CALL_ENDED and self._seen_call_ended(data):
+            return
         self.emit(name, data)
+
+    def _seen_call_ended(self, data: dict[str, Any]) -> bool:
+        """同じ call_uuid の call.ended を通知済みなら True。未通知なら記憶して False。"""
+        call_uuid = str(data.get("call", {}).get("uuid") or "")
+        if not call_uuid:
+            return False
+        if call_uuid in self._recent_ended:
+            self._recent_ended.move_to_end(call_uuid)
+            return True
+        self._recent_ended[call_uuid] = None
+        if len(self._recent_ended) > DEDUPE_CAPACITY:
+            self._recent_ended.popitem(last=False)
+        return False
 
     def emit(self, event_name: str, data: dict[str, Any]) -> None:
         """購読中の Webhook へ非同期配信する（fire-and-forget）。"""
