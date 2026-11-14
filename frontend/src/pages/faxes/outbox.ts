@@ -5,8 +5,14 @@ export type FaxOutboxRead = components["schemas"]["FaxOutboxRead"];
 /** アップロード上限（バックエンドの FAX_MAX_UPLOAD_BYTES と一致させる）。 */
 export const FAX_MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
-/** 宛先番号の形式（国内の一般番号のみ。バックエンドの FAX_TO_NUMBER_RE と同じ）。 */
-const FAX_NUMBER_RE = /^0\d{9,10}$/;
+/** 宛先番号の形式（国内番号のみ。バックエンドの is_domestic_fax_number と同じ）。 */
+const FAX_NUMBER_RE = /^0[1-9]\d{8,9}$/;
+/** 国際番号（010 / 00x）。国内番号と同じ桁数でも送信できない。 */
+const INTL_RE = /^(010\d+|00[1-9]\d+)$/;
+
+export function isDomesticFaxNumber(number: string): boolean {
+  return FAX_NUMBER_RE.test(number) && !INTL_RE.test(number);
+}
 
 /** 入力された宛先番号からハイフン・空白を除く。 */
 export function normalizeFaxNumber(value: string): string {
@@ -31,7 +37,7 @@ export function validateFaxSendForm(form: FaxSendFormValues): FaxSendErrors {
   const errors: FaxSendErrors = {};
   const number = normalizeFaxNumber(form.toNumber);
   if (!number) errors.toNumber = "宛先の FAX 番号を入力してください";
-  else if (!FAX_NUMBER_RE.test(number))
+  else if (!isDomesticFaxNumber(number))
     errors.toNumber = "0 から始まる 10〜11 桁の国内番号を入力してください（国際番号は送信できません）";
   if (!form.file) errors.file = "送信する PDF を選択してください";
   else if (!isPdfFile(form.file)) errors.file = "PDF ファイルを選択してください";
@@ -61,6 +67,8 @@ export function outboxStatus(job: Pick<FaxOutboxRead, "status" | "attempts" | "n
   tone: Tone;
 } {
   switch (job.status) {
+    case "converting":
+      return { label: "変換中", tone: "accent" };
     case "queued":
       return job.attempts > 0 && job.next_attempt_at
         ? { label: "再試行待ち", tone: "warn" }
@@ -78,17 +86,20 @@ export function outboxStatus(job: Pick<FaxOutboxRead, "status" | "attempts" | "n
   }
 }
 
-export function canRetry(job: Pick<FaxOutboxRead, "status">): boolean {
-  return job.status === "failed" || job.status === "cancelled";
+/** 再送できるか（サーバーが状態・再送回数の上限・TIFF の有無から判定した値）。 */
+export function canRetry(job: Pick<FaxOutboxRead, "can_retry">): boolean {
+  return job.can_retry;
 }
 
 export function canCancel(job: Pick<FaxOutboxRead, "status">): boolean {
-  return job.status === "queued";
+  return job.status === "queued" || job.status === "converting";
 }
 
-/** 送信待ち・送信中のジョブがあれば一覧を自動更新する。 */
+/** 変換中・送信待ち・送信中のジョブがあれば一覧を自動更新する。 */
 export function hasActiveJobs(jobs: Pick<FaxOutboxRead, "status">[]): boolean {
-  return jobs.some((j) => j.status === "queued" || j.status === "sending");
+  return jobs.some(
+    (j) => j.status === "converting" || j.status === "queued" || j.status === "sending",
+  );
 }
 
 /** 送信 FAX の元 PDF の URL（Cookie 認証の同一オリジン GET）。 */

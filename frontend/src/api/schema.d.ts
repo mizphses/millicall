@@ -711,6 +711,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/faxes/outbox/trunks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Send Trunks
+         * @description 送信フォームのトランク選択肢（/api/trunks は管理者専用のため、送信者向けに名前だけ返す）。
+         */
+        get: operations["list_send_trunks_api_faxes_outbox_trunks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/faxes/outbox/{job_id}": {
         parameters: {
             query?: never;
@@ -2633,6 +2653,8 @@ export interface components {
         FaxOutboxRead: {
             /** Attempts */
             attempts: number;
+            /** Can Retry */
+            can_retry: boolean;
             /**
              * Created At
              * Format: date-time
@@ -2658,6 +2680,8 @@ export interface components {
             remote_station_id: string;
             /** Result Text */
             result_text: string;
+            /** Retry Count */
+            retry_count: number;
             /** Started At */
             started_at: string | null;
             /** Status */
@@ -2715,6 +2739,17 @@ export interface components {
             name: string;
             /** Number */
             number: string;
+        };
+        /** FaxSendTrunk */
+        FaxSendTrunk: {
+            /** Display Name */
+            display_name: string;
+            /** Is Default */
+            is_default: boolean;
+            /** Name */
+            name: string;
+            /** Trunk Type */
+            trunk_type: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -4999,6 +5034,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FaxOutboxRead"];
+                };
+            };
+        };
+    };
+    list_send_trunks_api_faxes_outbox_trunks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaxSendTrunk"][];
                 };
             };
         };

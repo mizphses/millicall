@@ -9,6 +9,7 @@ import {
   canCancel,
   canRetry,
   hasActiveJobs,
+  isDomesticFaxNumber,
   normalizeFaxNumber,
   outboxPdfUrl,
   outboxStatus,
@@ -41,6 +42,8 @@ const JOBS = [
     result_text: "",
     remote_station_id: "",
     has_pdf: true,
+    can_retry: false,
+    retry_count: 0,
     created_by: 1,
     created_at: "2026-11-14T01:00:00",
     started_at: "2026-11-14T01:00:05",
@@ -59,6 +62,8 @@ const JOBS = [
     result_text: "",
     remote_station_id: "",
     has_pdf: true,
+    can_retry: true,
+    retry_count: 0,
     created_by: 1,
     created_at: "2026-11-13T01:00:00",
     started_at: null,
@@ -68,9 +73,8 @@ const JOBS = [
 ];
 
 const TRUNKS = [
-  { id: 2, name: "Flets02", display_name: "フレッツ", enabled: true },
-  { id: 1, name: "Brastel", display_name: "Brastel", enabled: true },
-  { id: 3, name: "Off", display_name: "Off", enabled: false },
+  { name: "Brastel", display_name: "Brastel", trunk_type: "sip", is_default: true },
+  { name: "Flets02", display_name: "フレッツ", trunk_type: "hgw", is_default: false },
 ];
 
 let host: HTMLDivElement, root: Root;
@@ -82,7 +86,7 @@ beforeEach(() => {
   toastSuccess.mockReset();
   toastError.mockReset();
   apiGet.mockImplementation(async (path: string) => {
-    if (path === "/api/trunks") return { data: TRUNKS, error: undefined };
+    if (path === "/api/faxes/outbox/trunks") return { data: TRUNKS, error: undefined };
     return { data: { items: JOBS, total: 2 }, error: undefined };
   });
   host = document.createElement("div");
@@ -132,7 +136,7 @@ describe("OutboxPanel", () => {
     expect(host.querySelector('[aria-label="送信 FAX 5 を取り消す"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="送信 FAX 5 を再送"]')).toBeNull();
     expect(host.querySelector('[aria-label="送信 FAX 4 を再送"]')).not.toBeNull();
-    // トランク選択: 既定（有効なトランクの名前順先頭）＋有効なトランクのみ
+    // トランク選択: 既定（サーバーが is_default で示す）＋送信に使えるトランク
     const options = Array.from(host.querySelectorAll("select option")).map((o) => o.textContent);
     expect(options).toEqual(["既定の発信トランク（Brastel）", "Brastel", "フレッツ（Flets02）"]);
   });
@@ -207,6 +211,10 @@ describe("faxes/outbox", () => {
       "国内番号",
     );
     expect(validateFaxSendForm({ toNumber: "1234", trunkName: "", file: pdf }).toNumber).toBeDefined();
+    // 国内番号と同じ桁数でも 010 / 00x は国際番号として拒否する
+    expect(isDomesticFaxNumber("01068212345")).toBe(false);
+    expect(isDomesticFaxNumber("00168212345")).toBe(false);
+    expect(isDomesticFaxNumber("0120123456")).toBe(true);
     const png = new File(["x"], "a.png", { type: "image/png" });
     expect(validateFaxSendForm({ toNumber: "0312345678", trunkName: "", file: png }).file).toBe(
       "PDF ファイルを選択してください",
@@ -226,11 +234,16 @@ describe("faxes/outbox", () => {
     });
     expect(outboxStatus({ status: "sending", attempts: 1, next_attempt_at: null }).label).toBe("送信中");
     expect(outboxStatus({ status: "sent", attempts: 1, next_attempt_at: null }).tone).toBe("success");
-    expect(canRetry({ status: "failed" })).toBe(true);
-    expect(canRetry({ status: "sent" })).toBe(false);
+    expect(outboxStatus({ status: "converting", attempts: 0, next_attempt_at: null }).label).toBe(
+      "変換中",
+    );
+    expect(canRetry({ can_retry: true })).toBe(true);
+    expect(canRetry({ can_retry: false })).toBe(false);
     expect(canCancel({ status: "queued" })).toBe(true);
+    expect(canCancel({ status: "converting" })).toBe(true);
     expect(canCancel({ status: "sending" })).toBe(false);
     expect(hasActiveJobs([{ status: "sent" }, { status: "sending" }])).toBe(true);
+    expect(hasActiveJobs([{ status: "converting" }])).toBe(true);
     expect(hasActiveJobs([{ status: "failed" }])).toBe(false);
     expect(outboxPdfUrl(9)).toBe("/api/faxes/outbox/9/pdf");
   });

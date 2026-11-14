@@ -10,7 +10,7 @@ import type { components } from "../../api/schema";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { DataTable, type Column } from "../../components/DataTable";
 import { Field } from "../../components/Field";
-import { FAX_OUTBOX_KEY, TRUNKS_KEY, faxOutboxKey } from "../../queryKeys";
+import { FAX_OUTBOX_KEY, FAX_SEND_TRUNKS_KEY, faxOutboxKey } from "../../queryKeys";
 import { useToast } from "../../toast/ToastProvider";
 import { formatDateTime } from "../cdr/format";
 import { totalPages } from "./format";
@@ -29,7 +29,7 @@ import {
   type FaxSendFormValues,
 } from "./outbox";
 
-type TrunkRead = components["schemas"]["TrunkRead"];
+type FaxSendTrunk = components["schemas"]["FaxSendTrunk"];
 
 const PAGE_SIZE = 50;
 const REFRESH_MS = 5000;
@@ -42,8 +42,9 @@ async function fetchOutbox(offset: number): Promise<{ items: FaxOutboxRead[]; to
   return data;
 }
 
-async function fetchTrunks(): Promise<TrunkRead[]> {
-  const { data, error } = await api.GET("/api/trunks");
+async function fetchTrunks(): Promise<FaxSendTrunk[]> {
+  // /api/trunks は管理者専用のため、送信者向けの軽い一覧を使う。
+  const { data, error } = await api.GET("/api/faxes/outbox/trunks");
   if (error) throw new Error("トランク一覧の取得に失敗しました");
   return data ?? [];
 }
@@ -98,11 +99,9 @@ export function OutboxPanel() {
     // 送信待ち・送信中があれば状態の変化を自動で反映する。
     refetchInterval: (q) => (hasActiveJobs(q.state.data?.items ?? []) ? REFRESH_MS : false),
   });
-  const trunksQuery = useQuery({ queryKey: TRUNKS_KEY, queryFn: fetchTrunks });
-  const enabledTrunks = (trunksQuery.data ?? [])
-    .filter((t) => t.enabled)
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  const defaultTrunk = enabledTrunks[0];
+  const trunksQuery = useQuery({ queryKey: FAX_SEND_TRUNKS_KEY, queryFn: fetchTrunks });
+  const enabledTrunks = trunksQuery.data ?? [];
+  const defaultTrunk = enabledTrunks.find((t) => t.is_default);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: FAX_OUTBOX_KEY });
 
@@ -110,7 +109,7 @@ export function OutboxPanel() {
     mutationFn: sendFax,
     onSuccess: (job) => {
       invalidate();
-      toast.success(`${job.to_number} への FAX（${job.pages} ページ）を送信キューに登録しました`);
+      toast.success(`${job.to_number} への FAX を登録しました。PDF の変換が終わると順番に送信します`);
       setForm(emptyFaxSendForm());
       setErrors({});
       if (fileInput.current) fileInput.current.value = "";
@@ -284,7 +283,7 @@ export function OutboxPanel() {
                 {defaultTrunk ? `既定の発信トランク（${defaultTrunk.display_name || defaultTrunk.name}）` : "既定の発信トランク"}
               </option>
               {enabledTrunks.map((t) => (
-                <option key={t.id} value={t.name}>
+                <option key={t.name} value={t.name}>
                   {t.display_name && t.display_name !== t.name ? `${t.display_name}（${t.name}）` : t.name}
                 </option>
               ))}

@@ -30,6 +30,8 @@ export const faxOutboxKey = (limit: number, offset: number) =>
   ["fax-outbox", limit, offset] as const;
 /** 送信 FAX の invalidate 用プレフィックス。 */
 export const FAX_OUTBOX_KEY = ["fax-outbox"] as const;
+/** FAX 送信に使えるトランク（送信者向けの軽い一覧）。 */
+export const FAX_SEND_TRUNKS_KEY = ["fax-send-trunks"] as const;
 /** Webhook 一覧。 */
 export const WEBHOOKS_KEY = ["webhooks"] as const;
 /** Webhook 配信ログ（webhook ごと）。 */
