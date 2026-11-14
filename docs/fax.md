@@ -10,12 +10,15 @@ millicall は FreeSWITCH の mod_spandsp（`rxfax`）で FAX を受信し、PDF 
 着信 ─ public（トランク）─ transfer ─▶ default: fax_<番号> extension
                                        answer → rxfax <data>/fax/<uuid>.tif → hangup
 FreeSWITCH ─ CUSTOM spandsp::rxfaxresult ─▶ core
-                                       TIFF → PDF（Pillow）・faxes テーブルに記録・Webhook
+                                       TIFF → PDF（img2pdf）・faxes テーブルに記録・Webhook
 ```
 
 - 初版は **G.711 パススルーのみ**（`fax_enable_t38=false`）。NTT ひかり電話 HGW は G.711 で FAX が通り、T.38 には対応していません。
 - 原本 TIFF は PDF と同じ場所（`data/fax/<uuid>.tif`）に残ります。PDF は `data/fax/<uuid>.pdf`。
-- 標準解像度（204×98 dpi）の FAX は縦横比を補正してから PDF にします。
+- PDF 化は [img2pdf](https://gitlab.mister-muffin.de/josch/img2pdf)（pikepdf 依存）で行い、CCITT G3/G4 の画像を
+  劣化なしで埋め込みます。Pillow は上限チェック（TIFF のヘッダ読み込み）にだけ使います。
+  Pillow の PDF 書き出しは 1bit の FAX 画像（WhiteIsZero・FillOrder=2）で白黒反転・崩れが起きるため使いません（#143）。
+- ページサイズは TIFF の解像度タグから縦横別に決めるため、標準解像度（204×98 dpi）でも縦横比が保たれます。
 - FAX の API（`/api/faxes`・`/api/fax-receivers`）は他の管理 API と同様に **管理者ログインが必須** です。
   例外として `GET /api/faxes/{id}/pdf` は、`fax.received` Webhook の `pdf_url` に付く署名付きトークン
   （24 時間有効・その FAX 専用）でも取得できます。
@@ -31,7 +34,9 @@ FreeSWITCH ─ CUSTOM spandsp::rxfaxresult ─▶ core
 | PDF 変換に必要な空き容量（未満なら変換をスキップし警告ログ） | 200 MB | 固定 |
 
 変換上限を超えた FAX は「失敗（PDF 変換を中止: ...）」として記録し、TIFF は残します。
-PDF はページを 1 枚ずつ書き出すため、ページ数が多くてもメモリ使用量は 1 ページ分に収まります。
+上限チェックは画素をデコードせずに行い、通過した TIFF だけを PDF にします。PDF は一度メモリ上で組み立てるため、
+メモリ使用量はおおむね TIFF サイズ（上限 50 MB）に比例します。
+TIFF が壊れていて PDF にできない場合は PDF なしで記録し、ログにはファイル名だけを出します。
 
 ## 設定手順
 

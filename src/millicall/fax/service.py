@@ -3,7 +3,8 @@
 FreeSWITCH の rxfax は fax_<number> extension で ``<fax_dir>/<uuid>.tif`` に受信し、
 完了時に ``CUSTOM spandsp::rxfaxresult`` を発火する。本サービスはそのイベントを受けて
 
-1. TIFF を PDF に変換（Pillow。複数ページ・縦横解像度差の補正・サイズ/ページ/画素数の上限）
+1. TIFF を PDF に変換（img2pdf。複数ページ・縦横解像度差の補正。上限検証は Pillow で
+   ヘッダのみ読み、サイズ/ページ/画素数を制限）
 2. faxes テーブルへ記録
 3. ``fax.received`` Webhook を発火
 
@@ -91,59 +92,81 @@ class FaxConversionLimitError(ValueError):
     """上限超過で PDF 変換を中止した（受信は失敗扱いにし TIFF は残す）。"""
 
 
-def tiff_to_pdf(tiff_path: Path, pdf_path: Path) -> int:
-    """TIFF（複数ページ可）を PDF に変換し、ページ数を返す。
+class FaxConversionError(ValueError):
+    """TIFF を PDF にできなかった（壊れた/未対応の TIFF。記録は残し TIFF も残す）。"""
 
-    - ファイルサイズ・ページ数・1 ページの画素数に上限を設け、超えたら
-      FaxConversionLimitError（DecompressionBombWarning もエラー扱い）。
-    - ページは 1 枚ずつ読み込んで書き出す（全フレームをメモリに保持しない）。
-    - FAX の標準解像度（204x98 dpi）のように縦横で異なる場合は PDF 側の dpi で
-      縦横比を補正する（画素は加工しない）。
-    - 一時ファイルは fax_dir 内に O_EXCL 相当（mkstemp）で作り、原子的に置き換える。
-    """
-    import warnings
 
+def _check_tiff_limits(tiff_path: Path) -> int:
+    """Pillow でヘッダだけを読み、上限を検証してページ数を返す（画素はデコードしない）。"""
     from PIL import Image
 
     size = tiff_path.stat().st_size
     if size > FAX_MAX_TIFF_BYTES:
         raise FaxConversionLimitError(f"TIFF が大きすぎます（{size} bytes）")
+    with Image.open(tiff_path) as im:
+        n_frames = int(getattr(im, "n_frames", 1))
+        if n_frames < 1:
+            raise FaxConversionLimitError("TIFF にページがありません")
+        if n_frames > FAX_MAX_PAGES:
+            raise FaxConversionLimitError(f"ページ数が上限を超えています（{n_frames}）")
+        for i in range(n_frames):
+            im.seek(i)
+            if im.width * im.height > FAX_MAX_PIXELS:
+                raise FaxConversionLimitError("ページの画素数が上限を超えています")
+    return n_frames
+
+
+def tiff_to_pdf(tiff_path: Path, pdf_path: Path) -> int:
+    """TIFF（複数ページ可）を PDF に変換し、ページ数を返す。
+
+    - ファイルサイズ・ページ数・1 ページの画素数に上限を設け、超えたら
+      FaxConversionLimitError（DecompressionBombWarning もエラー扱い）。上限の検証は
+      Pillow でヘッダだけを読んで行う。
+    - PDF 化は img2pdf で行う（issue #143）。Pillow の PDF プラグインは 1bit 画像を
+      group4 に再圧縮して埋め込む経路で白黒反転・崩れを起こすため使わない。img2pdf は
+      単一ストリップの group4 ならそのまま、それ以外（group3・複数ストリップ・FillOrder=2
+      など）は Pillow でデコードして group4 に再圧縮し、CCITTFaxDecode として可逆に埋め込む。
+      PhotometricInterpretation（WhiteIsZero/BlackIsZero）もデコード結果に反映される。
+    - ページサイズは TIFF の解像度タグから縦横別に求めるため、FAX の標準解像度
+      （204x98 dpi）のように縦横で異なっても縦横比が保たれる（画素は加工しない）。
+    - 変換できない TIFF は FaxConversionError（ログにはファイル名だけを出す）。
+    - 一時ファイルは fax_dir 内に O_EXCL 相当（mkstemp）で作り、原子的に置き換える。
+    """
+    import warnings
+
+    import img2pdf
+    from PIL import Image
+
     # Pillow はこのサービス（FAX 変換）専用の依存のため、上限をプロセス全体で設定してよい。
+    # img2pdf も内部で Pillow を使うため、この上限は変換本体にも効く。
     Image.MAX_IMAGE_PIXELS = FAX_MAX_PIXELS
     with warnings.catch_warnings():
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         try:
-            with Image.open(tiff_path) as im:
-                n_frames = int(getattr(im, "n_frames", 1))
-                if n_frames < 1:
-                    raise FaxConversionLimitError("TIFF にページがありません")
-                if n_frames > FAX_MAX_PAGES:
-                    raise FaxConversionLimitError(f"ページ数が上限を超えています（{n_frames}）")
-                # ヘッダだけでページごとの画素数を検証する（デコードしない）。
-                for i in range(n_frames):
-                    im.seek(i)
-                    if im.width * im.height > FAX_MAX_PIXELS:
-                        raise FaxConversionLimitError("ページの画素数が上限を超えています")
-                im.seek(0)
-                dpi = im.info.get("dpi")
-                if dpi and len(dpi) == 2 and dpi[0] and dpi[1]:
-                    xdpi, ydpi = float(dpi[0]), float(dpi[1])
-                else:
-                    xdpi = ydpi = 200.0
-                fd, tmp_name = tempfile.mkstemp(
-                    dir=pdf_path.parent, prefix=".fax-", suffix=".pdf.tmp"
-                )
-                tmp = Path(tmp_name)
-                try:
-                    with os.fdopen(fd, "wb") as fp:
-                        # save_all で TIFF の各フレームを 1 枚ずつ読み出して書き込む。
-                        im.save(fp, "PDF", save_all=True, dpi=(xdpi, ydpi))
-                    tmp.replace(pdf_path)
-                except BaseException:
-                    tmp.unlink(missing_ok=True)
-                    raise
+            n_frames = _check_tiff_limits(tiff_path)
+            pdf_bytes = img2pdf.convert(str(tiff_path))
         except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
             raise FaxConversionLimitError("ページの画素数が上限を超えています") from exc
+        except FaxConversionLimitError:
+            raise
+        except Exception as exc:
+            # 壊れた/未対応の TIFF（img2pdf.ImageOpenError・Pillow の読み込み失敗など）。
+            # ログには画像の中身や例外の詳細を出さず、ファイル名と例外の型だけを出す。
+            logger.warning(
+                "FAX TIFF を PDF に変換できません file=%s (%s)",
+                tiff_path.name,
+                type(exc).__name__,
+            )
+            raise FaxConversionError("TIFF を PDF に変換できません") from None
+    fd, tmp_name = tempfile.mkstemp(dir=pdf_path.parent, prefix=".fax-", suffix=".pdf.tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fp:
+            fp.write(pdf_bytes)
+        tmp.replace(pdf_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return n_frames
 
 
@@ -240,6 +263,9 @@ class FaxService:
                     logger.warning("FAX の PDF 変換を中止しました uuid=%s: %s", call_uuid, exc)
                     success = False
                     result_text = f"PDF 変換を中止: {exc}"[:255]
+                except FaxConversionError:
+                    # 詳細（ファイル名）は tiff_to_pdf がログ済み。記録は残す。
+                    logger.warning("FAX TIFF → PDF 変換に失敗しました uuid=%s", call_uuid)
                 except Exception:  # noqa: BLE001 — 壊れた/途中までの TIFF でも記録は残す
                     logger.exception("FAX TIFF → PDF 変換に失敗しました uuid=%s", call_uuid)
         elif success:
