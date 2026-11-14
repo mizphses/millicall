@@ -119,8 +119,11 @@ async def test_router_without_answer_registry_is_backward_compatible():
 
 
 class _FakeTrunk:
-    def __init__(self, name: str, caller_id: str = "", enabled: bool = True) -> None:
+    def __init__(
+        self, name: str, caller_id: str = "", enabled: bool = True, trunk_type: str = "hgw"
+    ) -> None:
         self.name = name
+        self.trunk_type = trunk_type
         self.caller_id = caller_id
         self.enabled = enabled
         self.id = 1
@@ -696,3 +699,52 @@ async def test_resolve_default_providers_no_agent_raises():
             await resolve_default_providers(sm, _Secrets(), None)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dial_hgw_trunk_forces_pcmu():
+    """#136: HGW トランク宛の originate は absolute_codec_string=PCMU を付ける。"""
+    esl = _FakeEsl()
+    svc, ans = _make_service(esl, [_FakeTrunk("main", caller_id="0312345678")])
+
+    async def _answer_soon():
+        await asyncio.sleep(0)
+        ans.resolve("fixed-uuid")
+
+    asyncio.get_running_loop().create_task(_answer_soon())
+    await svc.dial("0901234567", "", "", timeout=1)
+    cmd = esl.cmds[-1]
+    var_block = cmd[cmd.index("{") + 1 : cmd.index("}")]
+    assert "absolute_codec_string=PCMU" in var_block.split(",")
+    assert cmd.endswith("}sofia/gateway/main/0901234567 &park")
+
+
+@pytest.mark.asyncio
+async def test_dial_sip_trunk_has_no_codec_override():
+    """#136: sip 種別トランク宛は従来どおりコーデック指定なし。"""
+    esl = _FakeEsl()
+    svc, ans = _make_service(
+        esl, [_FakeTrunk("brastel", caller_id="0312345678", trunk_type="sip")]
+    )
+
+    async def _answer_soon():
+        await asyncio.sleep(0)
+        ans.resolve("fixed-uuid")
+
+    asyncio.get_running_loop().create_task(_answer_soon())
+    await svc.dial("0901234567", "", "", timeout=1)
+    assert "absolute_codec_string" not in esl.cmds[-1]
+
+
+@pytest.mark.asyncio
+async def test_dial_extension_has_no_codec_override():
+    esl = _FakeEsl()
+    svc, ans = _make_service(esl, [_FakeTrunk("main")])
+
+    async def _answer_soon():
+        await asyncio.sleep(0)
+        ans.resolve("fixed-uuid")
+
+    asyncio.get_running_loop().create_task(_answer_soon())
+    await svc.dial("800", "", "", timeout=1)
+    assert "absolute_codec_string" not in esl.cmds[-1]
