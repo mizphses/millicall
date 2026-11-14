@@ -255,7 +255,7 @@ export function OutboxPanel() {
           <Field
             label="宛先 FAX 番号 *"
             error={errors.toNumber}
-            help="0 から始まる国内番号（ハイフン可）。国際番号には送信できません。"
+            help="0 から始まる国内番号（ハイフン可）。186/184 を付けても可。国際番号には送信できません。"
           >
             <input
               className={input()}

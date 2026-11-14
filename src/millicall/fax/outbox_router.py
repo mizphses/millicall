@@ -195,7 +195,10 @@ _SEND_REQUEST_BODY = {
                     "to_number": {
                         "type": "string",
                         "maxLength": 20,
-                        "description": "宛先 FAX 番号（0 から始まる 10〜11 桁の国内番号）",
+                        "description": (
+                            "宛先 FAX 番号（0 から始まる 10〜11 桁の国内番号。"
+                            "先頭に 186/184 を付けても可）"
+                        ),
                     },
                     "trunk_name": {
                         "type": "string",

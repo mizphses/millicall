@@ -5079,7 +5079,7 @@ export interface operations {
                      * @description 送信する PDF（20 MB・100 ページまで）
                      */
                     file: string;
-                    /** @description 宛先 FAX 番号（0 から始まる 10〜11 桁の国内番号） */
+                    /** @description 宛先 FAX 番号（0 から始まる 10〜11 桁の国内番号。先頭に 186/184 を付けても可） */
                     to_number: string;
                     /** @description 送信に使うトランク名（省略時は既定の発信トランク） */
                     trunk_name?: string;
