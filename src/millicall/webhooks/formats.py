@@ -121,9 +121,15 @@ def slack_code(text: str) -> str:
 _TEAMS_MARKDOWN = re.compile(r"([\\*_\[\]()`~#>+-])")
 
 
+# むき出しの URL（https://… / www.…）は Teams が自動リンク化するので、スキームや www. の直後に
+# ゼロ幅スペースを挟んで URL として認識させない（表示は変わらない）。
+_TEAMS_AUTOLINK = re.compile(r"(?i)(\b(?:https?|ftp|mailto):|\bwww\.)")
+
+
 def teams_escape(text: str) -> str:
     """Adaptive Card の Markdown（TextBlock / FactSet）として解釈させないようエスケープする。"""
-    return _TEAMS_MARKDOWN.sub(r"\\\1", _one_line(text))
+    escaped = _TEAMS_MARKDOWN.sub(r"\\\1", _one_line(text))
+    return _TEAMS_AUTOLINK.sub("\\1\u200b", escaped)
 
 
 def _text(value: Any) -> str | None:

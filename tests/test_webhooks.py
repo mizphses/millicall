@@ -639,9 +639,20 @@ def test_teams_external_values_are_escaped():
     caller = facts[0]["value"]
     for raw in ("[x]", "](https://", "*bold*", "`tick`"):
         assert raw not in caller
-    assert r"\[x\]\(https://evil.example\) \*bold\* \`tick\` <!channel\>" in caller
+    assert "\\[x\\]\\(https:\u200b//evil.example\\) \\*bold\\* \\`tick\\` <!channel\\>" in caller
     # . や : はエスケープしない（Teams は未知のエスケープを \ 付きのまま表示する）
     assert "\\." not in caller and "\\:" not in caller
+
+
+def test_teams_bare_urls_are_not_autolinked():
+    data = {
+        "call": {**_INBOUND["call"], "caller_name": "see https://evil.example or www.evil.example"}
+    }
+    body = build_chat_message("teams", "call.inbound", data, _OCCURRED)
+    card = body["attachments"][0]["content"]
+    caller = next(b["facts"] for b in card["body"] if b["type"] == "FactSet")[0]["value"]
+    assert "https://evil.example" not in caller and "www.evil.example" not in caller
+    assert "https:\u200b//evil.example" in caller and "www.\u200bevil.example" in caller
     # リンクになるのはサーバー生成の pdf_url（Action.OpenUrl）だけ
     assert "actions" not in card
 
