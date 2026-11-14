@@ -493,11 +493,15 @@ export interface paths {
         head?: never;
         /**
          * Update Device
-         * @description デバイスの配信ゲート（provision_mode）を切り替える。
+         * @description デバイスの配信ゲート（provision_mode）と内線割当（extension_id）を変更する。
          *
-         *     standard へ戻すとトークンは破棄する（トークン付き URL は以後 404。電話機側の URL も
-         *     通常 URL に戻す必要がある）。strict にしてもトークンは自動発行しない
+         *     provision_mode: standard へ戻すとトークンは破棄する（トークン付き URL は以後 404。
+         *     電話機側の URL も通常 URL に戻す必要がある）。strict にしてもトークンは自動発行しない
          *     （POST /{id}/token で明示的に発行する。発行までは端末固有 cfg は 404）。
+         *
+         *     extension_id: 指定したときだけ扱う。別の内線 ID なら割当を変更し（別の端末に割当済みなら
+         *     409。``reassign: true`` で付け替え）、``null`` なら割当を解除する（provisioned=False・
+         *     取得記録リセット）。どちらも FreeSWITCH 設定を再生成する（issue #149）。
          */
         patch: operations["update_device_api_devices__device_id__patch"];
         trace?: never;
@@ -514,6 +518,10 @@ export interface paths {
         /**
          * Quick Provision Endpoint
          * @description デバイスに内線を割り当て、プロビジョニング完了状態にする。
+         *
+         *     ``extension_id`` で事前定義した内線を選ぶ（推奨）か、従来どおり番号 + 表示名で
+         *     指定する（無ければ新規作成）。選んだ内線が別の端末に割当済みなら 409 を返し、
+         *     ``reassign: true`` のときだけ旧端末の割当を外して付け替える（issue #149）。
          *
          *     トークンは発行しない（既定は standard ゲート。厳格モードは管理者が個別に選ぶ）。
          *     内線割り当て後、best-effort で電話機へ再取得を指示する（結果は応答に含めない。
@@ -584,7 +592,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Extensions */
+        /**
+         * List Extensions
+         * @description 内線一覧（紐づく端末の要約付き）。
+         */
         get: operations["list_extensions_api_extensions_get"];
         put?: never;
         /** Create Extension */
@@ -606,7 +617,14 @@ export interface paths {
         get: operations["get_extension_api_extensions__ext_id__get"];
         put?: never;
         post?: never;
-        /** Delete Extension */
+        /**
+         * Delete Extension
+         * @description 内線を削除する。紐づく端末は割当を解除してから削除する（issue #149）。
+         *
+         *     devices.extension_id の FK は ON DELETE SET NULL だが、それだけでは端末が
+         *     provisioned=True のまま残るため、アプリ側で明示的に解除（provisioned=False・
+         *     取得記録リセット）し、監査ログに残す。
+         */
         delete: operations["delete_extension_api_extensions__ext_id__delete"];
         options?: never;
         head?: never;
@@ -2571,10 +2589,19 @@ export interface components {
         /**
          * DeviceUpdate
          * @description デバイス更新リクエストボディ（指定した項目のみ更新）。
+         *
+         *     ``extension_id`` は指定したときだけ扱う（``null`` で割当を解除する）。
          */
         DeviceUpdate: {
+            /** Extension Id */
+            extension_id?: number | null;
             /** Provision Mode */
             provision_mode?: ("standard" | "strict") | null;
+            /**
+             * Reassign
+             * @default false
+             */
+            reassign: boolean;
         };
         /** ExtensionCreate */
         ExtensionCreate: {
@@ -2615,10 +2642,31 @@ export interface components {
              */
             transport: string;
         };
+        /**
+         * ExtensionDeviceSummary
+         * @description 内線に紐づく端末（電話機）の要約（issue #149）。
+         */
+        ExtensionDeviceSummary: {
+            /** Device Id */
+            device_id: number;
+            /** Ip Address */
+            ip_address: string | null;
+            /** Last Seen */
+            last_seen: string | null;
+            /** Mac Address */
+            mac_address: string;
+            /** Model */
+            model: string | null;
+        };
         /** ExtensionRead */
         ExtensionRead: {
             /** Calling Permission */
             calling_permission: string;
+            /**
+             * Devices
+             * @default []
+             */
+            devices: components["schemas"]["ExtensionDeviceSummary"][];
             /** Display Name */
             display_name: string;
             /** Enabled */
@@ -3002,12 +3050,22 @@ export interface components {
         /**
          * QuickProvisionBody
          * @description クイックプロビジョニングリクエストボディ。
+         *
+         *     ``extension_id``（既存内線を選ぶ。推奨）か、``extension_number`` + ``display_name``
+         *     （無ければ新規作成）のどちらか一方を指定する。両方・どちらも無しは 422。
          */
         QuickProvisionBody: {
             /** Display Name */
-            display_name: string;
+            display_name?: string | null;
+            /** Extension Id */
+            extension_id?: number | null;
             /** Extension Number */
-            extension_number: string;
+            extension_number?: string | null;
+            /**
+             * Reassign
+             * @default false
+             */
+            reassign: boolean;
         };
         /** ResetPasswordBody */
         ResetPasswordBody: {
