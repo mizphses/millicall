@@ -66,7 +66,11 @@
     <param name="enable-timer"               value="true"/>
     <param name="auth-calls"                 value="false"/>
 {%- if trunk.inbound_cidrs %}
-    <!-- 着信 ACL: このトランク専用の許可 CIDR リスト（プロバイダ IP 帯）。 -->
+    <!--
+      着信 ACL: このトランク専用の許可 CIDR リスト（プロバイダ IP 帯）。
+      トランクは auth-calls=false で事業者 IP だけを通す意図なので apply-inbound-acl でよい
+      （内線の internal プロファイルは apply-register-acl。issue #134）。
+    -->
     <param name="apply-inbound-acl"          value="trunk_{{ trunk.name }}_trusted"/>
 {%- else %}
     <!-- 警告: 許可 CIDR 未設定のため着信 ACL を掛けていません（SIP ポートが開放されます）。 -->
@@ -87,7 +91,11 @@
     -->
     <param name="enable-timer"               value="true"/>
     <param name="auth-calls"                 value="false"/>
-    <!-- SIP多層防御: HGW (192.168.1.1) は192.168.0.0/16に内包され通過する。WAN任意送信元は拒否。-->
+    <!--
+      SIP多層防御: HGW (192.168.1.1) は192.168.0.0/16に内包され通過する。WAN任意送信元は拒否。
+      トランクは auth-calls=false で送信元 IP 制限が目的なので apply-inbound-acl でよい
+      （内線の internal プロファイルは apply-register-acl。issue #134）。
+    -->
     <param name="apply-inbound-acl"          value="millicall_trusted"/>
 {%- endif %}
     <param name="inbound-late-negotiation"   value="true"/>

@@ -84,7 +84,23 @@ netd が管理する nftables テーブル（`millicall_nat`）で WAN 側から
 
 ### 第二層: FreeSWITCH ACL
 
-`MILLICALL_SIP_TRUSTED_CIDRS`（デフォルト: RFC1918 全帯域 + loopback）で ACL `millicall_trusted` を生成し、internal/external プロファイルに `apply-inbound-acl` を適用。信頼 CIDR 以外は FreeSWITCH レベルで拒否されます。
+`MILLICALL_SIP_TRUSTED_CIDRS`（デフォルト: RFC1918 全帯域 + loopback）で ACL `millicall_trusted` を生成し、次のように適用します。信頼 CIDR 以外は FreeSWITCH レベルで拒否されます。
+
+| プロファイル | パラメータ | 効果 |
+|---|---|---|
+| internal（内線） | `apply-register-acl=millicall_trusted` | REGISTER の送信元を信頼 CIDR に限定 |
+| external（HGW 種別トランク） | `apply-inbound-acl=millicall_trusted` | HGW からの着信のみ許可（トランクは `auth-calls=false`） |
+| external（SIP 種別トランク） | `apply-inbound-acl=trunk_<name>_trusted` | トランクごとの許可 CIDR（プロバイダ IP 帯）のみ許可 |
+
+### 第三層: 内線のダイジェスト認証
+
+internal プロファイルは `auth-calls=true` で、内線からの INVITE は**送信元によらず常にダイジェスト認証**します。
+内線の発信権限（`calling_permission`）などのディレクトリ変数は、この認証を経たときにだけチャネルへ適用されます。
+
+> **注意**: internal プロファイルに `apply-inbound-acl` を設定しないでください。ACL を通過した INVITE は
+> 「認証済み」扱いになってダイジェスト認証が省略され、ディレクトリ変数が載りません。その結果
+> `calling_permission` が空になり外線発信が `CALL_REJECTED` になる（発信者名も電話機側の名前になる）うえ、
+> LAN 上の端末がパスワード無しで発信できてしまいます（issue #134）。
 
 ```bash
 # 信頼 CIDR の確認・変更
@@ -115,6 +131,10 @@ MILLICALL_SIP_REJECT_ANONYMOUS=false   # デフォルト・変更しないこと
 | `international` | 内線 + 国内 + 国際（`MILLICALL_OUTBOUND_INTERNATIONAL_ALLOW` の許可プレフィックスとの AND） |
 
 国際発信は**デフォルトでブロック**されます。有効化するには `/extensions` で権限を `international` に変更し、`.env` に許可プレフィックスを設定します。
+
+発信権限はダイジェスト認証済みの INVITE に載るディレクトリ変数で判定します（上記「第三層」）。
+権限を設定しているのに `DOMESTIC_REJECTED` / `INTL_REJECTED` のログで `calling_permission=` が空のときは、
+INVITE が認証されずに通っている（internal プロファイルに `apply-inbound-acl` が残っている）可能性があります。
 
 ---
 

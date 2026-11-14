@@ -4,6 +4,8 @@
       millicall_trusted: SIP 信頼 CIDR リスト（SIP多層防御 Phase 6 Task 7）。
       default="deny" により未登録送信元は FreeSWITCH レイヤでも拒否される（nftables に次ぐ第二層）。
       HGW (192.168.1.1) は 192.168.0.0/16 に内包されているため、デフォルト設定で実機着信を維持する。
+      参照元: internal プロファイルの apply-register-acl（REGISTER の送信元制限のみ。INVITE は
+      ダイジェスト認証）と、HGW 種別 external プロファイルの apply-inbound-acl。
     -->
     <list name="millicall_trusted" default="deny">
 {% for cidr in sip_trusted_cidrs %}      <node type="allow" cidr="{{ cidr }}"/>
