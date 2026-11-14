@@ -34,7 +34,8 @@ def test_outbound_bridges_to_gateway_with_callerid(tmp_path):
     assert "user/${destination_number}@192.168.1.10" in dp
     # 外線: 0始まり → gateway bridge
     assert "sofia/gateway/hgw/${destination_number}" in dp
-    assert 'expression="^(0\\d+)$"' in dp
+    # 184/186（発信者番号通知の制御）付きも外線として通す（#139）
+    assert 'expression="^(18[46])?(0\\d+)$"' in dp
     # 発信者番号 = 表示番号
     assert "effective_caller_id_number=0398765432" in dp
 
@@ -56,7 +57,7 @@ def test_international_allowlist_creates_allow_extension(tmp_path):
     w.write_all([], trunks=[_trunk()])
     dp = (tmp_path / "dialplan" / "default.xml").read_text()
     assert 'name="outbound_intl_allow_010"' in dp
-    assert 'expression="^(010\\d+)$"' in dp
+    assert 'expression="^(18[46])?(010\\d+)$"' in dp
 
 
 def test_no_outbound_extension_without_trunk(tmp_path):

@@ -7,7 +7,10 @@
 
 番号解決（`_resolve_target`、旧 `_resolve_endpoint` 相当）:
     - 明示トランク指定 or 0/184/186 始まり → 外線: `sofia/gateway/<trunk>/<番号>`
-      （トランク未指定時は enabled 先頭を自動選択、caller_id は指定 > トランク既定）。
+      （トランク未指定時は既定の発信トランク＝設定 default_outbound_trunk_id、
+      無ければ発信に使うトランクの名前順先頭。caller_id はトランク既定 > 指定）。
+    - 発信プレフィクス + 外線番号（例: 92 0312345678）→ そのトランクからプレフィクスを
+      剥がして発信する（issue #139）。
     - それ以外 → 内線: `user/<ext>@<sip_domain>`。
 
 発信者番号通知（コントローラ裁定#6・非通知回線）: 呼び出し側が phone_number 先頭に
@@ -37,6 +40,12 @@ from millicall.crypto import SecretBox
 from millicall.mcp_server.ephemeral import EphemeralAgentSpec, EphemeralAgentStore
 from millicall.media.service import AnswerRegistry, HangupRegistry, locked_bgapi
 from millicall.models import AiAgent, Provider
+from millicall.telephony.outbound_routes import (
+    apply_caller_id_mode,
+    find_prefixed_trunk,
+    select_default_outbound_trunk,
+    strip_caller_id_control,
+)
 
 # 外線とみなす番号プレフィクス（0 = 一般外線、184/186 = 発信者番号通知制御）。
 _EXTERNAL_PREFIXES = ("0", "184", "186")
@@ -56,6 +65,14 @@ def _codec_vars_for(trunk_row: object) -> list[str]:
     if (getattr(trunk_row, "trunk_type", "hgw") or "hgw") == "hgw":
         return ["absolute_codec_string=PCMU"]
     return []
+
+
+def _with_caller_id_mode(number: str, trunk_row: object) -> str:
+    """トランクの番号通知モード（notify=186 / withhold=184）を宛先に反映する。
+
+    dialplan と同じ規則: 掛けた番号が既に 184/186 で始まるならそれを優先する（issue #139）。
+    """
+    return apply_caller_id_mode(number, getattr(trunk_row, "caller_id_mode", "as_dialed"))
 
 
 # C3 修正: 国際番号パターン（dialplan_default.xml.j2 の outbound_intl_block と同じ分類）。
@@ -235,6 +252,7 @@ class OutboundCallService:
         lock: asyncio.Lock | None = None,
         reconnect: Callable[[], Awaitable[_EslLike]] | None = None,
         international_allow_prefixes: list[str] | None = None,
+        default_outbound_trunk_id: int | None = None,
     ) -> None:
         self._esl = esl
         self._answer_registry = answer_registry
@@ -257,6 +275,8 @@ class OutboundCallService:
         # ツール呼び出し毎に注入する。None の場合のみ env Settings から動的に読む
         # （後方互換・一部テスト用フォールバック）。
         self._international_allow_prefixes = international_allow_prefixes
+        # 既定の発信トランク（trunks.id, issue #139）。None = 発信に使うトランクの名前順先頭。
+        self._default_outbound_trunk_id = default_outbound_trunk_id
 
     async def _bgapi(self, command: str) -> None:
         """共有 ESL 接続を lock で直列化し、接続断時は reconnect で張り直して再送する。"""
@@ -286,6 +306,9 @@ class OutboundCallService:
         グローバル allowlist が唯一の制御境界であり、dialplan の outbound_intl_block と
         セマンティクスを揃える。
         """
+        # 184/186（発信者番号通知の制御）を前置した国際番号も同じく判定する
+        # （dialplan の outbound_intl_block と同じ分類）。
+        phone_number = strip_caller_id_control(phone_number)
         if not _INTL_RE.match(phone_number):
             return  # 国内/内線 → ポリシー適用不要
         allow_prefixes = self._get_intl_allow_prefixes()
@@ -344,27 +367,48 @@ class OutboundCallService:
             match = next((t for t in trunks if t.name == trunk), None)
             if match is None:
                 raise ValueError(f"unknown trunk: {trunk!r}")
+            if not getattr(match, "outbound_enabled", True):
+                raise ValueError(f"trunk is not used for outbound calls: {trunk!r}")
             # C3: 国際発信ポリシーチェック（トランク解決後、gateway dest 構築前）。
             self._check_intl_policy(phone_number)
             # C3: caller-ID ロックダウン — トランクの caller_id を優先し spoofing を防ぐ。
             trunk_cid = getattr(match, "caller_id", "") or ""
             effective_cid = trunk_cid or caller_id  # trunk値が無い場合のみ caller-supplied を使う
             return (
-                f"sofia/gateway/{trunk}/{phone_number}", effective_cid, _codec_vars_for(match)
+                f"sofia/gateway/{trunk}/{_with_caller_id_mode(phone_number, match)}",
+                effective_cid,
+                _codec_vars_for(match),
             )
+
+        # 発信プレフィクス付き（例: 92 0312345678）→ そのトランクからプレフィクスを
+        # 剥がして発信する（issue #139。dialplan の outbound_external_via_<trunk> と同じ規則）。
+        if not phone_number.startswith(_EXTERNAL_PREFIXES):
+            trunks = await self._fetch_enabled_trunks()
+            hit = find_prefixed_trunk(phone_number, trunks)
+            if hit is not None:
+                selected, number = hit
+                self._check_intl_policy(number)
+                trunk_cid = getattr(selected, "caller_id", "") or ""
+                return (
+                    f"sofia/gateway/{selected.name}/{_with_caller_id_mode(number, selected)}",
+                    trunk_cid or caller_id,
+                    _codec_vars_for(selected),
+                )
 
         if phone_number.startswith(_EXTERNAL_PREFIXES):
             trunks = await self._fetch_enabled_trunks()
-            if not trunks:
+            # 既定の発信トランク（設定 default_outbound_trunk_id → 発信に使うトランクの
+            # 名前順先頭）。dialplan の outbound_external と同じ選び方（issue #139）。
+            selected = select_default_outbound_trunk(trunks, self._default_outbound_trunk_id)
+            if selected is None:
                 raise ValueError("利用可能なトランクがありません")
-            selected = trunks[0]
             # C3: 国際発信ポリシーチェック（トランク選択後、gateway dest 構築前）。
             self._check_intl_policy(phone_number)
             # C3: caller-ID ロックダウン — トランクの caller_id を優先し spoofing を防ぐ。
             trunk_cid = getattr(selected, "caller_id", "") or ""
             effective_cid = trunk_cid or caller_id  # trunk値が無い場合のみ caller-supplied を使う
             return (
-                f"sofia/gateway/{selected.name}/{phone_number}",
+                f"sofia/gateway/{selected.name}/{_with_caller_id_mode(phone_number, selected)}",
                 effective_cid,
                 _codec_vars_for(selected),
             )

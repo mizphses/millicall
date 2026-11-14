@@ -76,42 +76,69 @@
         <action application="hangup" data="NO_ROUTE_DESTINATION"/>
       </condition>
     </extension>
-{% if outbound_trunk %}
 {#
+  【外線発信】発信プレフィクスで発信トランク（相手に表示される番号）を選ぶ（issue #139）。
+  - プレフィクスなしの外線番号は既定の発信トランク（outbound_trunk）から発信する。
+  - トランクに dial_prefix があれば `<prefix>` + 外線番号をそのトランクから発信する。
+    プレフィクスを剥がした番号に、国際ブロック・allowlist・発信権限ゲートを同じ規則で適用する。
+  - 184/186（発信者番号通知の制御）は外線番号の先頭に付けたまま事業者へ渡す
+    （例: 92 186 070…）。
+  bridge 先は ${destination_number:N}（先頭 N 文字 = プレフィクスを除いた部分文字列）。
+  正規表現のキャプチャは入れ子 condition の評価で上書きされうるため使わない。
+
   HGW（ひかり電話）は G.711 μ-law（PCMU）しか受け付けず、PCMA でオファーすると
   488 Not Acceptable Here になる（#136）。A レグに set しても B レグのオファーは
   変わらないため、bridge 文字列の {} で B レグ変数として absolute_codec_string を渡す。
   sip 種別（Brastel 等）は従来どおりコーデック指定なし。
 #}
-{% set outbound_codec_vars = "{absolute_codec_string=PCMU}" if outbound_trunk.trunk_type == "hgw" else "" %}
-    <!--
-      発信権限ゲート（トールフラウド対策 §7）
-      チャンネル変数 ${calling_permission} はディレクトリの <variable> で内線ごとに設定される。
-      - "international": 国際発信可（global allowlist との AND 条件）
-      - "domestic"     : 国内 PSTN まで（デフォルト）
-      - "internal"     : 内線のみ（国内 PSTN も不可）
-    -->
-
-    <!-- 国際発信 allowlist: "international" 権限かつ allowlist 一致の場合のみ通過 -->
-{% for prefix in international_allow_prefixes %}
-    <extension name="outbound_intl_allow_{{ prefix }}">
-      <condition field="destination_number" expression="^({{ prefix }}\d+)$">
-        <condition field="${calling_permission}" expression="^international$">
-          <action application="set" data="effective_caller_id_number={{ outbound_trunk.caller_id }}"/>
-          <action application="set" data="effective_caller_id_name={{ outbound_trunk.caller_id }}"/>
+{#
+  番号通知（caller_id_mode, issue #139 追加要望）:
+  - as_dialed: 掛けたとおり（184/186 を付けて掛ければそのまま渡す）
+  - notify   : 常に 186 を前置 / withhold: 常に 184 を前置
+  ただし掛けた番号が既に 184/186 で始まるときはそれを優先し、二重に付けない。
+  notify / withhold のトランクは「184/186 付きで掛けた」extension（name に _dialed_cid）と
+  「付けずに掛けた」extension（186/184 を前置して bridge）に分けて生成する。
+  発信権限・国際ブロック・allowlist の判定は、どちらも 184/186 を外した番号部分で行う。
+#}
+{% macro gated_bridge(name, expression, permission_re, trunk, target, reject_label, via) %}
+    <extension name="{{ name }}">
+      <condition field="destination_number" expression="{{ expression }}">
+        <condition field="${calling_permission}" expression="{{ permission_re }}">
+          <action application="set" data="effective_caller_id_number={{ trunk.caller_id }}"/>
+          <action application="set" data="effective_caller_id_name={{ trunk.caller_id }}"/>
           <action application="set" data="hangup_after_bridge=true"/>
-          <action application="bridge" data="{{ outbound_codec_vars }}sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
+          <action application="bridge" data="{{ "{absolute_codec_string=PCMU}" if trunk.trunk_type == "hgw" else "" }}sofia/gateway/{{ trunk.name }}/{{ target }}"/>
           <action application="hangup"/>
-          <anti-action application="log" data="WARNING calling_permission=${calling_permission} INTL_REJECTED: ${destination_number} (calling_permission が空なら INVITE がダイジェスト認証されていない可能性: apply-inbound-acl 通過でディレクトリ変数が載っていない)"/>
+          <anti-action application="log" data="WARNING calling_permission=${calling_permission} {{ reject_label }}: ${destination_number}{{ via }} (calling_permission が空なら INVITE がダイジェスト認証されていない可能性: apply-inbound-acl 通過でディレクトリ変数が載っていない)"/>
           <anti-action application="hangup" data="CALL_REJECTED"/>
         </condition>
       </condition>
     </extension>
-{% endfor %}
+{% endmacro %}
+{#
+  number_re の番号部分を、トランクの番号通知モードに応じて 1〜2 個の extension に展開する。
+#}
+{% macro cid_routes(name, prefix_re, number_re, permission_re, trunk, dial, reject_label, via) %}
+{%- set control = {"notify": "186", "withhold": "184"}.get(trunk.caller_id_mode, "") -%}
+{%- if control %}
+{{ gated_bridge(name ~ "_dialed_cid", "^" ~ prefix_re ~ "(18[46])(" ~ number_re ~ ")$", permission_re, trunk, dial, reject_label, via) }}
+{{ gated_bridge(name, "^" ~ prefix_re ~ "(" ~ number_re ~ ")$", permission_re, trunk, control ~ dial, reject_label, via) }}
+{%- else %}
+{{ gated_bridge(name, "^" ~ prefix_re ~ "(18[46])?(" ~ number_re ~ ")$", permission_re, trunk, dial, reject_label, via) }}
+{%- endif %}
+{% endmacro %}
+{% macro outbound_routes(trunk, prefix="", suffix="") %}
+{%- set prefix_re = (prefix | re_escape) if prefix else "" -%}
+{%- set dial = "${destination_number:" ~ (prefix | length) ~ "}" if prefix else "${destination_number}" -%}
+{%- set via = " trunk=" ~ trunk.name if prefix else "" %}
+    <!-- 国際発信 allowlist: "international" 権限かつ allowlist 一致の場合のみ通過 -->
+{% for allow in international_allow_prefixes %}
+{{ cid_routes("outbound_intl_allow_" ~ allow ~ suffix, prefix_re, allow ~ "\\d+", "^international$", trunk, dial, "INTL_REJECTED", via) }}
+{%- endfor %}
     <!-- 国際番号バックストップ: allowlist 外または権限不足を無条件ブロック -->
-    <extension name="outbound_intl_block">
-      <condition field="destination_number" expression="^(010\d+|00[1-9]\d+)$">
-        <action application="log" data="WARNING ===== INTL BLOCKED: ${destination_number} calling_permission=${calling_permission} ====="/>
+    <extension name="outbound_intl_block{{ suffix }}">
+      <condition field="destination_number" expression="^{{ prefix_re }}(18[46])?(010\d+|00[1-9]\d+)$">
+        <action application="log" data="WARNING ===== INTL BLOCKED: ${destination_number}{{ via }} calling_permission=${calling_permission} ====="/>
         <action application="hangup" data="CALL_REJECTED"/>
       </condition>
     </extension>
@@ -119,19 +146,22 @@
       国内 PSTN 発信: "domestic" または "international" 権限の場合のみ通過させる。
       "internal" 権限の内線は CALL_REJECTED で拒否（トールフラウド対策）。
     -->
-    <extension name="outbound_external">
-      <condition field="destination_number" expression="^(0\d+)$">
-        <condition field="${calling_permission}" expression="^(domestic|international)$">
-          <action application="set" data="effective_caller_id_number={{ outbound_trunk.caller_id }}"/>
-          <action application="set" data="effective_caller_id_name={{ outbound_trunk.caller_id }}"/>
-          <action application="set" data="hangup_after_bridge=true"/>
-          <action application="bridge" data="{{ outbound_codec_vars }}sofia/gateway/{{ outbound_trunk.name }}/${destination_number}"/>
-          <action application="hangup"/>
-          <anti-action application="log" data="WARNING calling_permission=${calling_permission} DOMESTIC_REJECTED: ${destination_number} (calling_permission が空なら INVITE がダイジェスト認証されていない可能性: apply-inbound-acl 通過でディレクトリ変数が載っていない)"/>
-          <anti-action application="hangup" data="CALL_REJECTED"/>
-        </condition>
-      </condition>
-    </extension>
-{% endif %}
+{{ cid_routes("outbound_external" ~ suffix, prefix_re, "0\\d+", "^(domestic|international)$", trunk, dial, "DOMESTIC_REJECTED", via) }}
+{% endmacro %}
+{% if outbound_trunk %}
+    <!--
+      発信権限ゲート（トールフラウド対策 §7）
+      チャンネル変数 ${calling_permission} はディレクトリの <variable> で内線ごとに設定される。
+      - "international": 国際発信可（global allowlist との AND 条件）
+      - "domestic"     : 国内 PSTN まで（デフォルト）
+      - "internal"     : 内線のみ（国内 PSTN も不可）
+    -->
+{% for t in prefixed_trunks %}
+{#- 発信プレフィクス付き → そのトランク（番号通知はトランクの caller_id） #}
+{{ outbound_routes(t, t.dial_prefix, "_via_" ~ t.name) }}
+{%- endfor %}
+{#- プレフィクスなし → 既定の発信トランク #}
+{{ outbound_routes(outbound_trunk) }}
+{%- endif %}
   </context>
 </include>

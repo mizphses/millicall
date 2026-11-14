@@ -205,6 +205,23 @@ class Trunk(Base):
     register_expire_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=3600, server_default="3600"
     )
+    # 発信プレフィクス（issue #139）。空 = プレフィクスなし。`<dial_prefix>0…` と
+    # ダイヤルされたらプレフィクスを剥がしてこのトランクから発信し、相手に表示される番号
+    # （caller_id）を選べるようにする。文字は 0-9 * #、1〜8 文字、トランク間で重複不可。
+    dial_prefix: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="", server_default=""
+    )
+    # 発信に使う（issue #139）。False のトランクは着信専用で、既定の発信トランクにも
+    # プレフィクス発信にも使わない。
+    outbound_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    # 番号通知（issue #139 追加要望）: as_dialed = 掛けたとおり / notify = 常に 186 を前置 /
+    # withhold = 常に 184 を前置。掛けた番号が既に 184/186 で始まるときはそちらを優先する。
+    # ひかり電話は既定非通知のため、通知したい回線は notify にする。
+    caller_id_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="as_dialed", server_default="as_dialed"
+    )
     # 音声・FAX 併用回線の FAX 自動検知（issue #121）。True のとき public.xml の着信で
     # transfer の前に spandsp_start_fax_detect を仕掛け、CNG（発呼側 FAX の 1100Hz）を
     # 検知したら fax_route_number（FAX 受信番号）へ切り替える。

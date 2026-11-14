@@ -68,6 +68,7 @@ def build_config_writer(settings: Settings, secrets: Secrets) -> FreeswitchConfi
         fax_max_duration_sec=settings.fax_max_duration_sec,
         # #123 の組み込み音声（core 起動時に tts_cache_dir/builtin へ同期される）。
         fax_announce_path=builtin_audio_path(FAX_RECEIVE_NOTICE_ID, settings.tts_cache_dir),
+        default_outbound_trunk_id=settings.default_outbound_trunk_id,
     )
 
 
@@ -133,6 +134,10 @@ class TelephonyChangeListener:
                 fax_detect_timeout_sec=t.fax_detect_timeout_sec,
                 fax_route_number=t.fax_route_number,
                 fax_detect_announce=t.fax_detect_announce,
+                id=t.id,
+                dial_prefix=t.dial_prefix,
+                outbound_enabled=t.outbound_enabled,
+                caller_id_mode=t.caller_id_mode,
             )
             for t, password in creds.trunks
         ]
@@ -208,6 +213,14 @@ class TelephonyChangeListener:
         新しい値でテンプレート展開される。
         """
         self._writer.update_outbound_policy(international_allow_prefixes, sip_reject_anonymous)
+
+    def set_default_outbound_trunk_id(self, trunk_id: int | None) -> None:
+        """既定の発信トランク（trunks.id）を差し替える（PUT /api/settings からの変更用）。
+
+        次回 regenerate/notify 時に反映される。該当トランクが無効・発信不可・削除済みなら
+        描画時に名前順先頭へフォールバックする。
+        """
+        self._writer.set_default_outbound_trunk_id(trunk_id)
 
     async def _configuration(self, session: AsyncSession) -> tuple[tuple, SipCredentialStatus]:
         # 復号できない内線・トランクは設定から除外する（その端末/トランクは登録できない

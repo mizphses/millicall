@@ -31,6 +31,8 @@ KIND_AI_AGENT = "ai_agent"
 KIND_WORKFLOW = "workflow"
 KIND_RING_GROUP = "ring_group"
 KIND_FAX = "fax"
+# 番号プランの実体ではないが、assert_number_free の衝突種別として使う（issue #139）。
+KIND_TRUNK_DIAL_PREFIX = "trunk_dial_prefix"
 
 
 class NumberConflictError(ValueError):
@@ -156,6 +158,11 @@ async def assert_number_free(
     """
     existing = await find_number(session, number)
     if existing is None:
+        # 外線トランクの発信プレフィクス（issue #139）と同じ番号は、ダイヤルしたときに
+        # 内線と外線発信のどちらか決まらなくなるため使わせない。
+        trunk = await session.scalar(select(Trunk).where(Trunk.dial_prefix == number))
+        if trunk is not None:
+            raise NumberConflictError(number, KIND_TRUNK_DIAL_PREFIX, trunk.name)
         return
     if exclude is not None and (existing.kind, existing.id) == exclude:
         return

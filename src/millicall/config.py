@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     mcp_allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
     # converse 既定エージェント（Phase 4a Task 4 で使用）。None なら enabled な ai_agents 最小 id。
     mcp_default_agent_id: int | None = None
+    # 既定の発信トランク（trunks.id, issue #139）。プレフィクスなしの外線発信に使う。
+    # None・該当トランクが無効/発信に使わない場合は、発信に使うトランクの名前順先頭。
+    default_outbound_trunk_id: int | None = None
 
     # --- VAD（着信 AI 応対の発話区切り / バージイン） ---
     # webrtcvad の積極度 (0-3)。大きいほど非音声を弾く。

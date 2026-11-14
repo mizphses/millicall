@@ -3027,6 +3027,17 @@ export interface components {
              */
             caller_id: string;
             /**
+             * Caller Id Mode
+             * @default as_dialed
+             * @enum {string}
+             */
+            caller_id_mode: "as_dialed" | "notify" | "withhold";
+            /**
+             * Dial Prefix
+             * @default
+             */
+            dial_prefix: string;
+            /**
              * Did Number
              * @default
              */
@@ -3071,6 +3082,11 @@ export interface components {
              * @default 30
              */
             options_ping_seconds: number;
+            /**
+             * Outbound Enabled
+             * @default true
+             */
+            outbound_enabled: boolean;
             /** Password */
             password: string;
             /**
@@ -3095,6 +3111,13 @@ export interface components {
             apply_warning?: string | null;
             /** Caller Id */
             caller_id: string;
+            /**
+             * Caller Id Mode
+             * @enum {string}
+             */
+            caller_id_mode: "as_dialed" | "notify" | "withhold";
+            /** Dial Prefix */
+            dial_prefix: string;
             /** Did Number */
             did_number: string;
             /** Display Name */
@@ -3123,6 +3146,8 @@ export interface components {
             name: string;
             /** Options Ping Seconds */
             options_ping_seconds: number;
+            /** Outbound Enabled */
+            outbound_enabled: boolean;
             /** Register Expire Seconds */
             register_expire_seconds: number;
             /** Source Port */
@@ -3153,6 +3178,10 @@ export interface components {
         TrunkUpdate: {
             /** Caller Id */
             caller_id?: string | null;
+            /** Caller Id Mode */
+            caller_id_mode?: ("as_dialed" | "notify" | "withhold") | null;
+            /** Dial Prefix */
+            dial_prefix?: string | null;
             /** Did Number */
             did_number?: string | null;
             /** Display Name */
@@ -3175,6 +3204,8 @@ export interface components {
             inbound_extension?: string | null;
             /** Options Ping Seconds */
             options_ping_seconds?: number | null;
+            /** Outbound Enabled */
+            outbound_enabled?: boolean | null;
             /** Password */
             password?: string | null;
             /** Register Expire Seconds */

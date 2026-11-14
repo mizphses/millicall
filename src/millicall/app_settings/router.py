@@ -23,7 +23,7 @@ from millicall.app_settings.service import (
 )
 from millicall.audit import get_client_ip, record_audit
 from millicall.deps import get_session, require_admin
-from millicall.models import User
+from millicall.models import Trunk, User
 from millicall.scim.roles import recalc_scim_roles
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -93,6 +93,16 @@ async def update_settings_api(
     except SettingValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    # 既定の発信トランクは実在するトランクだけ受け付ける（無効化・削除後は描画時に
+    # 名前順先頭へフォールバックするため、ここでは存在のみ確認する）。
+    default_trunk_id = validated.get("default_outbound_trunk_id")
+    if default_trunk_id is not None and await session.get(Trunk, default_trunk_id) is None:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"default_outbound_trunk_id: トランク（id={default_trunk_id}）が見つかりません",
+        )
+
     if validated or body.reset:
         await record_audit(
             session,
@@ -125,7 +135,7 @@ async def update_settings_api(
         if role_changes:
             await session.commit()
 
-    # 国際発信 allowlist / 匿名着信拒否は FreeSWITCH dialplan に展開されるため、
+    # 国際発信 allowlist / 匿名着信拒否 / 既定の発信トランクは FreeSWITCH dialplan に展開されるため、
     # 変更時は設定ファイルを再生成して reloadxml する（ESL 不達でも保存自体は成功扱い）。
     if changed & TELEPHONY_REGEN_KEYS:
         eff = await svc.effective()
@@ -134,6 +144,7 @@ async def update_settings_api(
             [p.strip() for p in eff.outbound_international_allow.split(",") if p.strip()],
             eff.sip_reject_anonymous,
         )
+        listener.set_default_outbound_trunk_id(eff.default_outbound_trunk_id)
         await listener.notify(session)
 
     return await _build_read(svc)

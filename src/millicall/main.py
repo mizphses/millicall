@@ -62,6 +62,10 @@ from millicall.sip_credentials import SipCredentialError
 from millicall.system.router import router as system_router
 from millicall.telephony.esl import ESLClient
 from millicall.telephony.events import CdrRecorder, EslEventListener
+from millicall.telephony.outbound_routes import (
+    make_db_dial_prefix_loader,
+    register_dial_prefix_loader,
+)
 from millicall.telephony.service import (
     TelephonyChangeListener,
     build_config_writer,
@@ -241,6 +245,9 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
         secret_box=SecretBox(app.state.secrets.master_key),
     )
     app.state.change_listener = listener
+    # ワークフロー/MCP の transfer が「発信プレフィクス付きの外線番号」を判定できるよう、
+    # DB から発信プレフィクス一覧を引くローダを登録する（issue #139）。
+    register_dial_prefix_loader(make_db_dial_prefix_loader(app.state.sessionmaker))
 
     async with app.state.sessionmaker() as session:
         new_admin_password = await ensure_admin_user(session)
@@ -441,6 +448,7 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
                 with contextlib.suppress(asyncio.CancelledError):
                     await fax_retention_task
             await esl_command.close()
+            register_dial_prefix_loader(None)
             await engine.dispose()
             # Argon2 専用 executor を停止し、未開始の計算を取り消す（issue #81）
             argon2_hashing.shutdown()

@@ -3,6 +3,14 @@ import type { components } from "../../api/schema";
 export type TrunkRead = components["schemas"]["TrunkRead"];
 export type TrunkCreate = components["schemas"]["TrunkCreate"];
 export type TrunkUpdate = components["schemas"]["TrunkUpdate"];
+export type CallerIdMode = TrunkRead["caller_id_mode"];
+
+/** 番号通知セレクトの選択肢。 */
+export const CALLER_ID_MODE_OPTIONS: { value: CallerIdMode; label: string }[] = [
+  { value: "as_dialed", label: "掛けたとおり" },
+  { value: "notify", label: "常に通知（186）" },
+  { value: "withhold", label: "常に非通知（184）" },
+];
 
 /** SlidePanel フォームが保持する値。API 型とは分離し、UI 都合の型に寄せる。 */
 export interface TrunkFormValues {
@@ -51,6 +59,18 @@ export interface TrunkFormValues {
   fax_route_number: string;
   /** 検知中に案内音声を再生する。 */
   fax_detect_announce: boolean;
+  /**
+   * 発信プレフィクス。空 = プレフィクスなし（既定の発信トランクとして使う）。
+   * 例: "92" なら「92 + 外線番号」でこのトランクから発信する。
+   */
+  dial_prefix: string;
+  /** 発信に使う。オフ = 着信専用。 */
+  outbound_enabled: boolean;
+  /**
+   * 番号通知。as_dialed=掛けたとおり / notify=常に 186 / withhold=常に 184。
+   * 掛けた番号が既に 184/186 で始まるときはそちらが優先される。
+   */
+  caller_id_mode: CallerIdMode;
   enabled: boolean;
 }
 
@@ -82,6 +102,9 @@ export function emptyForm(): TrunkFormValues {
     fax_detect_timeout_sec: "20",
     fax_route_number: "",
     fax_detect_announce: false,
+    dial_prefix: "",
+    outbound_enabled: true,
+    caller_id_mode: "as_dialed",
     enabled: true,
   };
 }
@@ -106,6 +129,9 @@ export function formFromTrunk(trunk: TrunkRead): TrunkFormValues {
     fax_detect_timeout_sec: String(trunk.fax_detect_timeout_sec),
     fax_route_number: trunk.fax_route_number ?? "",
     fax_detect_announce: trunk.fax_detect_announce,
+    dial_prefix: trunk.dial_prefix,
+    outbound_enabled: trunk.outbound_enabled,
+    caller_id_mode: trunk.caller_id_mode,
     enabled: trunk.enabled,
   };
 }
@@ -132,6 +158,9 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
     // 自動検知が無効なら切替先は送らない（未設定）。
     fax_route_number: form.fax_detect_enabled ? form.fax_route_number.trim() || null : null,
     fax_detect_announce: form.fax_detect_enabled ? form.fax_detect_announce : false,
+    dial_prefix: form.dial_prefix.trim(),
+    outbound_enabled: form.outbound_enabled,
+    caller_id_mode: form.caller_id_mode,
     enabled: form.enabled,
   };
 }
@@ -253,6 +282,18 @@ export function buildUpdatePayload(
     payload.fax_detect_announce = announce;
   }
 
+  // dial_prefix: 空文字 = プレフィクスなし（有効値）。変更があれば含める。
+  const dialPrefix = form.dial_prefix.trim();
+  if (dialPrefix !== original.dial_prefix) {
+    payload.dial_prefix = dialPrefix;
+  }
+  if (form.outbound_enabled !== original.outbound_enabled) {
+    payload.outbound_enabled = form.outbound_enabled;
+  }
+  if (form.caller_id_mode !== original.caller_id_mode) {
+    payload.caller_id_mode = form.caller_id_mode;
+  }
+
   if (form.enabled !== original.enabled) {
     payload.enabled = form.enabled;
   }
@@ -338,6 +379,12 @@ export function validateForm(
     }
   }
 
+  // 発信プレフィクス: 空は許可（プレフィクスなし）。重複・内線番号との衝突はサーバ側で検証。
+  const dialPrefixError = validateDialPrefix(form.dial_prefix.trim());
+  if (dialPrefixError) {
+    errors.dial_prefix = dialPrefixError;
+  }
+
   // 着信許可 CIDR: SIP 種別のみ対象。各要素が IPv4/IPv6 の CIDR/アドレス表記か簡易検証。
   if (form.trunk_type === "sip") {
     const invalid = parseCidrs(form.inbound_cidrs).filter((c) => !isCidrLike(c));
@@ -356,6 +403,27 @@ export function validateForm(
   }
 
   return errors;
+}
+
+/**
+ * 発信プレフィクスの書式チェック（サーバの dial_prefix_format_error と同じ規則）。
+ * 空 = プレフィクスなしで null。
+ */
+export function validateDialPrefix(prefix: string): string | null {
+  if (prefix === "") return null;
+  if (!/^[0-9*#]{1,8}$/.test(prefix)) {
+    return "発信プレフィクスは 0-9・*・# の 1〜8 文字で指定してください";
+  }
+  if (prefix.startsWith("0")) {
+    return "発信プレフィクスは 0 で始められません（外線番号と区別できなくなります）";
+  }
+  if (prefix.startsWith("184") || prefix.startsWith("186")) {
+    return "184/186 で始まる発信プレフィクスは使えません（発信者番号通知の制御と区別できなくなります）";
+  }
+  if (prefix.startsWith("1") && prefix.length === 3) {
+    return "1 で始まる 3 桁の発信プレフィクスは使えません（184/186 や 110/119 などの特番と衝突します）";
+  }
+  return null;
 }
 
 /** IPv4/IPv6 のアドレス or CIDR 表記かの簡易チェック（厳密な範囲検証はサーバ側）。 */
