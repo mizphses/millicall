@@ -61,6 +61,11 @@ def test_pdf_to_tiff_fax_format(tmp_path):
             assert tuple(round(v) for v in im.info["dpi"]) == (204, 196)
             # A4 縦はファイン（196 lpi）で約 2340 ライン。極端に縦長のページは上限で縮小。
             assert im.height <= convert_mod.FAX_MAX_LINES
+            # TIFF Class F: 全ページ MinIsWhite（1 = 黒）
+            assert im.tag_v2[262] == 0
+            # 白地に黒（反転していない）: 大半の画素が白
+            hist = im.histogram()
+            assert hist[255] > hist[0]
         im.seek(0)
         assert 2300 < im.height < 2400
         assert im.getpixel((5, 5)) == 0  # 黒（四角）
@@ -68,6 +73,37 @@ def test_pdf_to_tiff_fax_format(tmp_path):
     assert tif.stat().st_mode & 0o777 == 0o644
     # 一時ファイルは残らない
     assert {p.name for p in tmp_path.iterdir()} == {"a.pdf", "a.tif"}
+
+
+def test_tiff_raw_bits_are_min_is_white(tmp_path):
+    """Pillow のデコードを介さず、非圧縮で書いた TIFF の生ビットで「1 = 黒」を確認する。"""
+    import struct
+
+    from PIL import ImageChops
+
+    im = Image.new("1", (16, 1), 255)
+    ImageDraw.Draw(im).rectangle((0, 0, 3, 0), fill=0)  # 左 4 画素が黒
+    path = tmp_path / "x.tif"
+    ImageChops.invert(im).save(path, format="TIFF")
+    convert_mod._set_min_is_white(path)
+    buf = path.read_bytes()
+    (off,) = struct.unpack_from("<I", buf, 4)
+    (n,) = struct.unpack_from("<H", buf, off)
+    tags = {}
+    for i in range(n):
+        tag, typ, _cnt, val = struct.unpack_from("<HHII", buf, off + 2 + i * 12)
+        tags[tag] = val & 0xFFFF if typ == 3 else val
+    assert tags[262] == 0
+    assert buf[tags[273] : tags[273] + 2] == bytes([0b11110000, 0b00000000])
+    with Image.open(path) as back:
+        assert [back.getpixel((x, 0)) for x in (0, 3, 4, 15)] == [0, 0, 255, 255]
+
+
+def test_set_min_is_white_rejects_non_tiff(tmp_path):
+    bad = tmp_path / "x.tif"
+    bad.write_bytes(b"MM\x00*" + b"\x00" * 8)
+    with pytest.raises(FaxConvertError):
+        convert_mod._set_min_is_white(bad)
 
 
 def test_pdf_to_tiff_limits_and_invalid(tmp_path):

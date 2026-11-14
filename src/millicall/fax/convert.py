@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import struct
 import sys
 import tempfile
 from pathlib import Path
@@ -35,6 +36,9 @@ CONVERT_TIMEOUT_SECONDS = 120.0
 CONVERT_MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024
 
 PDF_MAGIC = b"%PDF-"
+_TAG_PHOTOMETRIC = 262
+_PHOTOMETRIC_MIN_IS_WHITE = 0
+_TIFF_SHORT = 3
 
 # 子プロセスの終了コード。
 _EXIT_LIMIT = 2
@@ -56,7 +60,7 @@ def looks_like_pdf(head: bytes) -> bool:
 
 def _page_image(page, max_lines: int):
     """1 ページを FAX 解像度の 1bit 画像（幅 1728 px）にする。"""
-    from PIL import Image
+    from PIL import Image, ImageChops
 
     width_pt, height_pt = page.get_size()
     if width_pt <= 0 or height_pt <= 0:
@@ -84,9 +88,42 @@ def _page_image(page, max_lines: int):
         canvas = Image.new("L", (FAX_WIDTH_PX, height), 255)
         canvas.paste(image, ((FAX_WIDTH_PX - width) // 2, 0))
         image = canvas
-    # 誤差拡散で 1bit 化（写真・網掛けも潰れにくい）。Pillow は PhotometricInterpretation=
-    # MinIsBlack で保存するが、spandsp（txfax）は MinIsWhite 以外を読み込み時に反転して扱う。
-    return image.convert("1")
+    # 誤差拡散で 1bit 化（写真・網掛けも潰れにくい）。TIFF Class F は MinIsWhite（1 = 黒）が
+    # 標準のため、ここで画素を反転しておき、保存後に PhotometricInterpretation を 0 に
+    # 書き換える（_set_min_is_white）。Pillow に tiffinfo={262: 0} を渡すと真っ黒になるため使わない。
+    return ImageChops.invert(image.convert("1"))
+
+
+def _set_min_is_white(path: Path) -> None:
+    """全ページ（IFD）の PhotometricInterpretation を MinIsWhite（0）に書き換える。
+
+    Pillow は mode "1" を MinIsBlack（BlackIsZero）で保存する。画素は反転済みなので、
+    タグだけを 0 にすると「1 = 黒」の TIFF Class F 形式になる。値は IFD エントリ内の
+    SHORT なのでファイル長は変わらない。Pillow が書くリトルエンディアン TIFF のみ扱う。
+    """
+    buf = bytearray(path.read_bytes())
+    if buf[:4] != b"II*\x00":
+        raise FaxConvertError("TIFF の形式が想定と異なります")
+    (offset,) = struct.unpack_from("<I", buf, 4)
+    seen: set[int] = set()
+    patched = 0
+    while offset:
+        if offset in seen or offset + 2 > len(buf):
+            raise FaxConvertError("TIFF の IFD が不正です")
+        seen.add(offset)
+        (count,) = struct.unpack_from("<H", buf, offset)
+        for i in range(count):
+            entry = offset + 2 + i * 12
+            tag, typ, n = struct.unpack_from("<HHI", buf, entry)
+            if tag == _TAG_PHOTOMETRIC:
+                if typ != _TIFF_SHORT or n != 1:
+                    raise FaxConvertError("TIFF の PhotometricInterpretation が不正です")
+                struct.pack_into("<H", buf, entry + 8, _PHOTOMETRIC_MIN_IS_WHITE)
+                patched += 1
+        (offset,) = struct.unpack_from("<I", buf, offset + 2 + count * 12)
+    if not patched:
+        raise FaxConvertError("TIFF に PhotometricInterpretation がありません")
+    path.write_bytes(bytes(buf))
 
 
 def pdf_to_tiff(pdf_path: Path, tiff_path: Path, *, max_pages: int) -> int:
@@ -136,6 +173,7 @@ def pdf_to_tiff(pdf_path: Path, tiff_path: Path, *, max_pages: int) -> int:
                     compression="group4",
                     dpi=(FAX_XDPI, FAX_YDPI),
                 )
+            _set_min_is_white(tmp)
             os.chmod(tmp, 0o644)
             tmp.replace(tiff_path)
         except BaseException:
