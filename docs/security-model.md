@@ -190,6 +190,18 @@ master_key が DB と一致しない場合（`secrets.json` を失った、別�
 
 ---
 
+## FAX 送信の PDF 変換（#141）
+
+管理画面からアップロードされた PDF（信頼できない入力）は、core と同じコンテナ・**同じ権限（現状 root）** で動く
+子プロセス（`python -I -m millicall.fax.convert`）が PDFium で TIFF に変換します。子プロセスには次の制限を掛けています。
+
+- 120 秒の壁時計タイムアウト（超過で kill）と RLIMIT_CPU、RLIMIT_DATA 1 GB（Linux）
+- 環境変数は `PATH`・`LANG`・`LC_ALL`・`TZ` のみ（`HOME=/nonexistent`）。core の秘密情報を含む環境変数は渡さない
+- 入力は `data/fax/out/<id>.pdf`（0600）、出力は親が決めた作業ファイル名。失敗時は親が削除する
+
+権限そのものは core と同じなので、PDFium の脆弱性を突かれた場合の被害範囲は core と同等です
+（seccomp・別ユーザー・別コンテナへの分離は今後の課題）。
+
 ## Docker socket-proxy
 
 `ghcr.io/tecnativa/docker-socket-proxy` が `docker.sock` を `/ro` でマウントし、以下の API のみを core に公開します。
