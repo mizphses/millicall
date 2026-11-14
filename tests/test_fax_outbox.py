@@ -675,7 +675,14 @@ async def test_api_send_list_get_cancel_retry(auth_client, api_ready):
 async def test_api_validation(auth_client, api_ready, monkeypatch):
     post = auth_client.post
     # 国際番号（010 / 00x）は国内番号の形式でも拒否する
-    for number in ("010441234567", "01068212345", "00168212345", "0033123456"):
+    for number in (
+        "010441234567",
+        "01068212345",
+        "00168212345",
+        "0033123456",
+        "０９０１２３４５６７８",  # 全角数字は ASCII 限定の検証で拒否する
+        "09０１２３４５６７８",
+    ):
         r = await post("/api/faxes/outbox", files=_upload(), data={"to_number": number})
         assert r.status_code == 422, number
     r = await post("/api/faxes/outbox", files=_upload(b"PK\x03\x04"), data={"to_number": "0312345678"})
@@ -848,6 +855,10 @@ async def test_upload_slot_limits_concurrency(app, outbox):
         ("0033123456", False),
         ("1840312345678", False),
         ("031234567", False),
+        ("０９０１２３４５６７８", False),  # 全角数字
+        ("09０１２３４５６７８", False),  # 先頭 2 桁だけ ASCII（\d なら通ってしまう）
+        ("031٢٣٤٥٦٧٨", False),  # アラビア・インド数字
+        ("0312345678\n", False),
     ],
 )
 def test_domestic_number_policy(number, ok):

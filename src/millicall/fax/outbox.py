@@ -68,9 +68,10 @@ FINAL_STATUSES = (STATUS_SENT, STATUS_FAILED, STATUS_CANCELLED)
 
 # 宛先は国内の一般番号に限る（国際発信・特番・184/186 前置は不可）。
 # originate は dialplan の outbound_intl_block を通らないため、ここで国際番号を必ず拒否する。
-FAX_TO_NUMBER_RE = re.compile(r"^0[1-9]\d{8,9}$")
+# \d は全角・アラビア数字などの Unicode 数字にも一致するため [0-9] と \Z で ASCII に限定する。
+FAX_TO_NUMBER_RE = re.compile(r"^0[1-9][0-9]{8,9}\Z")
 # 国際番号（mcp_server/outbound.py の _INTL_RE・dialplan の outbound_intl_block と同じ分類）。
-_INTL_RE = re.compile(r"^(010\d+|00[1-9]\d+)$")
+_INTL_RE = re.compile(r"^(010[0-9]+|00[1-9][0-9]+)\Z")
 # originate に補間する値の形式（多層防御。fsconfig の _SAFE_TRUNK_NAME_RE と同じ）。
 _TRUNK_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
 _CALLER_ID_RE = re.compile(r"^\+?[0-9]{1,30}$")
