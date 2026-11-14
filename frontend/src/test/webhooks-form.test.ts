@@ -12,9 +12,13 @@ import {
   deliveryStatus,
   emptyWebhookForm,
   formFromWebhook,
+  WEBHOOK_FORMAT_OPTIONS,
+  isChatFormat,
   toggleEvent,
   validateWebhookForm,
   webhookEventLabel,
+  webhookFormatLabel,
+  webhookFormatOption,
   willSendUnsigned,
   type WebhookRead,
 } from "../pages/webhooks/formPayload";
@@ -23,6 +27,7 @@ const original: WebhookRead = {
   id: 1,
   name: "CRM",
   url: "https://crm.example.com/hook",
+  format: "generic",
   events: ["fax.received", "call.inbound"],
   enabled: true,
   has_secret: true,
@@ -98,11 +103,81 @@ describe("webhook フォーム状態", () => {
 
 describe("署名なし送信の警告", () => {
   it("新規でシークレット空、または削除指定なら警告する", () => {
-    expect(willSendUnsigned({ secret: "", clear_secret: false }, null)).toBe(true);
-    expect(willSendUnsigned({ secret: "k", clear_secret: false }, null)).toBe(false);
-    expect(willSendUnsigned({ secret: "", clear_secret: false }, { has_secret: true })).toBe(false);
-    expect(willSendUnsigned({ secret: "", clear_secret: true }, { has_secret: true })).toBe(true);
-    expect(willSendUnsigned({ secret: "", clear_secret: false }, { has_secret: false })).toBe(true);
+    const g = "generic" as const;
+    expect(willSendUnsigned({ format: g, secret: "", clear_secret: false }, null)).toBe(true);
+    expect(willSendUnsigned({ format: g, secret: "k", clear_secret: false }, null)).toBe(false);
+    expect(
+      willSendUnsigned({ format: g, secret: "", clear_secret: false }, { has_secret: true }),
+    ).toBe(false);
+    expect(
+      willSendUnsigned({ format: g, secret: "", clear_secret: true }, { has_secret: true }),
+    ).toBe(true);
+    expect(
+      willSendUnsigned({ format: g, secret: "", clear_secret: false }, { has_secret: false }),
+    ).toBe(true);
+  });
+
+  it("チャット形式は署名を使わないので警告しない", () => {
+    expect(willSendUnsigned({ format: "discord", secret: "", clear_secret: false }, null)).toBe(
+      false,
+    );
+  });
+});
+
+describe("webhook の形式", () => {
+  it("選択肢と表示名", () => {
+    expect(WEBHOOK_FORMAT_OPTIONS.map((o) => o.value)).toEqual([
+      "generic",
+      "discord",
+      "slack",
+      "teams",
+    ]);
+    expect(webhookFormatLabel("teams")).toBe("Microsoft Teams");
+    expect(webhookFormatLabel("generic")).toBe("millicall JSON");
+    expect(isChatFormat("slack")).toBe(true);
+    expect(isChatFormat("generic")).toBe(false);
+    expect(isChatFormat("unknown")).toBe(false);
+  });
+
+  it("形式ごとに URL のプレースホルダを切り替える", () => {
+    expect(webhookFormatOption("discord").placeholder).toContain("https://discord.com/api/webhooks/");
+    expect(webhookFormatOption("slack").placeholder).toContain("https://hooks.slack.com/services/");
+    expect(webhookFormatOption("teams").placeholder).toContain("Power Automate");
+    // 未知の値は generic 扱い
+    expect(webhookFormatOption("x").value).toBe("generic");
+  });
+
+  it("新規は generic、編集は保存済みの形式で始まる", () => {
+    expect(emptyWebhookForm().format).toBe("generic");
+    expect(formFromWebhook({ ...original, format: "slack" }).format).toBe("slack");
+  });
+
+  it("作成 payload: 形式を含め、チャット形式ではシークレットを送らない", () => {
+    const base = { ...emptyWebhookForm(), name: "n", url: "https://hooks.slack.com/services/x" };
+    expect(buildCreatePayload({ ...base, format: "slack", secret: "left-over" })).toMatchObject({
+      format: "slack",
+      secret: "",
+    });
+    expect(buildCreatePayload({ ...base, secret: "k" })).toMatchObject({
+      format: "generic",
+      secret: "k",
+    });
+  });
+
+  it("更新 payload: 形式の変更を送り、チャット形式ではシークレットを触らない", () => {
+    const form = formFromWebhook(original);
+    expect(buildUpdatePayload({ ...form, format: "teams" }, original)).toEqual({ format: "teams" });
+    expect(
+      buildUpdatePayload({ ...form, format: "discord", secret: "x", clear_secret: true }, original),
+    ).toEqual({ format: "discord" });
+    const chat = { ...original, format: "discord" };
+    expect(buildUpdatePayload(formFromWebhook(chat), chat)).toEqual({});
+  });
+
+  it("チャット形式ではシークレットの長さを検証しない", () => {
+    const base = { ...emptyWebhookForm(), name: "x", url: "https://a.example/", secret: "k".repeat(300) };
+    expect(validateWebhookForm(base).secret).toBeTruthy();
+    expect(validateWebhookForm({ ...base, format: "discord" }).secret).toBeUndefined();
   });
 });
 

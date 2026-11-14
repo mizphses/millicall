@@ -16,6 +16,10 @@ import { useToast } from "../toast/ToastProvider";
 import { formatDateTime } from "./cdr/format";
 import {
   WEBHOOK_EVENT_OPTIONS,
+  WEBHOOK_FORMAT_OPTIONS,
+  isChatFormat,
+  webhookFormatLabel,
+  webhookFormatOption,
   buildCreatePayload,
   buildUpdatePayload,
   deliveryStatus,
@@ -26,6 +30,7 @@ import {
   webhookEventLabel,
   willSendUnsigned,
   type WebhookDeliveryRead,
+  type WebhookFormat,
   type WebhookFormValues,
   type WebhookRead,
   type WebhookTestResult,
@@ -146,6 +151,9 @@ export function WebhooksPage() {
     onError: (err) => toast.error(err instanceof Error ? err.message : "削除に失敗しました"),
   });
 
+  const formatOption = webhookFormatOption(form.format);
+  const chatFormat = isChatFormat(form.format);
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const errors = validateWebhookForm(form);
@@ -156,6 +164,16 @@ export function WebhooksPage() {
 
   const columns: Column<WebhookRead>[] = [
     { key: "name", header: "名前", width: "160px" },
+    {
+      key: "format",
+      header: "形式",
+      width: "130px",
+      render: (row) => (
+        <span className={badge({ tone: isChatFormat(row.format) ? "accent" : "neutral" })}>
+          {webhookFormatLabel(row.format)}
+        </span>
+      ),
+    },
     {
       key: "url",
       header: "URL",
@@ -182,7 +200,11 @@ export function WebhooksPage() {
       header: "署名",
       width: "80px",
       render: (row) =>
-        row.has_secret ? (
+        isChatFormat(row.format) ? (
+          <span title="チャット形式は署名しません" className={css({ color: "text.muted" })}>
+            —
+          </span>
+        ) : row.has_secret ? (
           <span className={badge({ tone: "success" })}>あり</span>
         ) : (
           <span className={badge({ tone: "warn" })}>なし</span>
@@ -275,7 +297,7 @@ export function WebhooksPage() {
   return (
     <PageLayout
       title="Webhook"
-      description="着信・通話終了・FAX 受信を外部システムへ HTTP POST で通知します。"
+      description="着信・通話終了・FAX 受信を外部システムや Discord / Slack / Teams へ HTTP POST で通知します。"
       actions={
         <button type="button" className={button({ variant: "primary" })} onClick={openCreate}>
           Webhook を追加
@@ -333,29 +355,49 @@ export function WebhooksPage() {
               autoFocus={editing === null}
             />
           </Field>
+          <Field label="形式" help={formatOption.hint}>
+            <select
+              className={input()}
+              value={form.format}
+              onChange={(e) => setForm((f) => ({ ...f, format: e.target.value as WebhookFormat }))}
+            >
+              {WEBHOOK_FORMAT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </Field>
           <Field required label="送信先 URL" error={fieldErrors.url}>
             <input
               className={input({ invalid: fieldErrors.url ? true : undefined })}
               value={form.url}
               onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
-              placeholder="https://example.com/millicall/webhook"
+              placeholder={formatOption.placeholder}
               inputMode="url"
             />
           </Field>
-          <Field
-            label={editing ? "署名シークレット（変更する場合のみ入力）" : "署名シークレット（推奨）"}
-            error={fieldErrors.secret}
-          >
-            <input
-              className={input({ invalid: fieldErrors.secret ? true : undefined })}
-              type="password"
-              autoComplete="new-password"
-              value={form.secret}
-              disabled={form.clear_secret}
-              onChange={(e) => setForm((f) => ({ ...f, secret: e.target.value }))}
-              placeholder={editing?.has_secret ? "設定済み（空欄なら変更しません）" : "受信側で署名検証に使う共有鍵"}
-            />
-          </Field>
+          {chatFormat ? (
+            <p role="note" className={css({ color: "text.muted", fontSize: "sm" })}>
+              {formatOption.label} 形式は各サービスの Webhook URL へ通知メッセージを送ります。署名（シークレット）は使いません。
+              URL を知っていれば誰でも投稿できるため、URL は他人に共有しないでください。
+            </p>
+          ) : (
+            <Field
+              label={editing ? "署名シークレット（変更する場合のみ入力）" : "署名シークレット（推奨）"}
+              error={fieldErrors.secret}
+            >
+              <input
+                className={input({ invalid: fieldErrors.secret ? true : undefined })}
+                type="password"
+                autoComplete="new-password"
+                value={form.secret}
+                disabled={form.clear_secret}
+                onChange={(e) => setForm((f) => ({ ...f, secret: e.target.value }))}
+                placeholder={editing?.has_secret ? "設定済み（空欄なら変更しません）" : "受信側で署名検証に使う共有鍵"}
+              />
+            </Field>
+          )}
           {willSendUnsigned(form, editing) && (
             <p
               role="note"
@@ -364,7 +406,7 @@ export function WebhooksPage() {
               シークレットが空のため署名なしで送信します。受信側で送信元を検証できないので、シークレットの設定を推奨します。
             </p>
           )}
-          {editing?.has_secret && (
+          {!chatFormat && editing?.has_secret && (
             <label className={checkboxRow}>
               <input
                 type="checkbox"

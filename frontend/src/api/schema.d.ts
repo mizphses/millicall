@@ -3258,6 +3258,12 @@ export interface components {
             enabled: boolean;
             /** Events */
             events?: ("call.inbound" | "call.ended" | "fax.received")[];
+            /**
+             * Format
+             * @default generic
+             * @enum {string}
+             */
+            format: "generic" | "discord" | "slack" | "teams";
             /** Name */
             name: string;
             /**
@@ -3301,6 +3307,8 @@ export interface components {
             enabled: boolean;
             /** Events */
             events: string[];
+            /** Format */
+            format: string;
             /** Has Secret */
             has_secret: boolean;
             /** Id */
@@ -3327,6 +3335,8 @@ export interface components {
             enabled?: boolean | null;
             /** Events */
             events?: ("call.inbound" | "call.ended" | "fax.received")[] | null;
+            /** Format */
+            format?: ("generic" | "discord" | "slack" | "teams") | null;
             /** Name */
             name?: string | null;
             /** Secret */
