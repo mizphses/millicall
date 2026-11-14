@@ -71,10 +71,13 @@ STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 FINAL_STATUSES = (STATUS_SENT, STATUS_FAILED, STATUS_CANCELLED)
 
-# 宛先は国内の一般番号に限る（国際発信・特番・184/186 前置は不可）。
+# 宛先は国内の一般番号に限る（国際発信・特番は不可）。先頭の 184/186（番号通知の制御。
+# issue #151）は剥がしてから判定し、ダイヤル文字列には付けたまま渡す。
 # originate は dialplan の outbound_intl_block を通らないため、ここで国際番号を必ず拒否する。
 # \d は全角・アラビア数字などの Unicode 数字にも一致するため [0-9] と \Z で ASCII に限定する。
 FAX_TO_NUMBER_RE = re.compile(r"^0[1-9][0-9]{8,9}\Z")
+# 先頭の番号通知の制御（184 = 非通知・186 = 通知）。剥がすのは 1 回だけ（184186… は不可）。
+_CALLER_ID_CONTROL_PREFIXES = ("184", "186")
 # 国際番号（mcp_server/outbound.py の _INTL_RE・dialplan の outbound_intl_block と同じ分類）。
 _INTL_RE = re.compile(r"^(010[0-9]+|00[1-9][0-9]+)\Z")
 # 実際にダイヤルする文字列（番号通知モードの 184/186 前置を含む）。
@@ -164,8 +167,15 @@ def _free_bytes(path: Path) -> int:
 
 
 def is_domestic_fax_number(number: str) -> bool:
-    """送信してよい宛先か（0 から始まる 10〜11 桁の国内番号。国際番号は不可）。"""
-    return bool(FAX_TO_NUMBER_RE.fullmatch(number)) and not _INTL_RE.match(number)
+    """送信してよい宛先か（0 から始まる 10〜11 桁の国内番号。国際番号は不可）。
+
+    先頭に 184/186（番号通知の制御）を 1 つ付けてもよい。判定は剥がした番号で行う
+    （186010…・18600… のような国際番号は拒否する）。
+    """
+    core = number
+    if number.startswith(_CALLER_ID_CONTROL_PREFIXES):
+        core = number[3:]
+    return bool(FAX_TO_NUMBER_RE.fullmatch(core)) and not _INTL_RE.match(core)
 
 
 def cause_label(cause: str) -> str:
@@ -186,7 +196,8 @@ def build_originate(
     """txfax 送信の originate コマンド文字列を組み立てる（補間する値はすべて形式検証する）。
 
     caller_id_mode はトランクの番号通知モード（issue #139）。notify / withhold なら宛先に
-    186 / 184 を前置する（dialplan・MCP 発信と同じ apply_caller_id_mode）。
+    186 / 184 を前置する（dialplan・MCP 発信と同じ apply_caller_id_mode）。宛先に既に
+    184/186 が付いていればそれを優先し、二重に付けない（issue #151）。
     """
     if not _UUID_RE.fullmatch(call_uuid):
         raise ValueError("invalid call uuid")
@@ -358,7 +369,8 @@ class FaxOutboxService:
         """
         if not is_domestic_fax_number(to_number):
             raise FaxSendError(
-                "宛先は 0 から始まる 10〜11 桁の国内番号で指定してください（国際番号には送信できません）"
+                "宛先は 0 から始まる 10〜11 桁の国内番号で指定してください"
+                "（先頭に 186/184 を付けても可。国際番号には送信できません）"
             )
         if not looks_like_pdf(data[:1024]):
             raise FaxSendError("PDF ファイルを指定してください", http_status=415)

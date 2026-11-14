@@ -215,6 +215,15 @@ describe("faxes/outbox", () => {
     expect(isDomesticFaxNumber("01068212345")).toBe(false);
     expect(isDomesticFaxNumber("00168212345")).toBe(false);
     expect(isDomesticFaxNumber("0120123456")).toBe(true);
+    // 先頭の 186/184（番号通知の制御）は剥がしてから判定する（issue #151）
+    expect(isDomesticFaxNumber("1860445895784")).toBe(true);
+    expect(isDomesticFaxNumber("1840312345678")).toBe(true);
+    expect(validateFaxSendForm({ toNumber: "186-0445-89-5784", trunkName: "", file: pdf })).toEqual({});
+    expect(isDomesticFaxNumber("186010441234567")).toBe(false);
+    expect(isDomesticFaxNumber("18600168212345")).toBe(false);
+    expect(isDomesticFaxNumber("1861860312345678")).toBe(false);
+    expect(isDomesticFaxNumber("１８６0445895784")).toBe(false);
+    expect(isDomesticFaxNumber("186０４４５８９５７８４")).toBe(false);
     const png = new File(["x"], "a.png", { type: "image/png" });
     expect(validateFaxSendForm({ toNumber: "0312345678", trunkName: "", file: png }).file).toBe(
       "PDF ファイルを選択してください",

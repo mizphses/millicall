@@ -178,7 +178,8 @@ def test_build_originate_string():
     [
         ("to_number", "0312345678,x=y"),
         ("to_number", "010123456789"),  # 国際
-        ("to_number", "1840312345678"),
+        ("to_number", "186010441234567"),  # 186 付きの国際
+        ("to_number", "1841860312345678"),  # 制御の重ね付け
         ("trunk_name", "a b"),
         ("caller_id", "03}{"),
         ("tiff_path", "/tmp/a b.tif"),
@@ -682,6 +683,8 @@ async def test_api_validation(auth_client, api_ready, monkeypatch):
         "0033123456",
         "０９０１２３４５６７８",  # 全角数字は ASCII 限定の検証で拒否する
         "09０１２３４５６７８",
+        "186010441234567",  # 186 を付けた国際番号
+        "18600168212345",
     ):
         r = await post("/api/faxes/outbox", files=_upload(), data={"to_number": number})
         assert r.status_code == 422, number
@@ -853,7 +856,19 @@ async def test_upload_slot_limits_concurrency(app, outbox):
         ("01068212345", False),  # 010 = 国際
         ("00168212345", False),  # 00x = 国際
         ("0033123456", False),
-        ("1840312345678", False),
+        # 184/186（番号通知の制御）は剥がしてから判定する（issue #151）
+        ("1860445895784", True),
+        ("1840312345678", True),
+        ("18609012345678", True),
+        ("186010441234567", False),  # 186 + 国際（010）
+        ("18600168212345", False),  # 186 + 国際（00x）
+        ("1840033123456", False),
+        ("1861860312345678", False),  # 重ね付け
+        ("1850312345678", False),
+        ("186031234567", False),  # 剥がすと 9 桁
+        ("１８６0445895784", False),  # 全角の 186
+        ("186０４４５８９５７８４", False),  # 186 の後が全角
+        ("186", False),
         ("031234567", False),
         ("０９０１２３４５６７８", False),  # 全角数字
         ("09０１２３４５６７８", False),  # 先頭 2 桁だけ ASCII（\d なら通ってしまう）
@@ -1029,6 +1044,47 @@ def test_build_originate_caller_id_mode():
     )
     assert "/t/1840312345678 " in build_originate(**kw, caller_id_mode="withhold")
     assert "/t/0312345678 " in build_originate(**kw, caller_id_mode="as_dialed")
+
+
+@pytest.mark.parametrize(
+    "to_number,mode,dial",
+    [
+        # 宛先に付いた 184/186 を優先し、番号通知モードの前置を二重にしない（issue #151）
+        ("1860445895784", "notify", "1860445895784"),
+        ("1860445895784", "withhold", "1860445895784"),
+        ("1840445895784", "notify", "1840445895784"),
+        ("1860445895784", "as_dialed", "1860445895784"),
+        ("0445895784", "notify", "1860445895784"),
+    ],
+)
+def test_build_originate_keeps_caller_id_control_in_number(to_number, mode, dial):
+    kw = dict(
+        call_uuid="abcdefgh-1", trunk_name="t", to_number=to_number, caller_id="",
+        tiff_path="/x/1.tif", job_id=1,
+    )
+    assert f"/t/{dial} &txfax(" in build_originate(**kw, caller_id_mode=mode)
+
+
+async def test_submit_accepts_186_and_does_not_double_prefix(app, outbox):
+    svc, esl, _disp, _clock = outbox
+    async with app.state.sessionmaker() as s:
+        t = await s.scalar(select(Trunk).where(Trunk.name == "Flets02"))
+        t.caller_id_mode = "notify"
+        await s.commit()
+    job = await _submit(
+        app, svc, data=_pdf_bytes(), to_number="1860445895784", trunk_name="Flets02",
+        user_id=None,
+    )
+    assert job.to_number == "1860445895784"
+    await svc.tick()
+    assert "sofia/gateway/Flets02/1860445895784 &txfax(" in esl.bgapi_calls[0]
+
+
+@pytest.mark.parametrize("number", ["186010441234567", "18600168212345", "１８６0445895784"])
+async def test_submit_rejects_prefixed_international_or_fullwidth(app, outbox, number):
+    svc, *_ = outbox
+    with pytest.raises(FaxSendError, match="国内番号"):
+        await svc.submit(data=_pdf_bytes(), to_number=number, trunk_name=None, user_id=None)
 
 
 async def test_api_send_trunks_marks_configured_default(auth_client, api_ready):

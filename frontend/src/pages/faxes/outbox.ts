@@ -6,12 +6,15 @@ export type FaxOutboxRead = components["schemas"]["FaxOutboxRead"];
 export const FAX_MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 /** 宛先番号の形式（国内番号のみ。バックエンドの is_domestic_fax_number と同じ）。 */
-const FAX_NUMBER_RE = /^0[1-9]\d{8,9}$/;
+const FAX_NUMBER_RE = /^0[1-9][0-9]{8,9}$/;
 /** 国際番号（010 / 00x）。国内番号と同じ桁数でも送信できない。 */
-const INTL_RE = /^(010\d+|00[1-9]\d+)$/;
+const INTL_RE = /^(010[0-9]+|00[1-9][0-9]+)$/;
+/** 先頭の番号通知の制御（184 = 非通知・186 = 通知）。剥がしてから判定する（issue #151）。 */
+const CALLER_ID_CONTROL_RE = /^18[46]/;
 
 export function isDomesticFaxNumber(number: string): boolean {
-  return FAX_NUMBER_RE.test(number) && !INTL_RE.test(number);
+  const core = number.replace(CALLER_ID_CONTROL_RE, "");
+  return FAX_NUMBER_RE.test(core) && !INTL_RE.test(core);
 }
 
 /** 入力された宛先番号からハイフン・空白を除く。 */
@@ -38,7 +41,7 @@ export function validateFaxSendForm(form: FaxSendFormValues): FaxSendErrors {
   const number = normalizeFaxNumber(form.toNumber);
   if (!number) errors.toNumber = "宛先の FAX 番号を入力してください";
   else if (!isDomesticFaxNumber(number))
-    errors.toNumber = "0 から始まる 10〜11 桁の国内番号を入力してください（国際番号は送信できません）";
+    errors.toNumber = "0 から始まる 10〜11 桁の国内番号を入力してください（186/184 を付けても可。国際番号は送信できません）";
   if (!form.file) errors.file = "送信する PDF を選択してください";
   else if (!isPdfFile(form.file)) errors.file = "PDF ファイルを選択してください";
   else if (form.file.size > FAX_MAX_UPLOAD_BYTES) errors.file = "PDF は 20 MB までです";
