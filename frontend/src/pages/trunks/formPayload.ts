@@ -38,6 +38,11 @@ export interface TrunkFormValues {
    * 数値文字列で保持し、payload 変換時に number へ写す。
    */
   options_ping_seconds: string;
+  /**
+   * REGISTER の更新間隔（秒）。60〜3600。NAT 内で着信が届かない場合は 60〜120 にする。
+   * 数値文字列で保持し、payload 変換時に number へ写す。
+   */
+  register_expire_seconds: string;
   /** 音声・FAX 併用回線の FAX 自動検知（CNG）。 */
   fax_detect_enabled: boolean;
   /** CNG 検知窓（秒）。数値文字列で保持（5〜120）。 */
@@ -72,6 +77,7 @@ export function emptyForm(): TrunkFormValues {
     trunk_type: "hgw",
     inbound_cidrs: "",
     options_ping_seconds: "30",
+    register_expire_seconds: "3600",
     fax_detect_enabled: false,
     fax_detect_timeout_sec: "20",
     fax_route_number: "",
@@ -95,6 +101,7 @@ export function formFromTrunk(trunk: TrunkRead): TrunkFormValues {
     trunk_type: trunk.trunk_type,
     inbound_cidrs: trunk.inbound_cidrs.join("\n"),
     options_ping_seconds: String(trunk.options_ping_seconds),
+    register_expire_seconds: String(trunk.register_expire_seconds),
     fax_detect_enabled: trunk.fax_detect_enabled,
     fax_detect_timeout_sec: String(trunk.fax_detect_timeout_sec),
     fax_route_number: trunk.fax_route_number ?? "",
@@ -119,6 +126,7 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
     trunk_type: form.trunk_type,
     inbound_cidrs: parseCidrs(form.inbound_cidrs),
     options_ping_seconds: parseOptionsPing(form.options_ping_seconds),
+    register_expire_seconds: parseRegisterExpire(form.register_expire_seconds),
     fax_detect_enabled: form.fax_detect_enabled,
     fax_detect_timeout_sec: Number(form.fax_detect_timeout_sec.trim()),
     // 自動検知が無効なら切替先は送らない（未設定）。
@@ -126,6 +134,13 @@ export function buildCreatePayload(form: TrunkFormValues): TrunkCreate {
     fax_detect_announce: form.fax_detect_enabled ? form.fax_detect_announce : false,
     enabled: form.enabled,
   };
+}
+
+/** 登録更新間隔の文字列を number に変換する。空 = 既定 3600。 */
+function parseRegisterExpire(raw: string): number {
+  const trimmed = raw.trim();
+  if (trimmed === "") return 3600;
+  return Number(trimmed);
 }
 
 /** OPTIONS キープアライブ間隔の文字列を number に変換する。空 = 既定 30。 */
@@ -214,6 +229,11 @@ export function buildUpdatePayload(
   const optionsPing = parseOptionsPing(form.options_ping_seconds);
   if (optionsPing !== original.options_ping_seconds) {
     payload.options_ping_seconds = optionsPing;
+  }
+
+  const registerExpire = parseRegisterExpire(form.register_expire_seconds);
+  if (registerExpire !== original.register_expire_seconds) {
+    payload.register_expire_seconds = registerExpire;
   }
 
   if (form.fax_detect_enabled !== original.fax_detect_enabled) {
@@ -306,6 +326,15 @@ export function validateForm(
     const n = Number(optionsPing);
     if (!Number.isInteger(n) || n < 0 || n > 3600) {
       errors.options_ping_seconds = "OPTIONS キープアライブ間隔は 0〜3600 の整数で入力してください";
+    }
+  }
+
+  // 登録更新間隔: 空は許可（既定 3600）。入力があれば 60〜3600 の整数。
+  const registerExpire = form.register_expire_seconds.trim();
+  if (registerExpire !== "") {
+    const n = Number(registerExpire);
+    if (!Number.isInteger(n) || n < 60 || n > 3600) {
+      errors.register_expire_seconds = "登録更新間隔は 60〜3600 の整数で入力してください";
     }
   }
 

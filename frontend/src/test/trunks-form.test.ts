@@ -21,6 +21,7 @@ const original: TrunkRead = {
   trunk_type: "hgw",
   inbound_cidrs: [],
   options_ping_seconds: 30,
+  register_expire_seconds: 3600,
   fax_detect_enabled: false,
   fax_detect_timeout_sec: 20,
   fax_route_number: null,
@@ -43,6 +44,7 @@ function formOf(overrides: Partial<TrunkFormValues>): TrunkFormValues {
     trunk_type: "hgw",
     inbound_cidrs: "",
     options_ping_seconds: "30",
+    register_expire_seconds: "3600",
     fax_detect_enabled: false,
     fax_detect_timeout_sec: "20",
     fax_route_number: "",
@@ -90,6 +92,12 @@ describe("buildCreatePayload", () => {
     );
     expect(payload.trunk_type).toBe("sip");
     expect(payload.inbound_cidrs).toEqual(["203.0.113.0/24", "198.51.100.7", "192.0.2.0/24"]);
+  });
+
+  it("register_expire_seconds: 既定 3600、指定値を送る、空は 3600", () => {
+    expect(buildCreatePayload(formOf({ password: "x" })).register_expire_seconds).toBe(3600);
+    expect(buildCreatePayload(formOf({ register_expire_seconds: "60", password: "x" })).register_expire_seconds).toBe(60);
+    expect(buildCreatePayload(formOf({ register_expire_seconds: "", password: "x" })).register_expire_seconds).toBe(3600);
   });
 
   it("options_ping_seconds: 既定 30、0 も送る、空は 30", () => {
@@ -207,6 +215,11 @@ describe("buildUpdatePayload（編集フォーム → PATCH payload 変換）", 
     expect(unchanged.inbound_cidrs).toBeUndefined();
   });
 
+  it("register_expire_seconds を変更したら含める / unchanged なら含めない", () => {
+    expect(buildUpdatePayload(formOf({ register_expire_seconds: "120" }), original).register_expire_seconds).toBe(120);
+    expect(buildUpdatePayload(formOf({ register_expire_seconds: "3600" }), original).register_expire_seconds).toBeUndefined();
+  });
+
   it("options_ping_seconds を 0 に変更したら含める / unchanged なら含めない", () => {
     expect(buildUpdatePayload(formOf({ options_ping_seconds: "0" }), original).options_ping_seconds).toBe(0);
     expect(buildUpdatePayload(formOf({ options_ping_seconds: "30" }), original).options_ping_seconds).toBeUndefined();
@@ -272,6 +285,18 @@ describe("validateForm（編集モード）", () => {
     expect(validateForm(formOf({ source_port: "70000" }), "edit").source_port).toBeTruthy();
     expect(validateForm(formOf({ source_port: "5082" }), "edit").source_port).toBeUndefined();
     expect(validateForm(formOf({ source_port: "" }), "edit").source_port).toBeUndefined();
+  });
+});
+
+describe("validateForm（登録更新間隔）", () => {
+  it("範囲外・非整数を弾き、60〜3600 と空は許可", () => {
+    expect(validateForm(formOf({ register_expire_seconds: "59" }), "edit").register_expire_seconds).toBeTruthy();
+    expect(validateForm(formOf({ register_expire_seconds: "0" }), "edit").register_expire_seconds).toBeTruthy();
+    expect(validateForm(formOf({ register_expire_seconds: "3601" }), "edit").register_expire_seconds).toBeTruthy();
+    expect(validateForm(formOf({ register_expire_seconds: "90.5" }), "edit").register_expire_seconds).toBeTruthy();
+    expect(validateForm(formOf({ register_expire_seconds: "60" }), "edit").register_expire_seconds).toBeUndefined();
+    expect(validateForm(formOf({ register_expire_seconds: "3600" }), "edit").register_expire_seconds).toBeUndefined();
+    expect(validateForm(formOf({ register_expire_seconds: "" }), "edit").register_expire_seconds).toBeUndefined();
   });
 });
 

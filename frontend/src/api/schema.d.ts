@@ -3073,6 +3073,11 @@ export interface components {
             options_ping_seconds: number;
             /** Password */
             password: string;
+            /**
+             * Register Expire Seconds
+             * @default 3600
+             */
+            register_expire_seconds: number;
             /** Source Port */
             source_port?: number | null;
             /**
@@ -3118,6 +3123,8 @@ export interface components {
             name: string;
             /** Options Ping Seconds */
             options_ping_seconds: number;
+            /** Register Expire Seconds */
+            register_expire_seconds: number;
             /** Source Port */
             source_port: number | null;
             /**
@@ -3170,6 +3177,8 @@ export interface components {
             options_ping_seconds?: number | null;
             /** Password */
             password?: string | null;
+            /** Register Expire Seconds */
+            register_expire_seconds?: number | null;
             /** Source Port */
             source_port?: number | null;
             /** Trunk Type */
