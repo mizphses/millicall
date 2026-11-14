@@ -1,8 +1,10 @@
-# FAX 受信
+# FAX 受信・送信
 
 millicall は FreeSWITCH の mod_spandsp（`rxfax`）で FAX を受信し、PDF に変換して保存します。
-受信した FAX は管理画面の **受信 FAX**（`/faxes`）で一覧・ダウンロード・削除できます。
+受信した FAX は管理画面の **FAX**（`/faxes`）の「受信」タブで一覧・ダウンロード・削除できます。
 受信完了は [Webhook](webhooks.md) の `fax.received` イベントでも通知できます。
+
+PDF をアップロードして外線トランク経由で FAX を **送信** することもできます（`txfax`。下記「[FAX 送信](#fax-送信)」）。
 
 ## 仕組み
 
@@ -87,8 +89,71 @@ media bug はチャネルに付くため、検知窓の間はワークフロー�
 3. 外線トランク `Flets02`（ユーザー名 `4`、DID `0445895784`）を編集し、
    - FAX 専用で試す場合: 着信先内線番号 = `300`
    - 電話と併用する場合: 着信先は従来の内線/ワークフローのまま、FAX 自動検知を有効化し切替先 `300`
-4. 外部の FAX 機から 0445895784 へ送信し、**受信 FAX** に PDF が出ることを確認します。
+4. 外部の FAX 機から 0445895784 へ送信し、**FAX** の「受信」タブに PDF が出ることを確認します。
    宛先欄にはトランクの DID（未設定ならユーザー名）が入ります。
+
+## FAX 送信
+
+管理画面の **FAX**（`/faxes`）→「送信」タブで、宛先番号・トランクを指定して PDF をアップロードすると送信キューに入り、
+順番に送信されます。送信ボックスで状態（送信待ち / 再試行待ち / 送信中 / 送信済み / 失敗 / 取消）・ページ数・
+試行回数・エラーを確認でき、失敗したジョブの **再送**、送信待ちジョブの **取消** ができます（一覧は自動更新）。
+結果は [Webhook](webhooks.md) の `fax.sent`（成功）・`fax.failed`（再試行しても送れなかった最終失敗）でも通知できます。
+
+### 仕組み
+
+```
+PDF アップロード ─▶ core: 別プロセスで PDFium（pypdfium2）がページをラスタライズ
+                        → 1bit・幅 1728 px・204×196 dpi（ファイン）の複数ページ TIFF（G4）
+                        data/fax/out/<id>.pdf / <id>.tif、fax_outbox テーブルに登録
+送信ワーカー ─ ESL ─▶ originate {origination_uuid=<uuid>,origination_caller_id_number=<トランクの発信者番号>,
+                        absolute_codec_string=PCMU,fax_enable_t38=false,fax_verbose=false,
+                        ignore_early_media=true,originate_timeout=60}
+                        sofia/gateway/<トランク>/<番号> &txfax(<data>/fax/out/<id>.tif)
+FreeSWITCH ─ CHANNEL_HANGUP_COMPLETE ─▶ core
+                        variable_fax_success / fax_result_text / fax_remote_station_id と hangup_cause を
+                        origination_uuid で対応付けて反映・Webhook
+```
+
+- トランクを指定しなければ **既定の発信トランク**（有効なトランクの名前順先頭。内線からの外線発信と同じ）を使います。
+  発信者番号はトランクの「表示番号」（未設定なら DID）です。
+- 宛先は **0 から始まる 10〜11 桁の国内番号** に限ります（国際番号・184/186 前置は送信できません）。
+- PDF → TIFF の変換は Ghostscript を使わず、core イメージ同梱の `pypdfium2`（PDFium）で行います。
+  信頼できない PDF を扱うため **別プロセス** で実行し、120 秒のタイムアウト（超過で kill）と
+  メモリ上限（1 GB、Linux の RLIMIT_DATA）を掛けています。横長のページは 90 度回転して送ります。
+- アップロードは PDF のマジックバイト（`%PDF-`）を確認し、保存ファイル名はサーバー採番（`<id>.pdf`）のみです。
+- 送信 API は **管理者** のみ利用できます。`MILLICALL_FAX_SEND_ALLOW_USERS=true` にすると一般ユーザーも送信でき、
+  その場合一般ユーザーが参照・操作できるのは自分が登録したジョブだけです。
+- 送信・再送・取消は監査ログに残ります（宛先番号・トランク・ページ数のみ。ファイル内容は記録しません）。
+
+| API | 内容 |
+|---|---|
+| `POST /api/faxes/outbox` | multipart（`file`=PDF, `to_number`, `trunk_name` 任意）→ 202 + ジョブ |
+| `GET /api/faxes/outbox` | 一覧（新しい順、`limit` / `offset`） |
+| `GET /api/faxes/outbox/{id}` | 詳細 |
+| `POST /api/faxes/outbox/{id}/retry` | 失敗・取消したジョブを再送（試行回数をリセット） |
+| `POST /api/faxes/outbox/{id}/cancel` | 送信待ち（再試行待ちを含む）のジョブを取消 |
+| `GET /api/faxes/outbox/{id}/pdf` | 元 PDF。`fax.sent` / `fax.failed` の `pdf_url` の署名付きトークン（24 時間有効）でも取得可 |
+
+### 制約・目安
+
+| 項目 | 内容 |
+|---|---|
+| 方式 | **G.711（PCMU）パススルーのみ**。NTT ひかり電話 HGW は T.38 非対応のため `fax_enable_t38=false` |
+| アップロード上限 | 20 MB（超過は 413）・100 ページ（超過は 422） |
+| 同時送信数 | 既定 1（`MILLICALL_FAX_SEND_CONCURRENCY`）。ひかり電話の同時通話数（通常 2ch）を FAX が占有するため、通話と FAX を合わせて上限を超えないよう設定してください |
+| 所要時間の目安 | 相手が 9600〜14400 bps で受ける場合、A4 文書 1 ページあたり 30 秒〜1 分程度（写真・細かい網掛けは長くなります）。応答待ちは最大 60 秒 |
+| 1 回の送信の上限 | `MILLICALL_FAX_MAX_DURATION_SEC`（既定 1800 秒）を超えると切断し、失敗として扱います |
+| 保持 | `MILLICALL_FAX_RETENTION_DAYS` が 1 以上なら、終了済み（送信済み・失敗・取消）の送信ジョブも PDF/TIFF ごと削除します |
+
+### 失敗時の再試行
+
+- 話中（`USER_BUSY`）・無応答（`NO_ANSWER` 等）・回線混雑・**送信中のエラー**（応答後に `txfax` が失敗した場合）は、
+  **1 分後・5 分後** に自動で再試行し、**最大 3 回** で打ち切って失敗（`fax.failed`）にします。
+- 「この番号は使われていません」（`UNALLOCATED_NUMBER`）・着信拒否など、再試行しても結果が変わらない理由は 1 回で失敗にします。
+- FreeSWITCH から結果イベントが届かない場合（発信自体ができなかった等）は、送信ワーカーが `uuid_exists` で通話の有無を確認し、
+  通話が無ければその試行を失敗として再試行します。
+- core を再起動したとき送信中だったジョブは、FreeSWITCH 側で通話が続いていればそのまま結果を待ち、
+  通話が無ければ **結果不明の失敗** にします（重複送信を避けるため自動では再送しません。必要なら再送してください）。
 
 ## 運用（compose の更新が必要）
 
@@ -102,6 +167,9 @@ FreeSWITCH と core が同じ絶対パスで TIFF を共有するため、freesw
 既存環境は `millicallctl update` で compose ファイルを更新してください（compose を更新せずにイメージだけ
 更新すると、FAX は受信できても core から TIFF が見えず PDF 化されません）。`data/fax` は core 起動時に作成されます。
 
+FAX 送信でも同じマウントを使います。送信用の TIFF は core が `data/fax/out/<id>.tif`（ディレクトリ 0755・ファイル 0644）に書き、
+FreeSWITCH の `txfax` が同じ絶対パスで読みます。
+
 ## トラブルシュート
 
 | 症状 | 確認 |
@@ -111,3 +179,7 @@ FreeSWITCH と core が同じ絶対パスで TIFF を共有するため、freesw
 | PDF が無い（成功なのに） | freeswitch に `./data/fax:/app/data/fax` がマウントされているか。core ログに「空き容量が不足」が出ていないか |
 | FAX 受信番号が効かない | core ログに「FAX 保存先パスに使用できない文字」が出ていないか（`data_dir` に空白・記号を含むと FAX extension を出力しません） |
 | 自動検知しない | トランクの切替先が有効な FAX 受信番号か。相手機が CNG を出しているか（自動送信のみ） |
+| 送信が「送信待ち」のまま | core ログに「FAX 送信ワーカー」のエラーが無いか。同時送信数（`MILLICALL_FAX_SEND_CONCURRENCY`）分の送信中ジョブが残っていないか |
+| 送信が `488` / `INCOMPATIBLE_DESTINATION` で失敗 | トランクが PCMU を受け付けるか（HGW は PCMU のみ） |
+| 送信が「送信エラー: ...」で失敗 | 結果欄の理由（spandsp の `fax_result_text`）。相手機の ECM 設定・回線品質。FreeSWITCH ログの `txfax` |
+| 送信で TIFF が見つからない | freeswitch に `./data/fax:/app/data/fax` がマウントされているか |
