@@ -331,6 +331,10 @@ class Webhook(Base):
     )
     # 購読イベント名の JSON 配列（例: ["call.inbound", "fax.received"]）。
     events: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    # 本文の形式（issue #130）: generic = millicall JSON（署名あり）/ discord / slack / teams。
+    format: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="generic", server_default="generic"
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )

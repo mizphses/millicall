@@ -6,6 +6,52 @@ export type WebhookUpdate = components["schemas"]["WebhookUpdate"];
 export type WebhookDeliveryRead = components["schemas"]["WebhookDeliveryRead"];
 export type WebhookTestResult = components["schemas"]["WebhookTestResult"];
 export type WebhookEvent = NonNullable<WebhookCreate["events"]>[number];
+export type WebhookFormat = NonNullable<WebhookCreate["format"]>;
+
+/** 本文の形式（select の表示順）。チャット形式は署名なしで各サービス向けの本文を送る。 */
+export const WEBHOOK_FORMAT_OPTIONS: {
+  value: WebhookFormat;
+  label: string;
+  placeholder: string;
+  hint: string;
+}[] = [
+  {
+    value: "generic",
+    label: "millicall JSON",
+    placeholder: "https://example.com/millicall/webhook",
+    hint: "自作の受信サーバー向け。イベントの JSON をそのまま送り、シークレットで署名します。",
+  },
+  {
+    value: "discord",
+    label: "Discord",
+    placeholder: "https://discord.com/api/webhooks/...",
+    hint: "チャンネルの設定 → 連携サービス → ウェブフック で作成した URL を貼り付けてください。",
+  },
+  {
+    value: "slack",
+    label: "Slack",
+    placeholder: "https://hooks.slack.com/services/...",
+    hint: "Slack アプリの Incoming Webhooks で作成した URL を貼り付けてください。",
+  },
+  {
+    value: "teams",
+    label: "Microsoft Teams",
+    placeholder: "Power Automate の Webhook URL",
+    hint: "Teams の「ワークフロー」で「Webhook 要求を受信したらチャネルに投稿する」を作成し、その URL を貼り付けてください。",
+  },
+];
+
+export function isChatFormat(format: string): boolean {
+  return format !== "generic" && WEBHOOK_FORMAT_OPTIONS.some((o) => o.value === format);
+}
+
+export function webhookFormatOption(format: string) {
+  return WEBHOOK_FORMAT_OPTIONS.find((o) => o.value === format) ?? WEBHOOK_FORMAT_OPTIONS[0];
+}
+
+export function webhookFormatLabel(format: string): string {
+  return WEBHOOK_FORMAT_OPTIONS.find((o) => o.value === format)?.label ?? format;
+}
 
 /** 購読可能なイベントと日本語ラベル（チェックボックスの表示順）。 */
 export const WEBHOOK_EVENT_OPTIONS: { value: WebhookEvent; label: string; help: string }[] = [
@@ -22,7 +68,8 @@ export function webhookEventLabel(event: string): string {
 export interface WebhookFormValues {
   name: string;
   url: string;
-  /** 書き込み専用。編集時は空 = 据え置き。 */
+  format: WebhookFormat;
+  /** 書き込み専用。編集時は空 = 据え置き。チャット形式では使わない。 */
   secret: string;
   /** 編集時のみ: 既存シークレットを削除して署名なしにする。 */
   clear_secret: boolean;
@@ -34,6 +81,7 @@ export function emptyWebhookForm(): WebhookFormValues {
   return {
     name: "",
     url: "",
+    format: "generic",
     secret: "",
     clear_secret: false,
     events: ["call.inbound", "call.ended", "fax.received"],
@@ -45,6 +93,7 @@ export function formFromWebhook(hook: WebhookRead): WebhookFormValues {
   return {
     name: hook.name,
     url: hook.url,
+    format: webhookFormatOption(hook.format).value,
     secret: "",
     clear_secret: false,
     events: WEBHOOK_EVENT_OPTIONS.map((o) => o.value).filter((e) => hook.events.includes(e)),
@@ -68,21 +117,29 @@ export function buildCreatePayload(form: WebhookFormValues): WebhookCreate {
   return {
     name: form.name.trim(),
     url: form.url.trim(),
-    secret: form.secret,
+    format: form.format,
+    // チャット形式はシークレット欄を出さないので、切り替え前の入力が残っていても送らない。
+    secret: isChatFormat(form.format) ? "" : form.secret,
     events: [...form.events],
     enabled: form.enabled,
   };
 }
 
-/** PATCH payload。変更のない項目は送らない。secret は空なら据え置き、削除指定なら "" を送る。 */
+/**
+ * PATCH payload。変更のない項目は送らない。secret は空なら据え置き、削除指定なら "" を送る。
+ * チャット形式では secret を送らない（保存済みのシークレットは据え置き、generic に戻すと再び使われる）。
+ */
 export function buildUpdatePayload(form: WebhookFormValues, original: WebhookRead): WebhookUpdate {
   const payload: WebhookUpdate = {};
   const name = form.name.trim();
   if (name !== original.name) payload.name = name;
   const url = form.url.trim();
   if (url !== original.url) payload.url = url;
-  if (form.clear_secret) payload.secret = "";
-  else if (form.secret !== "") payload.secret = form.secret;
+  if (form.format !== original.format) payload.format = form.format;
+  if (!isChatFormat(form.format)) {
+    if (form.clear_secret) payload.secret = "";
+    else if (form.secret !== "") payload.secret = form.secret;
+  }
   const before = [...original.events].sort().join(",");
   const after = [...form.events].sort().join(",");
   if (before !== after) payload.events = [...form.events];
@@ -108,16 +165,20 @@ export function validateWebhookForm(
   } else if (parsed.username || parsed.password) {
     errors.url = "URL に認証情報（user:pass@）を含めないでください";
   }
-  if (form.secret.length > 256) errors.secret = "シークレットは 256 文字以内で入力してください";
+  if (!isChatFormat(form.format) && form.secret.length > 256) errors.secret = "シークレットは 256 文字以内で入力してください";
   if (form.events.length === 0) errors.events = "通知するイベントを 1 つ以上選択してください";
   return errors;
 }
 
-/** 保存すると署名なしで送信される状態か（シークレット未設定の警告表示に使う）。 */
+/**
+ * 保存すると署名なしで送信される状態か（シークレット未設定の警告表示に使う）。
+ * チャット形式は常に署名なしだが仕様どおりなので警告しない（false）。
+ */
 export function willSendUnsigned(
-  form: Pick<WebhookFormValues, "secret" | "clear_secret">,
+  form: Pick<WebhookFormValues, "format" | "secret" | "clear_secret">,
   original: Pick<WebhookRead, "has_secret"> | null,
 ): boolean {
+  if (isChatFormat(form.format)) return false;
   if (form.clear_secret) return true;
   return form.secret === "" && !original?.has_secret;
 }

@@ -21,7 +21,14 @@ from millicall.webhooks.dispatcher import (
     compute_signature,
     event_to_webhook,
 )
-from millicall.webhooks.router import WebhookEvent
+from millicall.webhooks.formats import (
+    CHAT_FORMATS,
+    WEBHOOK_FORMATS,
+    build_chat_message,
+    describe_event,
+    format_duration,
+)
+from millicall.webhooks.router import WebhookEvent, WebhookFormat
 
 # --------------------------------------------------------------------------- 純関数
 
@@ -36,6 +43,10 @@ def test_compute_signature_known_value():
 
 def test_event_literal_matches_dispatcher_events():
     assert set(typing.get_args(WebhookEvent)) == set(WEBHOOK_EVENTS)
+
+
+def test_format_literal_matches_formats():
+    assert set(typing.get_args(WebhookFormat)) == set(WEBHOOK_FORMATS)
 
 
 def _channel_create(**kw) -> dict[str, str]:
@@ -136,13 +147,16 @@ def _box(app) -> SecretBox:
     return SecretBox(app.state.secrets.master_key)
 
 
-async def _add_hook(app, *, events, secret="", url="http://hooks.example/recv", enabled=True):
+async def _add_hook(
+    app, *, events, secret="", url="http://hooks.example/recv", enabled=True, format="generic"
+):
     async with app.state.sessionmaker() as s:
         hook = Webhook(
             name="h",
             url=url,
             secret_encrypted=_box(app).encrypt(secret) if secret else "",
             events=json.dumps(events),
+            format=format,
             enabled=enabled,
         )
         s.add(hook)
@@ -206,9 +220,7 @@ async def test_failed_delivery_is_retried_three_times_and_logged(app):
     # 再試行でも Delivery ID は同じ（受信側の冪等化に使える）
     assert len({r.headers[DELIVERY_HEADER] for r in rec.requests}) == 1
     async with app.state.sessionmaker() as s:
-        rows = (
-            await s.scalars(select(WebhookDelivery).order_by(WebhookDelivery.id))
-        ).all()
+        rows = (await s.scalars(select(WebhookDelivery).order_by(WebhookDelivery.id))).all()
     assert [r.attempt for r in rows] == [1, 2, 3]
     assert all(r.webhook_id == hook_id and not r.success and r.status_code == 500 for r in rows)
     assert rows[0].error == "HTTP 500"
@@ -403,3 +415,382 @@ async def test_4xx_is_not_retried_except_408_429(app, status, expected):
     await d.handle(_hangup("u-9", "u-9"))
     await d.drain()
     assert len(rec.requests) == expected
+
+
+# --------------------------------------------------------------------------- チャット形式（issue #130）
+
+_OCCURRED = "2026-11-14T01:02:03Z"
+_INBOUND = {
+    "call": {
+        "uuid": "u-1",
+        "trunk": "Flets01",
+        "from": "0701234567",
+        "caller_name": "TARO",
+        "to": "0445895782",
+    }
+}
+_ENDED = {
+    "call": {
+        "uuid": "u-1",
+        "direction": "inbound",
+        "trunk": "Flets01",
+        "from": "0701234567",
+        "caller_name": "",
+        "to": "0445895782",
+        "started_at": "2026-11-14T01:00:00Z",
+        "answered_at": "2026-11-14T01:00:05Z",
+        "ended_at": "2026-11-14T01:01:10Z",
+        "duration_seconds": 70,
+        "billsec_seconds": 65,
+        "hangup_cause": "NORMAL_CLEARING",
+    }
+}
+_PDF = "https://pbx.example.com/api/faxes/12/pdf?token=abc"
+_TEST = {"test": {"message": "millicall webhook test", "webhook_id": 7}}
+
+
+def _fax(pdf_url=_PDF, success=True):
+    return {
+        "fax": {
+            "id": 12,
+            "call_uuid": "u-2",
+            "from": "0312345678",
+            "to": "0445895784",
+            "remote_station_id": "",
+            "pages": 3,
+            "success": success,
+            "result_text": "OK" if success else "通信エラー",
+            "received_at": _OCCURRED,
+            "pdf_url": pdf_url,
+        }
+    }
+
+
+def test_chat_formats_exclude_generic():
+    assert set(CHAT_FORMATS) == set(WEBHOOK_FORMATS) - {"generic"}
+    with pytest.raises(ValueError):
+        build_chat_message("generic", "webhook.test", _TEST, _OCCURRED)
+
+
+def test_describe_event_skips_empty_values():
+    msg = describe_event("call.ended", _ENDED)
+    assert [f.name for f in msg.fields] == [
+        "種別",
+        "発信元",
+        "着信先",
+        "トランク",
+        "通話時間",
+        "切断理由",
+    ]
+    values = {f.name: f.value for f in msg.fields}
+    assert values["種別"] == "着信"
+    assert values["発信元"] == "0701234567"  # caller_name が空なら番号だけ
+    assert values["通話時間"] == "1分5秒"
+
+    unanswered = {"call": {**_ENDED["call"], "answered_at": None, "trunk": None}}
+    values = {f.name: f.value for f in describe_event("call.ended", unanswered).fields}
+    assert values["通話時間"] == "未応答"
+    assert "トランク" not in values
+    # 空の局 ID は項目にしない
+    assert "送信元局 ID" not in [f.name for f in describe_event("fax.received", _fax()).fields]
+
+
+def test_format_duration():
+    assert format_duration(5) == "5秒"
+    assert format_duration(65) == "1分5秒"
+    assert format_duration(3725) == "1時間2分5秒"
+    assert format_duration(None) is None
+
+
+def test_discord_body_structure():
+    body = build_chat_message("discord", "call.inbound", _INBOUND, _OCCURRED)
+    assert "0701234567（TARO）" in body["content"]
+    # 発信者名の @everyone 等でメンションしない
+    assert body["allowed_mentions"] == {"parse": []}
+    (embed,) = body["embeds"]
+    assert embed["title"] == "📞 着信"
+    assert embed["timestamp"] == _OCCURRED
+    assert isinstance(embed["color"], int)
+    # 外部由来の値はインラインコードで囲む
+    assert {f["name"]: f["value"] for f in embed["fields"]} == {
+        "発信元": "`0701234567（TARO）`",
+        "着信先": "`0445895782`",
+        "トランク": "`Flets01`",
+    }
+    assert all(set(f) == {"name", "value", "inline"} for f in embed["fields"])
+
+
+def test_discord_fax_pdf_link_present_only_with_url():
+    embed = build_chat_message("discord", "fax.received", _fax(), _OCCURRED)["embeds"][0]
+    assert embed["url"] == _PDF
+    values = {f["name"]: f["value"] for f in embed["fields"]}
+    assert _PDF in values["PDF"]
+    assert values["ページ数"] == "3 ページ"
+    assert values["結果"] == "成功"
+
+    body = build_chat_message("discord", "fax.received", _fax(None, False), _OCCURRED)
+    embed = body["embeds"][0]
+    assert "url" not in embed
+    values = {f["name"]: f["value"] for f in embed["fields"]}
+    assert "PDF" not in values
+    assert values["結果"] == "失敗（`通信エラー`）"
+
+
+def test_discord_truncates_long_values():
+    data = {"call": {**_INBOUND["call"], "caller_name": "あ" * 3000}}
+    body = build_chat_message("discord", "call.inbound", data, _OCCURRED)
+    assert len(body["content"]) <= 2000
+    assert all(len(f["value"]) <= 1024 for f in body["embeds"][0]["fields"])
+
+
+def test_slack_body_structure():
+    body = build_chat_message("slack", "call.ended", _ENDED, _OCCURRED)
+    assert body["text"].startswith("☎️ 通話終了")
+    blocks = body["blocks"]
+    assert blocks[0] == {
+        "type": "header",
+        "text": {"type": "plain_text", "text": "☎️ 通話終了", "emoji": True},
+    }
+    assert blocks[-1]["type"] == "context"
+    fields = next(b["fields"] for b in blocks if "fields" in b)
+    assert {"type": "mrkdwn", "text": "*通話時間*\n1分5秒"} in fields
+    assert {"type": "mrkdwn", "text": "*切断理由*\n`NORMAL_CLEARING`"} in fields
+    # 署名付き PDF URL などを Slack 側で展開させない
+    assert body["unfurl_links"] is False
+    assert body["unfurl_media"] is False
+
+
+def test_slack_fax_link_and_escaping():
+    body = build_chat_message("slack", "fax.received", _fax(), _OCCURRED)
+    assert any(b.get("text", {}).get("text") == f"<{_PDF}|PDF を開く>" for b in body["blocks"])
+    body = build_chat_message("slack", "fax.received", _fax(None), _OCCURRED)
+    assert _PDF not in json.dumps(body)
+
+    # 発信者名で <!channel> などを注入できない
+    data = {"call": {**_INBOUND["call"], "caller_name": "<!channel> & co"}}
+    dumped = json.dumps(build_chat_message("slack", "call.inbound", data, _OCCURRED))
+    assert "<!channel>" not in dumped
+    assert "&lt;!channel&gt; &amp; co" in dumped
+
+    data = {"call": {"from": "1" * 5000}}
+    assert len(build_chat_message("slack", "call.inbound", data, _OCCURRED)["text"]) <= 3000
+
+
+def test_teams_body_structure():
+    body = build_chat_message("teams", "fax.received", _fax(), _OCCURRED)
+    assert body["type"] == "message"
+    (att,) = body["attachments"]
+    assert att["contentType"] == "application/vnd.microsoft.card.adaptive"
+    assert att["contentUrl"] is None
+    card = att["content"]
+    assert card["$schema"] == "http://adaptivecards.io/schemas/adaptive-card.json"
+    assert card["type"] == "AdaptiveCard"
+    assert card["version"] == "1.4"
+    title = card["body"][0]
+    assert title["type"] == "TextBlock"
+    assert title["text"] == "📠 FAX 受信"
+    assert (title["weight"], title["size"]) == ("Bolder", "Medium")
+    facts = next(b["facts"] for b in card["body"] if b["type"] == "FactSet")
+    assert {"title": "ページ数", "value": "3 ページ"} in facts
+    assert card["actions"] == [{"type": "Action.OpenUrl", "title": "PDF を開く", "url": _PDF}]
+
+    body = build_chat_message("teams", "fax.received", _fax(None), _OCCURRED)
+    assert "actions" not in body["attachments"][0]["content"]
+
+
+_EVIL_NAME = "[x](https://evil.example) *bold* `tick` <!channel>"
+
+
+def _evil_inbound():
+    return {"call": {**_INBOUND["call"], "caller_name": _EVIL_NAME}}
+
+
+def test_discord_external_values_are_not_markdown():
+    body = build_chat_message("discord", "call.inbound", _evil_inbound(), _OCCURRED)
+    caller = body["embeds"][0]["fields"][0]["value"]
+    # 全体が 1 つのインラインコード（値中のバッククォートは置換）なのでリンク・装飾にならない
+    assert caller.startswith("`") and caller.endswith("`")
+    assert caller.count("`") == 2
+    assert "[x](https://evil.example) *bold* 'tick'" in caller
+    content = body["content"]
+    assert content.count("`") % 2 == 0
+    assert "`0701234567（[x](https://evil.example)" in content
+    # content に URL を出さない（Discord の自動埋め込み防止）。PDF は embed.url / 項目のリンクのみ
+    fax_body = build_chat_message("discord", "fax.received", _fax(), _OCCURRED)
+    assert "http" not in fax_body["content"]
+
+
+def test_slack_external_values_are_not_markdown():
+    body = build_chat_message("slack", "call.inbound", _evil_inbound(), _OCCURRED)
+    fields = next(b["fields"] for b in body["blocks"] if "fields" in b)
+    caller = fields[0]["text"].split("\n", 1)[1]
+    assert caller.startswith("`") and caller.endswith("`")
+    assert caller.count("`") == 2
+    assert "<" not in caller and ">" not in caller
+    assert "&lt;!channel&gt;" in caller
+    assert body["text"].count("`") % 2 == 0
+    assert "<!channel>" not in body["text"]
+
+
+def test_teams_external_values_are_escaped():
+    body = build_chat_message("teams", "call.inbound", _evil_inbound(), _OCCURRED)
+    card = body["attachments"][0]["content"]
+    facts = next(b["facts"] for b in card["body"] if b["type"] == "FactSet")
+    caller = facts[0]["value"]
+    for raw in ("[x]", "](https://", "*bold*", "`tick`"):
+        assert raw not in caller
+    assert "\\[x\\]\\(https:\u200b//evil.example\\) \\*bold\\* \\`tick\\` <!channel\\>" in caller
+    # . や : はエスケープしない（Teams は未知のエスケープを \ 付きのまま表示する）
+    assert "\\." not in caller and "\\:" not in caller
+
+
+def test_teams_bare_urls_are_not_autolinked():
+    data = {"call": {**_INBOUND["call"], "caller_name": "xhttps://evil.example xwww.evil.example"}}
+    body = build_chat_message("teams", "call.inbound", data, _OCCURRED)
+    card = body["attachments"][0]["content"]
+    caller = next(b["facts"] for b in card["body"] if b["type"] == "FactSet")[0]["value"]
+    assert "https://evil.example" not in caller and "www.evil.example" not in caller
+    assert "https:\u200b//evil.example" in caller and "www.\u200bevil.example" in caller
+    # リンクになるのはサーバー生成の pdf_url（Action.OpenUrl）だけ
+    assert "actions" not in card
+
+
+@pytest.mark.parametrize("fmt", CHAT_FORMATS)
+def test_external_result_text_is_escaped(fmt):
+    data = _fax(None, False)
+    data["fax"]["result_text"] = "[click](https://evil.example)"
+    body = build_chat_message(fmt, "fax.received", data, _OCCURRED)
+    dumped = json.dumps(body, ensure_ascii=False)
+    if fmt == "teams":
+        assert "[click](https://evil.example)" not in dumped
+    else:
+        assert "（`[click](https://evil.example)`）" in dumped
+
+
+@pytest.mark.parametrize("fmt", CHAT_FORMATS)
+def test_webhook_test_message_for_each_format(fmt):
+    body = build_chat_message(fmt, "webhook.test", _TEST, _OCCURRED)
+    assert "Webhook テスト" in json.dumps(body, ensure_ascii=False)
+
+
+_FORMAT_ROOT_KEYS = {
+    "discord": {"content", "embeds", "allowed_mentions"},
+    "slack": {"text", "blocks", "unfurl_links", "unfurl_media"},
+    "teams": {"type", "attachments"},
+}
+
+
+@pytest.mark.parametrize("fmt", CHAT_FORMATS)
+async def test_chat_format_delivery_is_unsigned(app, fmt):
+    # シークレットが保存されていてもチャット形式では署名しない
+    hook_id = await _add_hook(app, events=["call.inbound"], secret="topsecret", format=fmt)
+    # Discord は 204 No Content を返す
+    rec = _Recorder([204 if fmt == "discord" else 200])
+    d = _dispatcher(app, rec)
+    await d.handle(_channel_create())
+    await d.drain()
+
+    (req,) = rec.requests
+    assert SIGNATURE_HEADER not in req.headers
+    assert req.headers[EVENT_HEADER] == "call.inbound"
+    assert DELIVERY_HEADER in req.headers
+    assert req.headers["Content-Type"] == "application/json"
+    assert set(json.loads(req.content)) == _FORMAT_ROOT_KEYS[fmt]
+    async with app.state.sessionmaker() as s:
+        rows = (await s.scalars(select(WebhookDelivery))).all()
+    assert [(r.webhook_id, r.success) for r in rows] == [(hook_id, True)]
+
+
+async def test_chat_format_ignores_undecryptable_secret(app):
+    async with app.state.sessionmaker() as s:
+        s.add(
+            Webhook(
+                name="h",
+                url="http://hooks.example/recv",
+                secret_encrypted="broken-token",
+                events=json.dumps(["call.inbound"]),
+                format="slack",
+            )
+        )
+        await s.commit()
+    rec = _Recorder([200])
+    d = _dispatcher(app, rec)
+    await d.handle(_channel_create())
+    await d.drain()
+    assert len(rec.requests) == 1
+
+
+async def test_webhook_api_format_round_trip(auth_client, app):
+    r = await auth_client.post(
+        "/api/webhooks",
+        json={"name": "g", "url": "https://crm.example.com/hook", "events": ["fax.received"]},
+    )
+    assert r.status_code == 201
+    assert r.json()["format"] == "generic"
+
+    r = await auth_client.post(
+        "/api/webhooks",
+        json={
+            "name": "s",
+            "url": "https://hooks.slack.com/services/T/B/x",
+            "format": "slack",
+            "events": ["call.inbound"],
+        },
+    )
+    assert r.status_code == 201, r.text
+    hook_id = r.json()["id"]
+    assert r.json()["format"] == "slack"
+    assert (await auth_client.get(f"/api/webhooks/{hook_id}")).json()["format"] == "slack"
+
+    r = await auth_client.patch(f"/api/webhooks/{hook_id}", json={"format": "teams"})
+    assert r.status_code == 200
+    assert r.json()["format"] == "teams"
+    # format を送らない PATCH は据え置き
+    r = await auth_client.patch(f"/api/webhooks/{hook_id}", json={"name": "s2"})
+    assert r.json()["format"] == "teams"
+
+    async with app.state.sessionmaker() as s:
+        audits = (
+            await s.scalars(
+                select(AuditLog).where(AuditLog.target_id == str(hook_id)).order_by(AuditLog.id)
+            )
+        ).all()
+    details = [json.loads(a.detail) for a in audits]
+    assert details[0]["format"] == "slack"
+    assert details[1] == {"format": "teams"}
+
+
+@pytest.mark.parametrize("fmt", ["chatwork", "", "Discord"])
+async def test_webhook_rejects_unknown_format(auth_client, fmt):
+    r = await auth_client.post(
+        "/api/webhooks",
+        json={"name": "x", "url": "http://a.example/", "events": [], "format": fmt},
+    )
+    assert r.status_code == 422
+    r = await auth_client.post(
+        "/api/webhooks", json={"name": "x", "url": "http://a.example/", "events": []}
+    )
+    r = await auth_client.patch(f"/api/webhooks/{r.json()['id']}", json={"format": fmt})
+    assert r.status_code == 422
+
+
+async def test_test_endpoint_uses_chat_format(auth_client, recorder):
+    r = await auth_client.post(
+        "/api/webhooks",
+        json={
+            "name": "t",
+            "url": "http://hooks.example/recv",
+            "secret": "k",
+            "format": "discord",
+            "events": [],
+        },
+    )
+    assert r.json()["has_secret"] is True
+    hook_id = r.json()["id"]
+    r = await auth_client.post(f"/api/webhooks/{hook_id}/test")
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+    req = recorder.requests[0]
+    assert SIGNATURE_HEADER not in req.headers
+    assert req.headers[EVENT_HEADER] == "webhook.test"
+    assert json.loads(req.content)["embeds"][0]["title"] == "🔔 Webhook テスト"
