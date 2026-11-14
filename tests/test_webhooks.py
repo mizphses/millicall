@@ -645,9 +645,7 @@ def test_teams_external_values_are_escaped():
 
 
 def test_teams_bare_urls_are_not_autolinked():
-    data = {
-        "call": {**_INBOUND["call"], "caller_name": "see https://evil.example or www.evil.example"}
-    }
+    data = {"call": {**_INBOUND["call"], "caller_name": "xhttps://evil.example xwww.evil.example"}}
     body = build_chat_message("teams", "call.inbound", data, _OCCURRED)
     card = body["attachments"][0]["content"]
     caller = next(b["facts"] for b in card["body"] if b["type"] == "FactSet")[0]["value"]

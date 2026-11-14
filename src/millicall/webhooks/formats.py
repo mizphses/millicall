@@ -123,7 +123,9 @@ _TEAMS_MARKDOWN = re.compile(r"([\\*_\[\]()`~#>+-])")
 
 # むき出しの URL（https://… / www.…）は Teams が自動リンク化するので、スキームや www. の直後に
 # ゼロ幅スペースを挟んで URL として認識させない（表示は変わらない）。
-_TEAMS_AUTOLINK = re.compile(r"(?i)(\b(?:https?|ftp|mailto):|\bwww\.)")
+# 単語境界（\b）には頼らず、出現箇所すべてに挟む。ドメインだけ（evil.example）の自動リンク化は
+# リンク文字列が見た目どおりで偽装にならないので許容する。
+_TEAMS_AUTOLINK = re.compile(r"(?i)((?:https?|ftp|mailto):|www\.)")
 
 
 def teams_escape(text: str) -> str:
