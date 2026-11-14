@@ -220,9 +220,7 @@ async def test_failed_delivery_is_retried_three_times_and_logged(app):
     # 再試行でも Delivery ID は同じ（受信側の冪等化に使える）
     assert len({r.headers[DELIVERY_HEADER] for r in rec.requests}) == 1
     async with app.state.sessionmaker() as s:
-        rows = (
-            await s.scalars(select(WebhookDelivery).order_by(WebhookDelivery.id))
-        ).all()
+        rows = (await s.scalars(select(WebhookDelivery).order_by(WebhookDelivery.id))).all()
     assert [r.attempt for r in rows] == [1, 2, 3]
     assert all(r.webhook_id == hook_id and not r.success and r.status_code == 500 for r in rows)
     assert rows[0].error == "HTTP 500"
@@ -639,9 +637,11 @@ def test_teams_external_values_are_escaped():
     card = body["attachments"][0]["content"]
     facts = next(b["facts"] for b in card["body"] if b["type"] == "FactSet")
     caller = facts[0]["value"]
-    for raw in ("[x]", "(https://", "*bold*", "`tick`", "<!channel>"):
+    for raw in ("[x]", "](https://", "*bold*", "`tick`"):
         assert raw not in caller
-    assert r"\[x\]\(https\:\/\/evil\.example\) \*bold\* \`tick\` \<\!channel\>" in caller
+    assert r"\[x\]\(https://evil.example\) \*bold\* \`tick\` <!channel\>" in caller
+    # . や : はエスケープしない（Teams は未知のエスケープを \ 付きのまま表示する）
+    assert "\\." not in caller and "\\:" not in caller
     # リンクになるのはサーバー生成の pdf_url（Action.OpenUrl）だけ
     assert "actions" not in card
 

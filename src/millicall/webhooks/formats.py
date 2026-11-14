@@ -116,8 +116,9 @@ def slack_code(text: str) -> str:
     return f"`{slack_escape(_one_line(text.replace('`', "'")))}`"
 
 
-# CommonMark でバックスラッシュエスケープできる ASCII 記号すべて（: や . も含めて自動リンク化を防ぐ）。
-_TEAMS_MARKDOWN = re.compile(r"([!-/:-@\[-`{-~])")
+# Adaptive Card が解釈する Markdown は太字・斜体・リンク・箇条書きの小さな部分集合なので、
+# それに関わる記号だけをエスケープする（. や : まで \ を付けると Teams は \ を素のまま表示する）。
+_TEAMS_MARKDOWN = re.compile(r"([\\*_\[\]()`~#>+-])")
 
 
 def teams_escape(text: str) -> str:
