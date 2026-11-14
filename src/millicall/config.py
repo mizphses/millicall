@@ -52,8 +52,10 @@ class Settings(BaseSettings):
     rtp_ip: str = "auto"
     sip_bind_ip: str | None = None  # env MILLICALL_SIP_BIND_IP; overrides sip_ip/rtp_ip when set
     # SIP 種別トランク（インターネット越しの SIP プロバイダ）の ext-sip-ip/ext-rtp-ip に使う。
-    # env MILLICALL_SIP_EXTERNAL_IP。既定 "auto-nat" は NAT 内でも公開 IP でも機能する。
-    # 固定にしたい場合は "stun:stun.freeswitch.org" や明示グローバル IP を指定する。
+    # env MILLICALL_SIP_EXTERNAL_IP。既定 "auto-nat" は公開 IP 直付けや UPnP / NAT-PMP 対応
+    # ルータ配下で機能する。HGW が UPnP / NAT-PMP に対応していない NAT 内では外部 IP を
+    # 得られず Contact / SDP が私設アドレスのままになるため、"stun:stun.freeswitch.org"
+    # や明示グローバル IP を指定する（issue #132）。
     sip_external_ip: str = "auto-nat"
     outbound_international_allow: str = (
         ""  # env MILLICALL_OUTBOUND_INTERNATIONAL_ALLOW; comma-separated prefixes
