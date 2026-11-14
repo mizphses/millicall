@@ -351,3 +351,48 @@ async def test_options_ping_out_of_range_422(admin_client):
     for bad in (-1, 3601):
         resp = await admin_client.patch(f"/api/trunks/{tid}", json={"options_ping_seconds": bad})
         assert resp.status_code == 422, resp.text
+
+
+# --- register_expire_seconds（REGISTER 更新間隔, issue #132） ---
+
+
+async def test_create_trunk_defaults_register_expire_3600(admin_client):
+    resp = await admin_client.post("/api/trunks", json=_BASE)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["register_expire_seconds"] == 3600
+    got = await admin_client.get(f"/api/trunks/{resp.json()['id']}")
+    assert got.json()["register_expire_seconds"] == 3600
+
+
+async def test_create_and_patch_register_expire(admin_client, app):
+    created = await admin_client.post("/api/trunks", json={**_BASE, "register_expire_seconds": 120})
+    assert created.status_code == 201, created.text
+    assert created.json()["register_expire_seconds"] == 120
+    tid = created.json()["id"]
+    ext_path = app.state.settings.fs_config_dir / "sip_profiles" / "external_hgw.xml"
+    assert 'name="expire-seconds"     value="120"' in ext_path.read_text()
+
+    patched = await admin_client.patch(f"/api/trunks/{tid}", json={"register_expire_seconds": 60})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["register_expire_seconds"] == 60
+    got = await admin_client.get(f"/api/trunks/{tid}")
+    assert got.json()["register_expire_seconds"] == 60
+    # PATCH で FS 設定が再生成され、expire-seconds が反映されること
+    assert 'name="expire-seconds"     value="60"' in ext_path.read_text()
+
+    # 他フィールドだけの PATCH では値を保持する
+    kept = await admin_client.patch(f"/api/trunks/{tid}", json={"display_name": "B"})
+    assert kept.json()["register_expire_seconds"] == 60
+
+
+async def test_register_expire_out_of_range_422(admin_client):
+    for bad in (0, 59, 3601):
+        resp = await admin_client.post(
+            "/api/trunks", json={**_BASE, "register_expire_seconds": bad}
+        )
+        assert resp.status_code == 422, resp.text
+    created = await admin_client.post("/api/trunks", json=_BASE)
+    tid = created.json()["id"]
+    for bad in (59, 3601):
+        resp = await admin_client.patch(f"/api/trunks/{tid}", json={"register_expire_seconds": bad})
+        assert resp.status_code == 422, resp.text

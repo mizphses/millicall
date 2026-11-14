@@ -32,6 +32,7 @@ def _trunk(name: str, **kw) -> TrunkConfig:
         trunk_type=kw.get("trunk_type", "hgw"),
         inbound_cidrs=kw.get("inbound_cidrs", []),
         options_ping_seconds=kw.get("options_ping_seconds", 30),
+        register_expire_seconds=kw.get("register_expire_seconds", 3600),
     )
 
 
@@ -303,3 +304,24 @@ def test_gateway_ping_custom_value(tmp_path):
     w.write_all([], trunks=[_trunk("hgw", options_ping_seconds=60)])
     ext = (tmp_path / "sip_profiles" / "external_hgw.xml").read_text()
     assert _gateway_params(ext)["ping"] == "60"
+
+
+# --- REGISTER 更新間隔（gateway の expire-seconds param, issue #132） ---
+
+
+def test_gateway_expire_seconds_defaults_to_3600(tmp_path):
+    w = _writer(tmp_path)
+    w.write_all([], trunks=[_trunk("hgw")])
+    ext = (tmp_path / "sip_profiles" / "external_hgw.xml").read_text()
+    assert _gateway_params(ext)["expire-seconds"] == "3600"
+
+
+def test_gateway_expire_seconds_custom_value(tmp_path):
+    """NAT 内のインターネット SIP 向けに短くした値が gateway にそのまま入る。"""
+    w = _writer(tmp_path)
+    trunk = _trunk("brastel", trunk_type="sip", options_ping_seconds=0, register_expire_seconds=60)
+    w.write_all([], trunks=[trunk])
+    ext = (tmp_path / "sip_profiles" / "external_brastel.xml").read_text()
+    params = _gateway_params(ext)
+    assert params["expire-seconds"] == "60"
+    assert params["register"] == "true"

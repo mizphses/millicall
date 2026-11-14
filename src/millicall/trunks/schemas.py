@@ -28,6 +28,8 @@ class TrunkCreate(BaseModel):
     inbound_cidrs: list[str] = Field(default_factory=list)
     # OPTIONS キープアライブ間隔（秒）。0 = 無効（OPTIONS に応答しない事業者向け）。
     options_ping_seconds: int = Field(default=30, ge=0, le=3600)
+    # REGISTER の更新間隔（秒）。NAT 内で着信が届かない場合は 60〜120 にする。
+    register_expire_seconds: int = Field(default=3600, ge=60, le=3600)
     # FAX 自動検知（CNG）。有効時は fax_route_number（FAX 受信番号）が必須。
     fax_detect_enabled: bool = False
     fax_detect_timeout_sec: int = Field(default=20, ge=5, le=120)
@@ -57,6 +59,8 @@ class TrunkUpdate(BaseModel):
     inbound_cidrs: list[str] | None = None
     # None = 変更しない / 0 = OPTIONS キープアライブ無効。
     options_ping_seconds: int | None = Field(default=None, ge=0, le=3600)
+    # None = 変更しない。
+    register_expire_seconds: int | None = Field(default=None, ge=60, le=3600)
     fax_detect_enabled: bool | None = None
     fax_detect_timeout_sec: int | None = Field(default=None, ge=5, le=120)
     # 未指定 = 変更しない / null または "" = 未設定に戻す（model_fields_set で区別）。
@@ -83,6 +87,8 @@ class TrunkRead(BaseModel):
     inbound_cidrs: list[str]
     # OPTIONS キープアライブ間隔（秒）。0 = 無効。
     options_ping_seconds: int
+    # REGISTER の更新間隔（秒）。
+    register_expire_seconds: int
     fax_detect_enabled: bool
     fax_detect_timeout_sec: int
     fax_route_number: str | None
@@ -107,6 +113,7 @@ class TrunkRead(BaseModel):
             trunk_type=t.trunk_type,  # type: ignore[arg-type]
             inbound_cidrs=[c for c in t.inbound_cidrs.split(",") if c],
             options_ping_seconds=t.options_ping_seconds,
+            register_expire_seconds=t.register_expire_seconds,
             fax_detect_enabled=t.fax_detect_enabled,
             fax_detect_timeout_sec=t.fax_detect_timeout_sec,
             fax_route_number=t.fax_route_number,
