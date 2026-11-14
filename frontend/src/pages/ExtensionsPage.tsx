@@ -2,7 +2,8 @@ import { useObjectSelection } from "../hooks/useObjectSelection";
 import { Field } from "../components/Field";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Check, Copy, Eye, EyeOff, KeyRound, Pencil, Trash2 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Check, Copy, Eye, EyeOff, KeyRound, Pencil, Smartphone, Trash2 } from "lucide-react";
 
 import { css } from "styled-system/css";
 import { badge, button, input } from "styled-system/recipes";
@@ -10,7 +11,7 @@ import { badge, button, input } from "styled-system/recipes";
 import type { components } from "../api/schema";
 
 import { api } from "../api/client";
-import { EXTENSIONS_KEY } from "../queryKeys";
+import { DEVICES_KEY, EXTENSIONS_KEY } from "../queryKeys";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type Column } from "../components/DataTable";
 import { PageLayout } from "../components/PageLayout";
@@ -150,6 +151,8 @@ export function ExtensionsPage() {
     mutationFn: (id: number) => deleteExtension(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: EXTENSIONS_KEY });
+      // 紐づいていた端末は割当が解除されるため、デバイス一覧も取り直す
+      queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
       toast.success("内線を削除しました");
       setDeleteTarget(null);
     },
@@ -179,6 +182,12 @@ export function ExtensionsPage() {
   const columns: Column<ExtensionRead>[] = [
     { key: "number", header: "番号", width: "140px" },
     { key: "display_name", header: "表示名" },
+    {
+      key: "devices",
+      header: "端末",
+      width: "220px",
+      render: (row) => <ExtensionDevices devices={row.devices} />,
+    },
     {
       key: "enabled",
       header: "状態",
@@ -315,6 +324,31 @@ export function ExtensionsPage() {
 
           {editing ? (
             <>
+              <section aria-label="割り当てている端末">
+                <p
+                  className={css({
+                    fontSize: "sm",
+                    fontWeight: "500",
+                    color: "text.muted",
+                    mb: "1",
+                  })}
+                >
+                  端末
+                </p>
+                <div className={css({ display: "flex", flexDirection: "column", gap: "1" })}>
+                  <ExtensionDevices devices={editing.devices} detailed />
+                  <p className={css({ fontSize: "xs", color: "text.muted" })}>
+                    端末への割当・変更・解除は
+                    <Link
+                      to="/devices"
+                      className={css({ color: "accent.text", textDecoration: "underline" })}
+                    >
+                      デバイス
+                    </Link>
+                    の画面で行います。
+                  </p>
+                </div>
+              </section>
               <label
                 className={css({
                   display: "flex",
@@ -341,7 +375,11 @@ export function ExtensionsPage() {
         title="内線を削除"
         message={
           deleteTarget
-            ? `内線 ${deleteTarget.number}（${deleteTarget.display_name}）を削除します。この操作は取り消せません。`
+            ? `内線 ${deleteTarget.number}（${deleteTarget.display_name}）を削除します。${
+                deleteTarget.devices.length > 0
+                  ? `割り当てている端末（${deleteTarget.devices.map((d) => d.mac_address).join("、")}）は割当が解除され、設定を取得できなくなります。`
+                  : ""
+              }この操作は取り消せません。`
             : ""
         }
         confirmLabel="削除"
@@ -353,6 +391,56 @@ export function ExtensionsPage() {
 
       <CredentialsPanel target={credentialsTarget} onClose={() => setCredentialsTarget(null)} />
     </PageLayout>
+  );
+}
+
+/**
+ * 内線に紐づく端末（電話機）の表示（issue #149）。MAC / モデルを出し、/devices へリンクする。
+ * detailed のときは IP と最終確認も出す（編集パネル用）。
+ */
+function ExtensionDevices({
+  devices,
+  detailed = false,
+}: {
+  devices: ExtensionRead["devices"];
+  detailed?: boolean;
+}) {
+  if (devices.length === 0) {
+    return <span className={css({ color: "text.subtle", fontSize: "sm" })}>未割当</span>;
+  }
+  return (
+    <div className={css({ display: "flex", flexDirection: "column", gap: "1" })}>
+      {devices.map((d) => (
+        <div key={d.device_id} className={css({ fontSize: "sm" })}>
+          <Link
+            to="/devices"
+            aria-label={`端末 ${d.mac_address} をデバイスの画面で開く`}
+            className={css({
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "1",
+              color: "accent.text",
+              textDecoration: "underline",
+              fontFamily: "monospace",
+            })}
+          >
+            <Smartphone size={13} />
+            {d.mac_address}
+          </Link>
+          {d.model ? (
+            <span className={css({ color: "text.muted", ml: "1" })}>{d.model}</span>
+          ) : null}
+          {detailed ? (
+            <p className={css({ fontSize: "xs", color: "text.muted" })}>
+              IP {d.ip_address ?? "—"}
+              {d.last_seen
+                ? ` ・ 最終確認 ${new Date(d.last_seen).toLocaleString("ja-JP")}`
+                : ""}
+            </p>
+          ) : null}
+        </div>
+      ))}
+    </div>
   );
 }
 
