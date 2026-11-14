@@ -79,6 +79,7 @@ async def _build_outbound(state) -> OutboundCallService:
             for prefix in eff.outbound_international_allow.split(",")
             if prefix.strip()
         ],
+        default_outbound_trunk_id=eff.default_outbound_trunk_id,
     )
 
 
@@ -136,6 +137,7 @@ def register_tools(mcp: MCPServer) -> None:
 
         Args:
             phone_number: 発信先番号（外線は0始まり、内線は内線番号）。186/184 は先頭に前置。
+                発信プレフィクスを前置すると発信回線を選べる（例: "92" + "0312345678"）。
             purpose: 会話の目的を具体的に書く（例: "ラーメンを1杯注文する"）。
             key_points: 伝えるべき情報を改行区切りで書く。
             your_name: 名乗る名前（任意）。
@@ -189,6 +191,7 @@ def register_tools(mcp: MCPServer) -> None:
 
         Args:
             phone_number: 発信先番号（外線は0始まり、内線は内線番号 例 "800"）。
+                発信プレフィクスを前置すると発信回線を選べる（例: "92" + "0312345678"）。
             caller_id: 発信者番号（省略時トランク既定）。
             trunk: 使用するトランク（省略時自動選択）。
         """
@@ -378,11 +381,12 @@ def register_tools(mcp: MCPServer) -> None:
     # -- §8 transfer ----------------------------------------------------------
     @mcp.tool()
     async def transfer(channel_id: str, destination: str) -> str:
-        """通話を内線に転送します。
+        """通話を内線（または外線番号）に転送します。
 
         Args:
             channel_id: dial が返した channel_id。
-            destination: 転送先内線番号。
+            destination: 転送先内線番号。外線番号（0 始まり）や、発信プレフィクス付きの
+                外線番号（例: 92 + 0312345678）も指定できます。
         """
         state = get_app_state(mcp)
         try:
