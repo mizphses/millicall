@@ -30,7 +30,7 @@ from millicall.webhooks.formats import CHAT_FORMATS
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"], dependencies=[Depends(require_admin)])
 
 # WEBHOOK_EVENTS と同じ集合（tests/test_webhooks.py で一致を検証する）。
-WebhookEvent = Literal["call.inbound", "call.ended", "fax.received"]
+WebhookEvent = Literal["call.inbound", "call.ended", "fax.received", "fax.sent", "fax.failed"]
 # formats.WEBHOOK_FORMATS と同じ集合（tests/test_webhooks.py で一致を検証する）。
 WebhookFormat = Literal["generic", "discord", "slack", "teams"]
 

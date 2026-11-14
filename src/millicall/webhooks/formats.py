@@ -267,6 +267,33 @@ def describe_event(event_name: str, data: dict[str, Any], esc: Escaper = _plain)
             color=COLOR_FAX_OK if success else COLOR_FAX_NG,
         )
 
+    if event_name in ("fax.sent", "fax.failed"):
+        fax = _dict(data, "fax")
+        success = event_name == "fax.sent"
+        pages = _int(fax.get("pages"))
+        attempts = _int(fax.get("attempts"))
+        to = ext(fax.get("to"))
+        fields = []
+        _add(fields, "宛先", to)
+        _add(fields, "トランク", ext(fax.get("trunk")))
+        _add(fields, "相手局 ID", ext(fax.get("remote_station_id")))
+        _add(fields, "ページ数", f"{pages} ページ" if pages is not None else None)
+        _add(fields, "試行回数", f"{attempts} 回" if attempts is not None else None)
+        if not success:
+            _add(fields, "理由", ext(fax.get("error")) or ext(fax.get("result_text")))
+        pdf_url = _text(fax.get("pdf_url"))
+        title = "📠 FAX 送信完了" if success else "📠 FAX 送信失敗"
+        summary = title + (f": {to}" if to else "")
+        if pages is not None:
+            summary += f"（{pages} ページ）"
+        return ChatMessage(
+            title,
+            summary,
+            fields=fields,
+            link=ChatLink("送信した PDF を開く", pdf_url) if pdf_url else None,
+            color=COLOR_FAX_OK if success else COLOR_FAX_NG,
+        )
+
     if event_name == "webhook.test":
         test = _dict(data, "test")
         fields = []

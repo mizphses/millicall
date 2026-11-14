@@ -48,9 +48,17 @@ logger = logging.getLogger("millicall.webhooks")
 EVENT_CALL_INBOUND = "call.inbound"
 EVENT_CALL_ENDED = "call.ended"
 EVENT_FAX_RECEIVED = "fax.received"
+EVENT_FAX_SENT = "fax.sent"
+EVENT_FAX_FAILED = "fax.failed"
 EVENT_TEST = "webhook.test"
 # 購読可能なイベント（webhook.test は購読不要で /test からのみ送る）。
-WEBHOOK_EVENTS: tuple[str, ...] = (EVENT_CALL_INBOUND, EVENT_CALL_ENDED, EVENT_FAX_RECEIVED)
+WEBHOOK_EVENTS: tuple[str, ...] = (
+    EVENT_CALL_INBOUND,
+    EVENT_CALL_ENDED,
+    EVENT_FAX_RECEIVED,
+    EVENT_FAX_SENT,
+    EVENT_FAX_FAILED,
+)
 
 SIGNATURE_HEADER = "X-Millicall-Signature"
 EVENT_HEADER = "X-Millicall-Event"
