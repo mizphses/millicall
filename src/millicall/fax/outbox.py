@@ -46,6 +46,11 @@ from millicall.fax.convert import (
 )
 from millicall.fax.service import FAX_MAX_PAGES, FAX_MIN_FREE_BYTES, resolve_inside
 from millicall.models import FaxOutbox, Trunk
+from millicall.telephony.outbound_routes import (
+    apply_caller_id_mode,
+    outbound_candidates,
+    select_default_outbound_trunk,
+)
 from millicall.webhooks.dispatcher import EVENT_FAX_FAILED, EVENT_FAX_SENT, utc_iso
 
 if TYPE_CHECKING:
@@ -72,6 +77,8 @@ FINAL_STATUSES = (STATUS_SENT, STATUS_FAILED, STATUS_CANCELLED)
 FAX_TO_NUMBER_RE = re.compile(r"^0[1-9][0-9]{8,9}\Z")
 # 国際番号（mcp_server/outbound.py の _INTL_RE・dialplan の outbound_intl_block と同じ分類）。
 _INTL_RE = re.compile(r"^(010[0-9]+|00[1-9][0-9]+)\Z")
+# 実際にダイヤルする文字列（番号通知モードの 184/186 前置を含む）。
+_DIAL_RE = re.compile(r"^(?:184|186)?0[1-9][0-9]{8,9}\Z")
 # originate に補間する値の形式（多層防御。fsconfig の _SAFE_TRUNK_NAME_RE と同じ）。
 _TRUNK_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
 _CALLER_ID_RE = re.compile(r"^\+?[0-9]{1,30}$")
@@ -174,8 +181,13 @@ def build_originate(
     caller_id: str,
     tiff_path: str,
     job_id: int,
+    caller_id_mode: str = "as_dialed",
 ) -> str:
-    """txfax 送信の originate コマンド文字列を組み立てる（補間する値はすべて形式検証する）。"""
+    """txfax 送信の originate コマンド文字列を組み立てる（補間する値はすべて形式検証する）。
+
+    caller_id_mode はトランクの番号通知モード（issue #139）。notify / withhold なら宛先に
+    186 / 184 を前置する（dialplan・MCP 発信と同じ apply_caller_id_mode）。
+    """
     if not _UUID_RE.fullmatch(call_uuid):
         raise ValueError("invalid call uuid")
     if not _TRUNK_NAME_RE.fullmatch(trunk_name):
@@ -186,6 +198,9 @@ def build_originate(
         raise ValueError("invalid caller id")
     if not _SAFE_PATH_RE.fullmatch(tiff_path):
         raise ValueError("unsafe tiff path")
+    dial = apply_caller_id_mode(to_number, caller_id_mode)
+    if not _DIAL_RE.fullmatch(dial):
+        raise ValueError("invalid dial string")
     variables = [f"origination_uuid={call_uuid}"]
     if caller_id:
         variables += [
@@ -204,7 +219,7 @@ def build_originate(
         f"millicall_fax_outbox_id={int(job_id)}",
     ]
     return (
-        f"originate {{{','.join(variables)}}}sofia/gateway/{trunk_name}/{to_number} "
+        f"originate {{{','.join(variables)}}}sofia/gateway/{trunk_name}/{dial} "
         f"&txfax({tiff_path})"
     )
 
@@ -216,22 +231,31 @@ def _trunk_caller_id(trunk: Trunk) -> str:
     return ""
 
 
-async def resolve_send_trunk(session: AsyncSession, trunk_name: str | None) -> Trunk:
-    """送信に使うトランク。未指定なら既定の発信トランク（有効なトランクの名前順先頭）。"""
-    rows = list(
-        await session.scalars(
-            select(Trunk).where(Trunk.enabled.is_(True)).order_by(Trunk.name)
-        )
-    )
+async def send_trunk_candidates(session: AsyncSession) -> list[Trunk]:
+    """FAX 送信に使えるトランク（有効かつ発信に使うもの。名前順。issue #139 と同じ候補）。"""
+    rows = await session.scalars(select(Trunk).where(Trunk.enabled.is_(True)))
+    return outbound_candidates(rows)
+
+
+async def resolve_send_trunk(
+    session: AsyncSession, trunk_name: str | None, default_trunk_id: int | None = None
+) -> Trunk:
+    """送信に使うトランク。未指定なら既定の発信トランク。
+
+    既定は設定 default_outbound_trunk_id のトランク、無ければ発信に使うトランクの名前順先頭
+    （dialplan の outbound_external・MCP 発信と同じ select_default_outbound_trunk）。
+    """
+    rows = await send_trunk_candidates(session)
     if trunk_name:
         match = next((t for t in rows if t.name == trunk_name), None)
         if match is None:
             # 入力値はエラー文に含めない。
             raise FaxSendError("指定したトランクが見つからないか無効です")
         return match
-    if not rows:
+    selected = select_default_outbound_trunk(rows, default_trunk_id)
+    if selected is None:
         raise FaxSendError("送信に使える外線トランクがありません")
-    return rows[0]
+    return selected
 
 
 class FaxOutboxService:
@@ -252,6 +276,7 @@ class FaxOutboxService:
         clock: Callable[[], datetime] = _utcnow,
         free_bytes: Callable[[Path], int] = _free_bytes,
         converter: Callable[..., Awaitable[int]] = convert_pdf_to_tiff,
+        default_trunk_id: Callable[[], Awaitable[int | None]] | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._fax_dir = Path(fax_dir)
@@ -267,6 +292,8 @@ class FaxOutboxService:
         self._now = clock
         self._free_bytes = free_bytes
         self._convert = converter
+        # 既定の発信トランク（設定 default_outbound_trunk_id。管理画面で変更できるため都度引く）。
+        self._default_trunk_id = default_trunk_id
         self._convert_sem = asyncio.Semaphore(_CONVERT_CONCURRENCY)
         # 送信中の call_uuid → ジョブ id（CHANNEL_HANGUP_COMPLETE の対応付け用）。
         self._inflight: dict[str, int] = {}
@@ -292,6 +319,15 @@ class FaxOutboxService:
             return None
 
     # ------------------------------------------------------------------ 登録
+
+    async def default_trunk_id(self) -> int | None:
+        if self._default_trunk_id is None:
+            return None
+        try:
+            return await self._default_trunk_id()
+        except Exception:  # noqa: BLE001 — 設定を読めなければ名前順先頭にフォールバック
+            logger.warning("既定の発信トランクの設定を読めませんでした")
+            return None
 
     @contextlib.asynccontextmanager
     async def upload_slot(self):
@@ -326,8 +362,9 @@ class FaxOutboxService:
             )
         if not looks_like_pdf(data[:1024]):
             raise FaxSendError("PDF ファイルを指定してください", http_status=415)
+        default_id = await self.default_trunk_id()
         async with self._sessionmaker() as session:
-            trunk = await resolve_send_trunk(session, trunk_name)
+            trunk = await resolve_send_trunk(session, trunk_name, default_id)
             resolved_trunk = trunk.name
             pending = await session.scalar(
                 select(func.count())
@@ -646,7 +683,11 @@ class FaxOutboxService:
             if job is None or job.status != STATUS_QUEUED:
                 return
             trunk = await session.scalar(
-                select(Trunk).where(Trunk.name == job.trunk_name, Trunk.enabled.is_(True))
+                select(Trunk).where(
+                    Trunk.name == job.trunk_name,
+                    Trunk.enabled.is_(True),
+                    Trunk.outbound_enabled.is_(True),
+                )
             )
             tiff = self._safe(job.tiff_path)
             command = ""
@@ -663,6 +704,7 @@ class FaxOutboxService:
                         caller_id=_trunk_caller_id(trunk),
                         tiff_path=str(tiff),
                         job_id=job.id,
+                        caller_id_mode=trunk.caller_id_mode,
                     )
                 except ValueError as exc:
                     final_error = f"発信コマンドを組み立てられません: {exc}"

@@ -971,3 +971,79 @@ def test_child_env_drops_secrets(monkeypatch):
     env = convert_mod._child_env()
     assert "MILLICALL_MASTER_KEY" not in env
     assert env["PATH"] == "/usr/bin" and env["HOME"] == "/nonexistent"
+
+
+# --------------------------------------------------------------------------- 発信トランクの選び方（#139 と整合）
+
+
+async def test_default_trunk_follows_setting_and_outbound_flag(app, outbox):
+    svc, esl, _disp, _clock = outbox
+    async with app.state.sessionmaker() as s:
+        s.add(
+            Trunk(
+                name="Aaa-in", display_name="着信専用", host="h", username="9",
+                outbound_enabled=False,
+            )
+        )
+        await s.commit()
+        flets = await s.scalar(select(Trunk).where(Trunk.name == "Flets02"))
+        flets_id = flets.id
+    # 発信に使わないトランクは名前順先頭でも既定にならず、指定もできない
+    job = await _submit(
+        app, svc, data=_pdf_bytes(), to_number="0312345678", trunk_name=None, user_id=None
+    )
+    assert job.trunk_name == "Brastel"
+    with pytest.raises(FaxSendError, match="トランク"):
+        await svc.submit(
+            data=_pdf_bytes(), to_number="0312345678", trunk_name="Aaa-in", user_id=None
+        )
+
+    # 設定 default_outbound_trunk_id があればそれが既定
+    async def _default_id():
+        return flets_id
+
+    svc._default_trunk_id = _default_id
+    job = await _submit(
+        app, svc, data=_pdf_bytes(), to_number="0312345678", trunk_name=None, user_id=None
+    )
+    assert job.trunk_name == "Flets02"
+
+
+async def test_caller_id_mode_prefixes_dial_string(app, outbox):
+    svc, esl, _disp, _clock = outbox
+    async with app.state.sessionmaker() as s:
+        t = await s.scalar(select(Trunk).where(Trunk.name == "Flets02"))
+        t.caller_id_mode = "notify"
+        await s.commit()
+    await _submit(
+        app, svc, data=_pdf_bytes(), to_number="0312345678", trunk_name="Flets02", user_id=None
+    )
+    await svc.tick()
+    assert "sofia/gateway/Flets02/1860312345678 &txfax(" in esl.bgapi_calls[0]
+
+
+def test_build_originate_caller_id_mode():
+    kw = dict(
+        call_uuid="abcdefgh-1", trunk_name="t", to_number="0312345678", caller_id="",
+        tiff_path="/x/1.tif", job_id=1,
+    )
+    assert "/t/1840312345678 " in build_originate(**kw, caller_id_mode="withhold")
+    assert "/t/0312345678 " in build_originate(**kw, caller_id_mode="as_dialed")
+
+
+async def test_api_send_trunks_marks_configured_default(auth_client, api_ready):
+    app = api_ready
+    await _add_trunks(app, "Brastel")
+    async with app.state.sessionmaker() as s:
+        flets = await s.scalar(select(Trunk).where(Trunk.name == "Flets02"))
+        flets_id = flets.id
+
+    async def _default_id():
+        return flets_id
+
+    app.state.fax_outbox_service._default_trunk_id = _default_id
+    trunks = (await auth_client.get("/api/faxes/outbox/trunks")).json()
+    assert [(t["name"], t["is_default"]) for t in trunks] == [
+        ("Brastel", False),
+        ("Flets02", True),
+    ]

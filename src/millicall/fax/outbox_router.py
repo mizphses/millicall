@@ -37,10 +37,12 @@ from millicall.fax.outbox import (
     STATUS_QUEUED,
     FaxOutboxService,
     FaxSendError,
+    send_trunk_candidates,
     verify_outbox_pdf_token,
 )
 from millicall.fax.service import resolve_inside
-from millicall.models import FaxOutbox, Trunk, User
+from millicall.models import FaxOutbox, User
+from millicall.telephony.outbound_routes import select_default_outbound_trunk
 
 router = APIRouter(prefix="/api/faxes/outbox", tags=["faxes"])
 
@@ -306,17 +308,23 @@ async def list_outbox(
 @router.get("/trunks", response_model=list[FaxSendTrunk])
 async def list_send_trunks(
     session: AsyncSession = Depends(get_session),
+    service: FaxOutboxService = Depends(get_fax_outbox_service),
     _user: User = Depends(require_fax_sender),
 ) -> list[FaxSendTrunk]:
-    """送信フォームのトランク選択肢（/api/trunks は管理者専用のため、送信者向けに名前だけ返す）。"""
-    rows = list(
-        await session.scalars(select(Trunk).where(Trunk.enabled.is_(True)).order_by(Trunk.name))
-    )
+    """送信フォームのトランク選択肢（/api/trunks は管理者専用のため、送信者向けに名前だけ返す）。
+
+    発信に使うトランク（outbound_enabled）だけを返し、既定の発信トランクに is_default を付ける。
+    """
+    rows = await send_trunk_candidates(session)
+    default = select_default_outbound_trunk(rows, await service.default_trunk_id())
     return [
         FaxSendTrunk(
-            name=t.name, display_name=t.display_name, trunk_type=t.trunk_type, is_default=i == 0
+            name=t.name,
+            display_name=t.display_name,
+            trunk_type=t.trunk_type,
+            is_default=t is default,
         )
-        for i, t in enumerate(rows)
+        for t in rows
     ]
 
 

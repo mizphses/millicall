@@ -400,6 +400,10 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
             except ESLConnectionClosed:
                 return await (await _esl_reconnect()).api(command)
 
+    async def _fax_default_trunk_id() -> int | None:
+        # 既定の発信トランクは管理画面（DB）で変更できるため、送信のたびに実効設定から読む。
+        return (await app.state.settings_service.effective()).default_outbound_trunk_id
+
     fax_outbox_service = FaxOutboxService(
         app.state.sessionmaker,
         settings.fax_dir,
@@ -410,6 +414,7 @@ async def _core_lifespan(app: FastAPI, settings: Settings):
         secret_box=SecretBox(app.state.secrets.master_key),
         concurrency=settings.fax_send_concurrency,
         max_duration_seconds=settings.fax_max_duration_sec,
+        default_trunk_id=_fax_default_trunk_id,
     )
     app.state.fax_outbox_service = fax_outbox_service
     # 保持期間クリーンアップは受信・送信の両サービスが揃ってから開始する。
