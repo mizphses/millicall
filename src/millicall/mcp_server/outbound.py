@@ -41,6 +41,7 @@ from millicall.mcp_server.ephemeral import EphemeralAgentSpec, EphemeralAgentSto
 from millicall.media.service import AnswerRegistry, HangupRegistry, locked_bgapi
 from millicall.models import AiAgent, Provider
 from millicall.telephony.outbound_routes import (
+    apply_caller_id_mode,
     find_prefixed_trunk,
     select_default_outbound_trunk,
     strip_caller_id_control,
@@ -64,6 +65,14 @@ def _codec_vars_for(trunk_row: object) -> list[str]:
     if (getattr(trunk_row, "trunk_type", "hgw") or "hgw") == "hgw":
         return ["absolute_codec_string=PCMU"]
     return []
+
+
+def _with_caller_id_mode(number: str, trunk_row: object) -> str:
+    """トランクの番号通知モード（notify=186 / withhold=184）を宛先に反映する。
+
+    dialplan と同じ規則: 掛けた番号が既に 184/186 で始まるならそれを優先する（issue #139）。
+    """
+    return apply_caller_id_mode(number, getattr(trunk_row, "caller_id_mode", "as_dialed"))
 
 
 # C3 修正: 国際番号パターン（dialplan_default.xml.j2 の outbound_intl_block と同じ分類）。
@@ -366,7 +375,9 @@ class OutboundCallService:
             trunk_cid = getattr(match, "caller_id", "") or ""
             effective_cid = trunk_cid or caller_id  # trunk値が無い場合のみ caller-supplied を使う
             return (
-                f"sofia/gateway/{trunk}/{phone_number}", effective_cid, _codec_vars_for(match)
+                f"sofia/gateway/{trunk}/{_with_caller_id_mode(phone_number, match)}",
+                effective_cid,
+                _codec_vars_for(match),
             )
 
         # 発信プレフィクス付き（例: 92 0312345678）→ そのトランクからプレフィクスを
@@ -379,7 +390,7 @@ class OutboundCallService:
                 self._check_intl_policy(number)
                 trunk_cid = getattr(selected, "caller_id", "") or ""
                 return (
-                    f"sofia/gateway/{selected.name}/{number}",
+                    f"sofia/gateway/{selected.name}/{_with_caller_id_mode(number, selected)}",
                     trunk_cid or caller_id,
                     _codec_vars_for(selected),
                 )
@@ -397,7 +408,7 @@ class OutboundCallService:
             trunk_cid = getattr(selected, "caller_id", "") or ""
             effective_cid = trunk_cid or caller_id  # trunk値が無い場合のみ caller-supplied を使う
             return (
-                f"sofia/gateway/{selected.name}/{phone_number}",
+                f"sofia/gateway/{selected.name}/{_with_caller_id_mode(phone_number, selected)}",
                 effective_cid,
                 _codec_vars_for(selected),
             )

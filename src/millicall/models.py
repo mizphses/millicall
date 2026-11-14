@@ -216,6 +216,12 @@ class Trunk(Base):
     outbound_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )
+    # 番号通知（issue #139 追加要望）: as_dialed = 掛けたとおり / notify = 常に 186 を前置 /
+    # withhold = 常に 184 を前置。掛けた番号が既に 184/186 で始まるときはそちらを優先する。
+    # ひかり電話は既定非通知のため、通知したい回線は notify にする。
+    caller_id_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="as_dialed", server_default="as_dialed"
+    )
     # 音声・FAX 併用回線の FAX 自動検知（issue #121）。True のとき public.xml の着信で
     # transfer の前に spandsp_start_fax_detect を仕掛け、CNG（発呼側 FAX の 1100Hz）を
     # 検知したら fax_route_number（FAX 受信番号）へ切り替える。

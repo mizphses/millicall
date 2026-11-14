@@ -29,9 +29,11 @@ def test_migration_0032_existing_trunks_keep_outbound(tmp_path):
     assert "dial_prefix" not in _cols(con)
 
     upgrade(cfg, "0032")
-    row = con.execute("SELECT name, dial_prefix, outbound_enabled FROM trunks").fetchone()
+    row = con.execute(
+        "SELECT name, dial_prefix, outbound_enabled, caller_id_mode FROM trunks"
+    ).fetchone()
     con.close()
-    assert row == ("Flets01", "", 1)
+    assert row == ("Flets01", "", 1, "as_dialed")
 
 
 def test_migration_0032_downgrade_removes_columns(tmp_path):
@@ -41,5 +43,5 @@ def test_migration_0032_downgrade_removes_columns(tmp_path):
     con = sqlite3.connect(db_path)
     cols = _cols(con)
     con.close()
-    assert not {"dial_prefix", "outbound_enabled"} & cols
+    assert not {"dial_prefix", "outbound_enabled", "caller_id_mode"} & cols
     assert {"name", "register_expire_seconds"} <= cols

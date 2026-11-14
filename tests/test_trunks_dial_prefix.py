@@ -37,7 +37,7 @@ async def test_create_and_patch_dial_prefix(admin_client, app):
     patched = await admin_client.patch(f"/api/trunks/{tid}", json={"dial_prefix": "*2"})
     assert patched.status_code == 200, patched.text
     assert patched.json()["dial_prefix"] == "*2"
-    assert 'expression="^\\*2((?:18[46])?0\\d+)$"' in dialplan.read_text()
+    assert 'expression="^\\*2(18[46])?(0\\d+)$"' in dialplan.read_text()
 
     # 他フィールドだけの PATCH では値を保持する
     kept = await admin_client.patch(f"/api/trunks/{tid}", json={"display_name": "B"})
@@ -154,3 +154,41 @@ async def test_default_outbound_trunk_unknown_id_400(admin_client):
     assert "見つかりません" in res.json()["detail"]
     res = await admin_client.put("/api/settings", json={"values": {"default_outbound_trunk_id": 0}})
     assert res.status_code == 400
+
+
+# --- 番号通知モード（caller_id_mode） ------------------------------------------------
+
+
+async def test_caller_id_mode_default_create_patch(admin_client, app):
+    created = await _create(admin_client, "hgw", caller_id="0311111111")
+    assert created.status_code == 201, created.text
+    assert created.json()["caller_id_mode"] == "as_dialed"
+    tid = created.json()["id"]
+    dialplan = app.state.settings.fs_config_dir / "dialplan" / "default.xml"
+    assert "186${destination_number}" not in dialplan.read_text()
+
+    patched = await admin_client.patch(f"/api/trunks/{tid}", json={"caller_id_mode": "notify"})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["caller_id_mode"] == "notify"
+    text = dialplan.read_text()
+    assert "sofia/gateway/hgw/186${destination_number}" in text
+    assert 'name="outbound_external_dialed_cid"' in text
+
+    patched = await admin_client.patch(f"/api/trunks/{tid}", json={"caller_id_mode": "withhold"})
+    assert "sofia/gateway/hgw/184${destination_number}" in dialplan.read_text()
+    kept = await admin_client.patch(f"/api/trunks/{tid}", json={"display_name": "B"})
+    assert kept.json()["caller_id_mode"] == "withhold"
+
+
+async def test_caller_id_mode_with_prefix(admin_client, app):
+    resp = await _create(admin_client, "f2", dial_prefix="92", caller_id_mode="notify")
+    assert resp.status_code == 201, resp.text
+    text = (app.state.settings.fs_config_dir / "dialplan" / "default.xml").read_text()
+    assert "sofia/gateway/f2/186${destination_number:2}" in text
+
+
+async def test_caller_id_mode_invalid_422(admin_client):
+    assert (await _create(admin_client, "hgw", caller_id_mode="always")).status_code == 422
+    tid = (await _create(admin_client, "hgw")).json()["id"]
+    resp = await admin_client.patch(f"/api/trunks/{tid}", json={"caller_id_mode": "186"})
+    assert resp.status_code == 422

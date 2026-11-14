@@ -119,6 +119,8 @@ class TrunkConfig:
     dial_prefix: str = ""
     # 発信に使う。False のトランクは着信専用（既定の発信トランクにもならない）。
     outbound_enabled: bool = True
+    # 番号通知: as_dialed（掛けたとおり）/ notify（常に 186）/ withhold（常に 184）。
+    caller_id_mode: str = "as_dialed"
 
 
 def _safe_abs_path(path: Path | str) -> str | None:

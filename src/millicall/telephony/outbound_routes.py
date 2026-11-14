@@ -29,6 +29,24 @@ EXTERNAL_NUMBER_RE = re.compile(r"^(?:18[46])?0\d+$")
 _CALLER_ID_CONTROL_RE = re.compile(r"^18[46]")
 
 
+# 番号通知モード → 前置する特番（as_dialed は前置しない）。
+CALLER_ID_MODE_CONTROL = {"notify": "186", "withhold": "184"}
+
+
+def apply_caller_id_mode(number: str, mode: str) -> str:
+    """トランクの番号通知モードに応じて 186/184 を前置した番号を返す。
+
+    掛けた番号が既に 184/186 で始まるときはそれを優先し、二重に付けない。
+    外線番号（[184|186]0…）以外はそのまま返す。
+    """
+    control = CALLER_ID_MODE_CONTROL.get(mode, "")
+    if not control or not EXTERNAL_NUMBER_RE.fullmatch(number):
+        return number
+    if _CALLER_ID_CONTROL_RE.match(number):
+        return number
+    return control + number
+
+
 def strip_caller_id_control(number: str) -> str:
     """先頭の 184/186（発信者番号通知の制御）を除いた番号を返す。"""
     return _CALLER_ID_CONTROL_RE.sub("", number, count=1)

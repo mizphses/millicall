@@ -249,6 +249,7 @@ async def create_trunk(
         fax_detect_announce=body.fax_detect_announce,
         dial_prefix=body.dial_prefix,
         outbound_enabled=body.outbound_enabled,
+        caller_id_mode=body.caller_id_mode,
         enabled=body.enabled,
     )
     session.add(trunk)
@@ -347,6 +348,7 @@ async def update_trunk(
         "fax_detect_announce",
         "dial_prefix",
         "outbound_enabled",
+        "caller_id_mode",
         "enabled",
     ):
         val = getattr(body, fld)

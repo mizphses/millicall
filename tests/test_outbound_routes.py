@@ -8,6 +8,7 @@ from millicall.media.call_control import EslCallControl
 from millicall.media.service import AnswerRegistry
 from millicall.telephony import outbound_routes
 from millicall.telephony.outbound_routes import (
+    apply_caller_id_mode,
     dial_prefix_format_error,
     find_prefixed_trunk,
     is_external_destination,
@@ -25,6 +26,7 @@ class _T:
     outbound_enabled: bool = True
     trunk_type: str = "hgw"
     enabled: bool = True
+    caller_id_mode: str = "as_dialed"
 
 
 _TRUNKS = [
@@ -198,3 +200,40 @@ async def test_mcp_explicit_trunk_must_be_outbound_enabled():
     trunks = [_T("a", 1), _T("b", 2, outbound_enabled=False)]
     with pytest.raises(ValueError, match="outbound"):
         await _svc(trunks)._resolve_target_with_vars("0312345678", "", "b")
+
+
+@pytest.mark.parametrize(
+    ("number", "mode", "expected"),
+    [
+        ("0312345678", "as_dialed", "0312345678"),
+        ("0312345678", "notify", "1860312345678"),
+        ("0312345678", "withhold", "1840312345678"),
+        ("1840312345678", "notify", "1840312345678"),
+        ("1860312345678", "withhold", "1860312345678"),
+        ("1001", "notify", "1001"),
+    ],
+)
+def test_apply_caller_id_mode(number, mode, expected):
+    assert apply_caller_id_mode(number, mode) == expected
+
+
+@pytest.mark.asyncio
+async def test_mcp_caller_id_mode_applies_to_all_branches():
+    trunks = [
+        _T("Flets01", 1, "0445895782", caller_id_mode="notify"),
+        _T("Flets02", 2, "0445895784", dial_prefix="92", caller_id_mode="withhold"),
+    ]
+    svc = _svc(trunks)
+    dest, _, _ = await svc._resolve_target_with_vars("0312345678", "", "")
+    assert dest == "sofia/gateway/Flets01/1860312345678"
+    dest, _, _ = await svc._resolve_target_with_vars("1840312345678", "", "")
+    assert dest == "sofia/gateway/Flets01/1840312345678"
+    dest, _, _ = await svc._resolve_target_with_vars("920312345678", "", "")
+    assert dest == "sofia/gateway/Flets02/1840312345678"
+    dest, _, _ = await svc._resolve_target_with_vars("921860312345678", "", "")
+    assert dest == "sofia/gateway/Flets02/1860312345678"
+    dest, _, _ = await svc._resolve_target_with_vars("0312345678", "", "Flets02")
+    assert dest == "sofia/gateway/Flets02/1840312345678"
+    # 内線宛には影響しない
+    dest, _, _ = await svc._resolve_target_with_vars("1001", "", "")
+    assert dest == "user/1001@millicall.local"

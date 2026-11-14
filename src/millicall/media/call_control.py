@@ -156,7 +156,8 @@ class EslCallControl:
         # 外線番号（dialplan の outbound_external と同じ規則: [184|186]0… または
         # 任意トランクの発信プレフィクス + それ）。トランク着信チャネルを外線へ出す場合、
         # calling_permission が無いと dialplan で CALL_REJECTED になるため domestic を付与する。
-        # プレフィクス一覧は transfer のたびに DB から引く（issue #139）。
+        # プレフィクス一覧は transfer のたびに DB から引く（issue #139）。トランクの番号通知
+        # モード（186/184 の前置）は転送先の dialplan が同じ規則で適用する。
         if is_external_destination(dest, await load_active_dial_prefixes()):
             await self._bgapi(f"uuid_setvar {self._uuid} calling_permission domestic")
         await self._bgapi(f"uuid_transfer {self._uuid} {dest} XML default")

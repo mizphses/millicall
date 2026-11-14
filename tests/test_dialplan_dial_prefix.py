@@ -23,7 +23,7 @@ def _writer(tmp_path, allow=None, default_id=None):
     )
 
 
-def _trunk(name, tid, caller_id, *, prefix="", trunk_type="hgw", outbound=True):
+def _trunk(name, tid, caller_id, *, prefix="", trunk_type="hgw", outbound=True, mode="as_dialed"):
     return TrunkConfig(
         name=name,
         display_name=name,
@@ -35,6 +35,7 @@ def _trunk(name, tid, caller_id, *, prefix="", trunk_type="hgw", outbound=True):
         id=tid,
         dial_prefix=prefix,
         outbound_enabled=outbound,
+        caller_id_mode=mode,
     )
 
 
@@ -118,7 +119,7 @@ def test_prefix_with_186_passes_through_to_carrier(tmp_path):
 def test_star_prefix_is_regex_escaped_and_sip_has_no_codec(tmp_path):
     dp = _render(tmp_path, _trunks())
     ET.fromstring(dp)
-    assert 'expression="^\\*3((?:18[46])?0\\d+)$"' in dp
+    assert 'expression="^\\*3(18[46])?(0\\d+)$"' in dp
     r = _route(dp, "*305012345678")
     assert r["extension"] == "outbound_external_via_brastel"
     assert r["bridge"] == "sofia/gateway/brastel/05012345678"
@@ -201,3 +202,79 @@ def test_no_outbound_routes_when_all_trunks_inbound_only(tmp_path):
 def test_internal_extension_still_wins(tmp_path):
     dp = _render(tmp_path, _trunks())
     assert _route(dp, "1001")["extension"] == "internal_extensions"
+
+
+# --- 番号通知モード（caller_id_mode） ------------------------------------------------
+
+
+def _mode_trunks(mode):
+    return [
+        _trunk("Flets01", 1, "0445895782", mode=mode),
+        _trunk("Flets02", 2, "0445895784", prefix="92", mode=mode),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mode", "dest", "expected"),
+    [
+        # 掛けたとおり
+        ("as_dialed", "0312345678", "Flets01/0312345678"),
+        ("as_dialed", "1860312345678", "Flets01/1860312345678"),
+        ("as_dialed", "920312345678", "Flets02/0312345678"),
+        ("as_dialed", "921840312345678", "Flets02/1840312345678"),
+        # 常に通知: 186 を前置。既に 184/186 があればそれを優先
+        ("notify", "0312345678", "Flets01/1860312345678"),
+        ("notify", "920312345678", "Flets02/1860312345678"),
+        ("notify", "1840312345678", "Flets01/1840312345678"),
+        ("notify", "921860312345678", "Flets02/1860312345678"),
+        # 常に非通知: 184 を前置
+        ("withhold", "0312345678", "Flets01/1840312345678"),
+        ("withhold", "920312345678", "Flets02/1840312345678"),
+        ("withhold", "921860312345678", "Flets02/1860312345678"),
+    ],
+)
+def test_caller_id_mode_bridge_target(tmp_path, mode, dest, expected):
+    dp = _render(tmp_path, _mode_trunks(mode))
+    r = _route(dp, dest)
+    assert r["bridge"] == f"{{absolute_codec_string=PCMU}}sofia/gateway/{expected}"
+
+
+@pytest.mark.parametrize("mode", ["notify", "withhold"])
+@pytest.mark.parametrize("dest", ["0312345678", "1860312345678", "920312345678",
+                                  "921840312345678"])
+def test_caller_id_mode_keeps_permission_gate(tmp_path, mode, dest):
+    dp = _render(tmp_path, _mode_trunks(mode))
+    r = _route(dp, dest, permission="internal")
+    assert r["bridge"] is None
+    assert r["hangup"] == "CALL_REJECTED"
+
+
+@pytest.mark.parametrize("mode", ["as_dialed", "notify", "withhold"])
+@pytest.mark.parametrize("dest", ["010123456789", "186010123456789", "92010123456789",
+                                  "92184010123456789"])
+def test_caller_id_mode_international_still_blocked(tmp_path, mode, dest):
+    dp = _render(tmp_path, _mode_trunks(mode))
+    r = _route(dp, dest, permission="international")
+    assert r["bridge"] is None
+    assert r["hangup"] == "CALL_REJECTED"
+
+
+def test_caller_id_mode_international_allowlist(tmp_path):
+    dp = _render(tmp_path, _mode_trunks("notify"), allow=["0101"])
+    r = _route(dp, "9201011234567", permission="international")
+    assert r["extension"] == "outbound_intl_allow_0101_via_Flets02"
+    assert r["bridge"].endswith("gateway/Flets02/18601011234567")
+    r = _route(dp, "9218401011234567", permission="international")
+    assert r["extension"] == "outbound_intl_allow_0101_via_Flets02_dialed_cid"
+    assert r["bridge"].endswith("gateway/Flets02/18401011234567")
+    assert _route(dp, "9201011234567", permission="domestic")["hangup"] == "CALL_REJECTED"
+
+
+def test_caller_id_mode_split_extensions_only_when_forced(tmp_path):
+    dp = _render(tmp_path, [_trunk("a", 1, "03", mode="as_dialed"),
+                            _trunk("b", 2, "03", prefix="92", mode="withhold")])
+    ET.fromstring(dp)
+    assert 'name="outbound_external_dialed_cid"' not in dp
+    assert 'name="outbound_external_via_b_dialed_cid"' in dp
+    assert 'expression="^92(0\\d+)$"' in dp
+    assert 'expression="^92(18[46])(0\\d+)$"' in dp

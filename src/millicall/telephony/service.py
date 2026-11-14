@@ -137,6 +137,7 @@ class TelephonyChangeListener:
                 id=t.id,
                 dial_prefix=t.dial_prefix,
                 outbound_enabled=t.outbound_enabled,
+                caller_id_mode=t.caller_id_mode,
             )
             for t, password in creds.trunks
         ]

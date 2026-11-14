@@ -6,6 +6,8 @@ from millicall.models import Trunk
 
 # トランク種別: hgw=LAN 内 NTT フレッツ光 HGW（既定）/ sip=インターネット越しの SIP プロバイダ。
 TrunkType = Literal["hgw", "sip"]
+# 番号通知: as_dialed=掛けたとおり（既定）/ notify=常に 186 を前置 / withhold=常に 184 を前置。
+CallerIdMode = Literal["as_dialed", "notify", "withhold"]
 
 
 class TrunkCreate(BaseModel):
@@ -42,6 +44,7 @@ class TrunkCreate(BaseModel):
     dial_prefix: str = Field(default="", max_length=32)
     # 発信に使う。False = 着信専用（既定の発信トランクにもプレフィクス発信にも使わない）。
     outbound_enabled: bool = True
+    caller_id_mode: CallerIdMode = "as_dialed"
     enabled: bool = True
 
 
@@ -74,6 +77,7 @@ class TrunkUpdate(BaseModel):
     # None = 変更しない / "" = プレフィクスなしに戻す。
     dial_prefix: str | None = Field(default=None, max_length=32)
     outbound_enabled: bool | None = None
+    caller_id_mode: CallerIdMode | None = None
     enabled: bool | None = None
 
 
@@ -104,6 +108,8 @@ class TrunkRead(BaseModel):
     # 発信プレフィクス（"" = なし）と、発信に使うか。
     dial_prefix: str
     outbound_enabled: bool
+    # 番号通知（as_dialed / notify / withhold）。
+    caller_id_mode: CallerIdMode
     enabled: bool
     has_password: bool
     # Mutation responses distinguish persistence from live telephony application.
@@ -131,6 +137,7 @@ class TrunkRead(BaseModel):
             fax_detect_announce=t.fax_detect_announce,
             dial_prefix=t.dial_prefix,
             outbound_enabled=t.outbound_enabled,
+            caller_id_mode=t.caller_id_mode,  # type: ignore[arg-type]
             enabled=t.enabled,
             has_password=bool(t.password_encrypted),
         )
